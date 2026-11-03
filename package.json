@@ -1,6 +1,6 @@
 {
   "name": "dsh-super-computer-use",
-  "description": "Computer Use for DeepSeek Harness — a complete package: DSH Cordis plugin (12 cu_* tools, floating capsule, target halo, inline preview) plus the native macOS Swift engine (Accessibility, ScreenCaptureKit, CGEvent) it drives.",
+  "description": "Computer Use for DeepSeek Harness — a complete package: DSH Cordis plugin (13 cu_* tools, floating capsule, target halo, inline preview) plus the native macOS Swift engine (Accessibility, ScreenCaptureKit, CGEvent) it drives.",
   "version": "0.2.0",
   "license": "MIT",
   "type": "module",
@@ -60,7 +60,7 @@
   },
   "scripts": {
     "test": "node --test test/*.mjs",
-    "test:unit": "node --test test/visual_feedback.mjs test/plugin_observation.mjs test/plugin_lifecycle.mjs test/capture_daemon.mjs",
+    "test:unit": "node --test test/visual_feedback.mjs test/verification.mjs test/plugin_observation.mjs test/plugin_lifecycle.mjs test/capture_daemon.mjs",
     "test:desktop": "node --test test/core.test.mjs"
   },
   "icon": "assets/icon.png"

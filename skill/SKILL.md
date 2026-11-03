@@ -23,7 +23,7 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
    - Start with `cu_windows` to find the target `pid` and `windowId`.
    - Call `cu_snapshot` (`pid`, `windowId`) to obtain element refs (`e1`, `e2`, ...).
    - Mutating tools (`cu_click`, `cu_type`, `cu_key`) support `observe: true` (enabled by default when `pid` is provided), which returns the AX delta (`+` added, `-` removed, `~` changed) in the same call.
-   - Never assume `ok: true` means the business action succeeded—verify from the returned `observation` delta or a follow-up `cu_find` / `cu_screenshot`.
+   - Never assume `ok: true` means the business action succeeded—verify from the returned `observation` delta or a follow-up `cu_find` / `cu_screenshot` / `cu_expect`.
    - For canvas-heavy apps (such as video timelines or custom panels without AX nodes), use `cu_find` (`mode: "auto"` or `"ocr"`) or `cu_screenshot`.
 
 4. **Respect User Pause / Stop**
@@ -32,3 +32,9 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
 5. **Multi-Step Execution with `cu_batch` (Codex / Claude Fast-Action Loop)**
    - For compound tasks (e.g. click search box -> type keyword -> press return), prefer `cu_batch` instead of round-tripping to the model for each individual keystroke or click.
    - `cu_batch` runs all steps locally in ~50-200ms, updates the floating status capsule live, and delivers the single final observation delta + preview.
+
+6. **Post-Action Waiting and Verification**
+   - Every mutating tool returns `observation.changed` (`true`/`false`/`null`), `observation.waitedMs` and `observation.reads`. The adapter re-reads the tree while it is still identical to the pre-action baseline, inside a short budget (~300 ms), so a sheet or search result that paints late is not missed. `changed: true` means the tree moved—not that the business action succeeded.
+   - Pass `expect` to declare what the app must show: `{ query: "导入完成", timeoutMs: 2000 }`, or `{ ref, enabled, value, contains }`. The result then carries `verified: true|false` plus `verification`. `verified: false` means the action was dispatched but the app never showed that state: re-observe (and read `warning`) instead of replaying the click, which `actionReplaySafe: false` marks.
+   - `cu_expect` runs the same check on its own, which is the right tool when the condition comes from an action you did not issue (user typing, a background import, another app's window).
+   - A deterministic input followed by `expect` is the shortest reliable compound action; use `cu_batch` when the steps have no branch between them.

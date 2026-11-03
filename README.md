@@ -13,7 +13,7 @@ DSH  ──加载──▶  本仓库根目录（Cordis 插件，JS）
 
 | 路径 | 作用 |
 |---|---|
-| `lib/` | Cordis 插件：12 个 `cu_*` 工具、会话管理、附件预览 |
+| `lib/` | Cordis 插件：13 个 `cu_*` 工具、会话管理、附件预览 |
 | `locale/` `skill/` | 插件文案与技能说明 |
 | `test/` | 插件测试（Node） |
 | `engine/Sources/` | 原生引擎源码（Swift） |
@@ -70,13 +70,13 @@ security find-identity -v -p codesigning | awk -F'"' '/Apple Development/{print 
 pnpm add link:/path/to/dsh-super-computer-use
 ```
 
-在目标 DSH profile 中安装依赖，并确保 `package.json` 的 `dsh.profile.bundles` 包含 `dsh-super-computer-use`，然后重启 DSH 并验证插件已加载。技能名是 `/super-computer-use`（`/` 菜单里敲 `/super` 就能排到第一条）；工具加载成功时会注册 12 个 `cu_*` 工具。
+在目标 DSH profile 中安装依赖，并确保 `package.json` 的 `dsh.profile.bundles` 包含 `dsh-super-computer-use`，然后重启 DSH 并验证插件已加载。技能名是 `/super-computer-use`（`/` 菜单里敲 `/super` 就能排到第一条）；工具加载成功时会注册 13 个 `cu_*` 工具。
 
 ## 能力
 
-**插件工具（12）**
-`cu_status` `cu_windows` `cu_launch` `cu_snapshot` `cu_click` `cu_type` `cu_key`
-`cu_scroll` `cu_screenshot` `cu_session` `cu_find` `cu_batch`
+**插件工具（13）**
+`cu_status` `cu_windows` `cu_launch` `cu_snapshot` `cu_expect` `cu_click` `cu_type`
+`cu_key` `cu_scroll` `cu_screenshot` `cu_session` `cu_find` `cu_batch`
 
 **视觉反馈**
 - 边缘呼吸光：只在 agent 真正操作时出现的屏幕四边窄光带（蓝→青→紫，约 72pt），停手约 2 秒后自动淡出

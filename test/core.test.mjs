@@ -255,7 +255,7 @@ test("live CU service + isolated cu demo window roundtrip (background click + de
   }
 });
 
-test("DSH plugin apply() registers 12 cu_* tools, skill, inline image preview, and capsule session", async () => {
+test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, and capsule session", async () => {
   const registeredTools = new Map();
   const registeredSkills = [];
   const effects = [];
@@ -313,7 +313,7 @@ test("DSH plugin apply() registers 12 cu_* tools, skill, inline image preview, a
   };
 
   apply(mockCtx, { autoDockDsh: false });
-  assert.equal(registeredTools.size, 12);
+  assert.equal(registeredTools.size, 13);
   const skillNames = registeredSkills.map((s) => s.name).sort();
   assert.deepEqual(skillNames, ["super-computer-use"]);
 

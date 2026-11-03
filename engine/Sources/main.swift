@@ -4872,8 +4872,8 @@ case "snapshot":
     // Settling compares consecutive walks and stops when two agree. A tree that
     // never agrees (live clock, spinner, transfer counter) used to burn the whole
     // wall-clock deadline in 120 ms sleeps — 600 ms+ of pure wait on Finder. Cap
-    // the extra re-walks instead so the worst case is bounded and the caller (the
-    // plugin's change-driven observe) can decide whether to re-read.
+    // the extra re-walks instead so the worst case is bounded and the caller
+    // (the plugin's post-action observe) can re-read while the tree is unchanged.
     let maxExtraWalks = max(0, args.int("max-settle-walks") ?? 2)
     var extraWalks = 0
     let deadline = Date().addingTimeInterval(Double(settle) / 1000)
