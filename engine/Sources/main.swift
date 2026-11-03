@@ -4360,14 +4360,31 @@ func agentsDisconnect(ids: [String]?) -> [[String: Any]] {
     return results
 }
 
-func acquireMenuBarLock() -> Bool {
+func releaseMenuBarLock() {
     let path = NSString(string: "~/.cu/menubar.pid").expandingTildeInPath
-    if let text = try? String(contentsOfFile: path, encoding: .utf8),
-       let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0,
-       kill(pid, 0) == 0 {
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8),
+          pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) == getpid() else { return }
+    try? FileManager.default.removeItem(atPath: path)
+}
+
+/// Held for the lifetime of the menu-bar process. flock is atomic across
+/// processes, unlike the old "read pid file, check liveness, then write" dance,
+/// which let two simultaneous launches both become the menu bar.
+private var menuBarLockHandle: Int32 = -1
+
+func acquireMenuBarLock() -> Bool {
+    let lockPath = NSString(string: "~/.cu/menubar.lock").expandingTildeInPath
+    let fd = open(lockPath, O_CREAT | O_RDWR, 0o600)
+    guard fd >= 0 else { return true }        // never block startup on a lock failure
+    if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+        close(fd)
         return false
     }
-    try? String(ProcessInfo.processInfo.processIdentifier).write(toFile: path, atomically: true,
+    _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
+    menuBarLockHandle = fd
+    // Keep the pid file for diagnostics and for older copies' takeover detection.
+    let pidPath = NSString(string: "~/.cu/menubar.pid").expandingTildeInPath
+    try? String(ProcessInfo.processInfo.processIdentifier).write(toFile: pidPath, atomically: true,
                                                                  encoding: .utf8)
     return true
 }
@@ -4379,7 +4396,17 @@ func runMenuBar(openSettings: Bool, openMenu: Bool = false, openConsole: Bool = 
     // the menu-bar instance, so they skip the single-instance lock.
     let oneShot = snapshotConsole != nil || snapshotGuide != nil || selftest
     if !oneShot {
-        guard acquireMenuBarLock() else { exit(0) }
+        // A takeover can race: the previous instance may still be exiting when the
+        // new copy asks for the lock. Retry before giving up so a double launch
+        // cannot leave zero menu-bar instances behind.
+        var acquired = acquireMenuBarLock()
+        var attempt = 0
+        while !acquired && attempt < 40 {
+            usleep(150_000)
+            acquired = acquireMenuBarLock()
+            attempt += 1
+        }
+        guard acquired else { exit(0) }
     }
     let previous = frontmostBeforeLaunch()
     let app = NSApplication.shared
