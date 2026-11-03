@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "DSH 桌面操控（Computer Use）",
-    "description": "DeepSeek Harness 的 macOS 桌面操控插件：AX 控件树优先的后台操作、右上角悬浮状态胶囊与目标窗口光晕、对话内嵌实时预览，以及左右分屏同台会话布局。"
+    "title": "DSH 超级桌面操控（Super Computer Use）",
+    "description": "DeepSeek Harness 的 macOS 桌面操控一体化插件：Cordis 插件 + 原生 Swift 引擎。AX 优先的后台操作、毛玻璃悬浮胶囊、目标窗口渐变光晕、虚拟光标与动作标签，以及对话内嵌实时预览。"
   }
 }
