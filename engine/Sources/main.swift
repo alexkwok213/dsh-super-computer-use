@@ -1915,9 +1915,16 @@ final class CursorLayerView: NSView {
         return path
     }
 
+    /// Global origin of the overlay window (the union of all displays).
+    var overlayOrigin: CGPoint = .zero
+    /// Top edge of the main display in Cocoa coordinates. Global top-left points
+    /// are measured from there, so the mapping needs it rather than bounds.height:
+    /// with two displays the union is taller than the main screen.
+    var mainScreenTop: CGFloat = 0
+
     private func viewPoint(_ global: CGPoint) -> CGPoint {
-        // Global top-left origin -> view bottom-left origin.
-        CGPoint(x: global.x, y: bounds.height - global.y)
+        CGPoint(x: global.x - overlayOrigin.x,
+                y: mainScreenTop - global.y - overlayOrigin.y)
     }
 
     func showCursor(at point: CGPoint, glide: Bool) {
@@ -2116,12 +2123,20 @@ final class CaptureDaemon {
     private func captureViaScreenCaptureKit(windowId: CGWindowID?, screen: Bool,
                                             displayIndex: Int,
                                             maxDimension: Int) -> Capture? {
+        // The cached SCWindow.frame goes stale as soon as the window moves or
+        // resizes, and it is what the caller's coordinates are computed from. One
+        // cheap window-list sweep keeps the reported origin/size true; the cached
+        // list is only used to find the capture filter.
+        let liveBounds = windowId.flatMap { id in
+            onScreenWindows().first(where: { $0.id == id })?.bounds
+        }
         func attempt(_ list: SCShareableContent) -> Capture? {
             let sem = DispatchSemaphore(value: 0)
             var box: Capture?
             Task {
                 box = await shoot(list, windowId: windowId, screen: screen,
-                                  displayIndex: displayIndex, maxDimension: maxDimension)
+                                  displayIndex: displayIndex, maxDimension: maxDimension,
+                                  liveBounds: liveBounds)
                 sem.signal()
             }
             if sem.wait(timeout: .now() + 1.5) == .timedOut {
@@ -2157,7 +2172,7 @@ final class CaptureDaemon {
 
     private func shoot(_ list: SCShareableContent, windowId: CGWindowID?,
                        screen: Bool, displayIndex: Int,
-                       maxDimension: Int) async -> Capture? {
+                       maxDimension: Int, liveBounds: CGRect? = nil) async -> Capture? {
         var filter: SCContentFilter
         var area: CGRect
         if screen || windowId == nil {
@@ -2179,7 +2194,7 @@ final class CaptureDaemon {
                 return nil
             }
             filter = SCContentFilter(desktopIndependentWindow: window)
-            area = window.frame
+            area = liveBounds ?? window.frame
         }
         // Capture at the requested size rather than native-then-downscale. The
         // window server does the resampling in its own pipeline, which is much
@@ -2256,6 +2271,14 @@ func captureDaemonHandle(_ line: String, _ daemon: CaptureDaemon) -> Bool {
             payload["size"] = ["width": shot.size.width,
                                "height": shot.size.height] as [String: Any]
             payload["scale"] = shot.scale
+            // Freshness matters more than any single field: a caller must be able
+            // to tell an image of the window as it is now from one taken before it
+            // moved.
+            payload["capturedAt"] = Int(Date().timeIntervalSince1970 * 1000)
+            if let display = displayId(containing: CGPoint(x: shot.origin.x + shot.size.width / 2,
+                                                           y: shot.origin.y + shot.size.height / 2)) {
+                payload["displayId"] = display
+            }
             captureDaemonReply(payload)
         } catch {
             captureDaemonReply(["ok": false, "error": "encode_failed"])
@@ -2356,8 +2379,15 @@ func runCursorOverlay() -> Never {
     let previous = frontmostBeforeLaunch()
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
-    let screen = NSScreen.screens.first?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-    let panel = HaloPanel(contentRect: screen, styleMask: [.borderless, .nonactivatingPanel],
+    // Cover every display, not just the built-in one: the agent may be driving a
+    // window on a second monitor, whose origin can be negative. The view maps
+    // global top-left points into this union frame below.
+    let screens = NSScreen.screens
+    let union = screens.dropFirst().reduce(screens.first?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)) {
+        $0.union($1.frame)
+    }
+    let mainTop = screens.first?.frame.maxY ?? union.maxY
+    let panel = HaloPanel(contentRect: union, styleMask: [.borderless, .nonactivatingPanel],
                           backing: .buffered, defer: false)
     panel.isOpaque = false
     panel.backgroundColor = .clear
@@ -2366,7 +2396,9 @@ func runCursorOverlay() -> Never {
     panel.ignoresMouseEvents = true
     panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications,
                                 .fullScreenAuxiliary, .stationary]
-    let view = CursorLayerView(frame: NSRect(origin: .zero, size: screen.size))
+    let view = CursorLayerView(frame: NSRect(origin: .zero, size: union.size))
+    view.overlayOrigin = union.origin
+    view.mainScreenTop = mainTop
     panel.contentView = view
     panel.orderFrontRegardless()
     stayInBackground(previous)
@@ -3450,11 +3482,60 @@ func windowsPayload(explicitPid: Int? = nil) -> [String: Any] {
             "windows": windows]
 }
 
+/// Which display holds this global top-left point? Captures and window bounds
+/// are reported in that space, so a caller can tell which screen an image came
+/// from without guessing from sizes.
+func displayId(containing point: CGPoint) -> Int? {
+    let mainTop = NSScreen.screens.first?.frame.maxY ?? 0
+    for screen in NSScreen.screens {
+        let frame = screen.frame
+        let top = mainTop - frame.maxY
+        if point.x >= frame.minX, point.x < frame.maxX,
+           point.y >= top, point.y < top + frame.height {
+            let number = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+                as? NSNumber)?.uint32Value ?? 0
+            return Int(number)
+        }
+    }
+    return nil
+}
+
+/// Real display geometry: frames in global points (top-left origin, matching
+/// window bounds and screenshots), the usable area, and the backing scale.
+/// Layout code used to infer the display from the widest window, which breaks on
+/// a second monitor, a docked DSH panel, or a window that is not full-screen.
+func screensPayload() -> [String: Any] {
+    let mainHeight = NSScreen.screens.first?.frame.maxY ?? 0
+    let screens = NSScreen.screens.enumerated().map { index, screen -> [String: Any] in
+        let frame = screen.frame
+        let visible = screen.visibleFrame
+        // Cocoa is bottom-left; every other CU surface (window bounds, capture
+        // origin, event points) is top-left, so convert once here.
+        let top = mainHeight - frame.maxY
+        let topVisible = mainHeight - visible.maxY
+        let number = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+            as? NSNumber)?.uint32Value ?? 0
+        return [
+            "index": index,
+            "displayId": Int(number),
+            "name": screen.localizedName,
+            "main": index == 0,
+            "scale": Double(screen.backingScaleFactor),
+            "frame": ["x": Double(frame.origin.x), "y": Double(top),
+                      "width": Double(frame.width), "height": Double(frame.height)],
+            "visible": ["x": Double(visible.origin.x), "y": Double(topVisible),
+                        "width": Double(visible.width), "height": Double(visible.height)],
+        ]
+    }
+    return ["ok": true, "count": screens.count, "screens": screens]
+}
+
 func runEngine(_ argv: [String], config: ServiceConfig? = nil, noUserPause: Bool = false) -> [String: Any] {
     var direct: [String: Any]?
     if argv == ["frontmost"] { direct = frontmostPayload() }
     if argv == ["cursor"] { direct = cursorPayload() }
     if argv == ["windows"] { direct = windowsPayload() }
+    if argv == ["screens"] { direct = screensPayload() }
     if var direct {
         direct["exitCode"] = 0
         serviceLog("\(argv[0]) -> ok=true exit=0")
@@ -4617,6 +4698,9 @@ case "perms":
 case "windows":
     emit(windowsPayload(explicitPid: args.int("pid")))
 
+case "screens", "displays":
+    emit(screensPayload())
+
 case "frontmost":
     emit(frontmostPayload())
 
@@ -4714,6 +4798,11 @@ case "shot":
             "size": ["width": shot.size.width, "height": shot.size.height],
             "scale": shot.scale,
         ]
+        payload["capturedAt"] = Int(Date().timeIntervalSince1970 * 1000)
+        if let display = displayId(containing: CGPoint(x: shot.origin.x + shot.size.width / 2,
+                                                       y: shot.origin.y + shot.size.height / 2)) {
+            payload["displayId"] = display
+        }
         if let id { payload["windowId"] = id }
         if screen { payload["screen"] = true }
         if let out = args["out"] {

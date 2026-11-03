@@ -101,3 +101,50 @@ test('repeated same-target start is idempotent (no redundant resume/move)', asyn
   assert.equal(calls.filter((c) => c === 'movewindow').length, 0, `re-moved: ${calls}`);
   assert.ok(firstResume >= 0);
 });
+
+test('the split follows the display that holds the target, including negative origins', async () => {
+  const m = new CuSessionManager();
+  const calls = [];
+  m.exec = async (argv) => {
+    calls.push(argv);
+    if (argv[0] === 'windows') {
+      return { ok: true, windows: [
+        // Target sits on the left-hand monitor, whose origin is negative.
+        { windowId: 7, pid: 5, app: 'Target', bounds: { x: -1910, y: 40, width: 800, height: 600 } },
+        { windowId: 9, pid: 1, app: 'DeepSeek Harness', bounds: { x: 0, y: 30, width: 1728, height: 1000 } },
+      ] };
+    }
+    if (argv[0] === 'screens') {
+      return { ok: true, count: 2, screens: [
+        { index: 0, displayId: 1, name: 'Built-in', main: true, scale: 2,
+          frame: { x: 0, y: 0, width: 1728, height: 1117 },
+          visible: { x: 0, y: 33, width: 1728, height: 999 } },
+        { index: 1, displayId: 3, name: 'Studio Display', main: false, scale: 2,
+          frame: { x: -1920, y: 0, width: 1920, height: 1080 },
+          visible: { x: -1920, y: 33, width: 1920, height: 1040 } },
+      ] };
+    }
+    return { ok: true };
+  };
+  m.spawnIndicator = () => null;
+  m.writeActivity = () => {};
+  m.clearPauseLatch = () => {};
+  m.stopVisualIndicatorsOnly = async () => {};
+
+  await m.startVisualSession({ windowId: 7 });
+
+  const arg = (argv, flag) => Number(argv[argv.indexOf(flag) + 1]);
+  const moves = calls.filter((argv) => argv[0] === 'movewindow');
+  const targetMove = moves.find((argv) => arg(argv, '--window') === 7);
+  const dshMove = moves.find((argv) => arg(argv, '--window') === 9);
+
+  // 1920-wide display -> DSH keeps 640, the target gets 1280, both on the left monitor.
+  assert.equal(arg(targetMove, '--x'), -1920);
+  assert.equal(arg(targetMove, '--w'), 1280);
+  assert.equal(arg(targetMove, '--y'), 33);
+  assert.equal(arg(targetMove, '--h'), 1040);
+  assert.equal(arg(dshMove, '--x'), -1920 + 1280);
+  assert.equal(arg(dshMove, '--w'), 640);
+  assert.equal(m.lastLayout.source, 'screens');
+  assert.equal(m.lastLayout.screen.name, 'Studio Display');
+});
