@@ -1744,7 +1744,16 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
 /// real pointer and never takes input (level .statusBar, ignoresMouseEvents).
 /// Commands arrive as JSON lines on stdin so one process serves a whole session.
 final class CursorLayerView: NSView {
-    private let aura = CAGradientLayer()
+    /// Screen-edge breathing rim, not an ambient screen glow: four narrow gradient
+    /// bands keep the light on the border (transparent centre) and only show while
+    /// the agent is actually acting.
+    private let auraContainer = CALayer()
+    private let auraBreath = CALayer()
+    private var auraBands: [CAGradientLayer] = []
+    private var auraHideWork: DispatchWorkItem?
+    private(set) var lastActivityAt = Date()
+    private static let auraBandWidth: CGFloat = 72
+    private static let auraIdleFade: TimeInterval = 2.0
     private let arrow = CAShapeLayer()
     private let arrowGlow = CAShapeLayer()
     private let ripple = CAShapeLayer()
@@ -1756,22 +1765,7 @@ final class CursorLayerView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        // Ambient edge vignette: transparent in the middle so the desktop stays
-        // readable, coloured glow gathering at the borders. A radial gradient
-        // keeps it a single GPU layer with no per-frame redraw.
-        aura.type = .radial
-        aura.colors = [
-            NSColor.clear.cgColor,
-            NSColor.clear.cgColor,
-            NSColor(srgbRed: 0.20, green: 0.45, blue: 1, alpha: 0.30).cgColor,
-            NSColor(srgbRed: 0.30, green: 0.80, blue: 0.98, alpha: 0.42).cgColor,
-            NSColor(srgbRed: 0.55, green: 0.40, blue: 1, alpha: 0.52).cgColor,
-        ]
-        aura.locations = [0, 0.62, 0.82, 0.93, 1]
-        aura.startPoint = CGPoint(x: 0.5, y: 0.5)
-        aura.endPoint = CGPoint(x: 1.0, y: 1.0)
-        aura.opacity = 0
-        layer?.addSublayer(aura)
+        installAura()
 
         let path = CGMutablePath()
         // Arrow pointing up-left, ~22pt tall, matching a system pointer shape.
@@ -1822,9 +1816,63 @@ final class CursorLayerView: NSView {
         layer?.addSublayer(labelText)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        aura.frame = bounds
+        layoutAura()
         for layer in [arrow, arrowGlow, ripple] { layer.frame = bounds }
         CATransaction.commit()
+    }
+
+    private func installAura() {
+        auraContainer.opacity = 0
+        layer?.addSublayer(auraContainer)
+        auraContainer.addSublayer(auraBreath)
+        let clear = NSColor.clear.cgColor
+        let blue = NSColor(srgbRed: 0.24, green: 0.55, blue: 1, alpha: 0.10).cgColor
+        let cyan = NSColor(srgbRed: 0.30, green: 0.85, blue: 0.98, alpha: 0.20).cgColor
+        let violet = NSColor(srgbRed: 0.60, green: 0.44, blue: 1, alpha: 0.28).cgColor
+        // One band per edge; location 0 is the inner (transparent) side, 1 the
+        // screen edge. Four linear gradients stay on the border by construction,
+        // unlike the radial version this replaces.
+        let specs: [(CGPoint, CGPoint)] = [
+            (CGPoint(x: 0.5, y: 0), CGPoint(x: 0.5, y: 1)),   // top
+            (CGPoint(x: 0.5, y: 1), CGPoint(x: 0.5, y: 0)),   // bottom
+            (CGPoint(x: 1, y: 0.5), CGPoint(x: 0, y: 0.5)),   // left
+            (CGPoint(x: 0, y: 0.5), CGPoint(x: 1, y: 0.5)),   // right
+        ]
+        for (start, end) in specs {
+            let band = CAGradientLayer()
+            band.colors = [clear, blue, cyan, violet]
+            band.locations = [0, 0.45, 0.8, 1]
+            band.startPoint = start
+            band.endPoint = end
+            auraBreath.addSublayer(band)
+            auraBands.append(band)
+        }
+        // Slow breathing so the rim reads as "alive" without drawing attention.
+        let breath = CABasicAnimation(keyPath: "opacity")
+        breath.fromValue = 0.55
+        breath.toValue = 1.0
+        breath.duration = 1.8
+        breath.autoreverses = true
+        breath.repeatCount = .infinity
+        breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        auraBreath.add(breath, forKey: "breath")
+        layoutAura()
+    }
+
+    private func layoutAura() {
+        auraContainer.frame = bounds
+        auraBreath.frame = bounds
+        let bandWidth = min(Self.auraBandWidth, min(bounds.width, bounds.height) * 0.10)
+        let w = bounds.width
+        let h = bounds.height
+        for (index, band) in auraBands.enumerated() {
+            switch index {
+            case 0: band.frame = CGRect(x: 0, y: h - bandWidth, width: w, height: bandWidth)
+            case 1: band.frame = CGRect(x: 0, y: 0, width: w, height: bandWidth)
+            case 2: band.frame = CGRect(x: 0, y: 0, width: bandWidth, height: h)
+            default: band.frame = CGRect(x: w - bandWidth, y: 0, width: bandWidth, height: h)
+            }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1833,7 +1881,7 @@ final class CursorLayerView: NSView {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        aura.frame = bounds
+        layoutAura()
         for layer in [arrow, arrowGlow, ripple] { layer.frame = bounds }
         CATransaction.commit()
     }
@@ -1937,12 +1985,52 @@ final class CursorLayerView: NSView {
         ripple.add(fade, forKey: "fade")
     }
 
-    func setAura(_ visible: Bool) {
-        let target: Float = visible ? 1 : 0
+    func noteActivity() {
+        lastActivityAt = Date()
+    }
+
+    /// Light the edge rim for a moment whenever the agent acts. It fades on its
+    /// own, so the desktop is never permanently tinted.
+    func pulseAura() {
+        lastActivityAt = Date()
+        auraHideWork?.cancel()
+        if auraContainer.opacity < 0.99 {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = auraContainer.opacity
+            fade.toValue = 1.0
+            fade.duration = 0.25
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            auraContainer.add(fade, forKey: "show")
+            auraContainer.opacity = 1.0
+            CATransaction.commit()
+        }
+        let work = DispatchWorkItem { [weak self] in self?.fadeAura() }
+        auraHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.auraIdleFade, execute: work)
+    }
+
+    func fadeAura() {
+        auraHideWork?.cancel()
+        auraHideWork = nil
+        guard auraContainer.opacity > 0 else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        aura.opacity = target
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = auraContainer.opacity
+        fade.toValue = 0
+        fade.duration = 0.5
+        fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        auraContainer.add(fade, forKey: "hide")
+        auraContainer.opacity = 0
         CATransaction.commit()
+    }
+
+    /// Session start only *arms* the feedback; the rim appears on the first action
+    /// and never stays on while the agent is idle.
+    func setAura(_ visible: Bool) {
+        if !visible { fadeAura() }
     }
 
     func hide() {
@@ -2169,6 +2257,8 @@ func runCursorOverlay() -> Never {
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let cmd = object["cmd"] as? String else { continue }
             DispatchQueue.main.async {
+                view.noteActivity()
+                if cmd == "cursor" || cmd == "click" || cmd == "label" { view.pulseAura() }
                 switch cmd {
                 case "cursor":
                     let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
@@ -2196,6 +2286,13 @@ func runCursorOverlay() -> Never {
         DispatchQueue.main.async { exit(0) }
     }
 
+    // A session can end without a stop call (host reload, crashed client). Exit
+    // after 2 idle hours so the overlay process never lives forever, without
+    // pulling the cursor visuals out from under a long-but-alive session.
+    let idleTimer = Timer(timeInterval: 30, repeats: true) { _ in
+        if Date().timeIntervalSince(view.lastActivityAt) > 120 * 60 { exit(0) }
+    }
+    RunLoop.main.add(idleTimer, forMode: .common)
     emit(["ok": true, "cursor": "ready"])
     app.run()
     exit(0)
@@ -3896,622 +3993,6 @@ func writeAllowedAppsFile(_ text: String) {
     }
 }
 
-final class MenuBarController: NSObject, NSApplicationDelegate {
-    private var item: NSStatusItem!
-    private var timer: Timer?
-    private var portField: NSTextField!
-    private var dimensionField: NSTextField!
-    private var pauseSwitch: NSButton!
-    private var haloSwitch: NSButton!
-    private var allowTextView: NSTextView!
-    private var serviceState = "未知"
-    private var accessibility = false
-    private var screenRecording = false
-    private var consoleWindow: NSWindow?
-    private var tabView: NSTabView?
-    private var clientsTable: NSTableView?
-    private var usageTable: NSTableView?
-    private var agentsTable: NSTableView?
-    private var diagnosticsView: NSTextView?
-    private var statusCache: [String: Any] = [:]
-    private var clientsCache: [String: Any] = [:]
-    private var clientRows: [[String: Any]] = []
-    private var usageRows: [[String: Any]] = []
-    private var agentRows: [[String: Any]] = []
-    var openSettingsAtLaunch = false
-    var openMenuAtLaunch = false
-    var openConsoleAtLaunch = false
-    /// Whoever was frontmost before this process started; a menu-bar helper that
-    /// inherits activation has no windows, so focus must go back to them.
-    var launchFrontPid: pid_t = 0
-    private var lastFrontPid: pid_t = 0
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // Menu-bar only: the bundle launches a script that execs the external
-        // binary, so the process has no bundle identity and cannot own a Dock icon.
-        NSApp.setActivationPolicy(.accessory)
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = nil
-        item.button?.imagePosition = .noImage
-        rebuildMenu()
-        refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            self?.refresh()
-        }
-        DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("local.cu.showConsole"), object: nil, queue: .main
-        ) { [weak self] _ in
-            self?.showConsole(tab: 0)
-        }
-        DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("local.cu.handover"), object: nil, queue: .main
-        ) { _ in
-            // A freshly launched app copy takes over the menu bar; retire with a
-            // clean exit so the LaunchAgent (KeepAlive on failures only) stays dead.
-            exit(0)
-        }
-        // Serve capture requests from the CLI/service: they run where ScreenCaptureKit
-        // callbacks never fire, while this app has its own Screen Recording grant.
-        DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("local.cu.capture-request"), object: nil, queue: .main
-        ) { note in
-            guard #available(macOS 14.0, *),
-                  let info = note.userInfo,
-                  let requestId = info["id"] as? String,
-                  let path = info["path"] as? String else { return }
-            let screen = (info["screen"] as? Bool) ?? false
-            let windowId = (info["windowId"] as? Int).map(CGWindowID.init)
-            let maxDimension = (info["maxDimension"] as? Int) ?? 0
-            // ScreenCaptureKit's first call after a long idle can outlast the 4 s
-            // bound while the framework spins up; that attempt warms it, and a
-            // single longer retry then succeeds. Wait off the main queue so the
-            // menu bar does not freeze for the duration.
-            DispatchQueue.global(qos: .userInitiated).async {
-                var reply: [String: Any] = ["id": requestId]
-                do {
-                    let shot: Capture
-                    do {
-                        shot = try capture(windowId: windowId, screen: screen,
-                                           displayIndex: 0, maxDimension: maxDimension)
-                    } catch let error as NSError where error.domain == "cu" && error.code == 5 {
-                        shot = try capture(windowId: windowId, screen: screen,
-                                           displayIndex: 0, maxDimension: maxDimension,
-                                           timeout: 12)
-                    }
-                    try shot.png.write(to: URL(fileURLWithPath: path))
-                    reply["ok"] = true
-                    reply["path"] = path
-                    reply["scale"] = shot.scale
-                    reply["origin"] = ["x": Double(shot.origin.x), "y": Double(shot.origin.y)]
-                    reply["size"] = ["width": Double(shot.size.width),
-                                     "height": Double(shot.size.height)]
-                } catch {
-                    reply["ok"] = false
-                    reply["error"] = "capture_failed"
-                    reply["message"] = error.localizedDescription
-                }
-                DistributedNotificationCenter.default().postNotificationName(
-                    NSNotification.Name("local.cu.capture-reply"), object: nil,
-                    userInfo: reply, deliverImmediately: true)
-            }
-        }
-        // Track who else is frontmost, so an accidental activation of this
-        // windowless helper can always be handed straight back.
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] note in
-            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  app.processIdentifier != getpid() else { return }
-            self?.lastFrontPid = app.processIdentifier
-        }
-        lastFrontPid = launchFrontPid
-        // `open`/LaunchServices activates a freshly launched app. This one has no
-        // windows yet, so holding activation would freeze the user's typing.
-        if !openSettingsAtLaunch { stayInBackground(launchFrontPid) }
-        if openSettingsAtLaunch { showSettings(nil) }
-        // Missing TCC grants raise the system consent dialogs once, like Claude's.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { requestPermissionsIfMissing() }
-        if openConsoleAtLaunch {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.showConsole(tab: 0) }
-        }
-        if openMenuAtLaunch {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                self.item.button?.performClick(nil)
-            }
-        }
-    }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // Double-clicking the app while it already runs just shows the console.
-        showConsole(tab: 0)
-        return true
-    }
-
-    func applicationDidBecomeActive(_ notification: Notification) {
-        // Both cases below are deliberate: the console is on screen, or the app
-        // was started with --settings. Everything else is a stray activation of a
-        // process that owns no window, so focus goes back where the user left it.
-        guard consoleWindow?.isVisible != true, !openSettingsAtLaunch else { return }
-        stayInBackground(lastFrontPid != 0 ? lastFrontPid : launchFrontPid)
-    }
-
-    private func servicePort() -> Int {
-        loadServiceConfig(portOverride: nil, tokenOverride: nil).port
-    }
-
-    private func refresh() {
-        let port = servicePort()
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let payload = httpGetJSON(port: port, path: "/v1/status")
-            let clients = clientsReport()
-            let agents = agentsCatalog()
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.statusCache = payload ?? [:]
-                self.clientsCache = clients
-                self.clientRows = (clients["clients"] as? [[String: Any]]) ?? []
-                self.usageRows = (clients["usage"] as? [[String: Any]]) ?? []
-                self.agentRows = agents
-                self.serviceState = payload == nil ? "未运行" : "运行中"
-                self.accessibility = payload?["accessibility"] as? Bool ?? false
-                self.screenRecording = payload?["screenRecording"] as? Bool ?? false
-                self.updateIcon()
-                self.rebuildMenu()
-                self.reloadConsoleTables()
-            }
-        }
-    }
-
-    private func updateIcon() {
-        let color: NSColor
-        if serviceState != "运行中" {
-            color = .systemRed
-        } else if !accessibility || !screenRecording {
-            color = .systemOrange
-        } else if pauseActive() {
-            color = .systemYellow
-        } else {
-            color = .systemGreen
-        }
-        // A template SF Symbol loses its tint in the menu bar; a coloured dot in
-        // the title keeps green/orange/red readable at a glance.
-        item.button?.attributedTitle = NSAttributedString(
-            string: "● CU",
-            attributes: [.foregroundColor: color,
-                         .font: NSFont.systemFont(ofSize: 12, weight: .semibold)])
-        item.button?.toolTip = "CU 服务：\(serviceState)｜辅助功能 \(accessibility ? "✓" : "✗")｜屏幕录制 \(screenRecording ? "✓" : "✗")"
-    }
-
-    private func menuLine(_ text: String, _ target: AnyObject? = nil, _ action: Selector? = nil) -> NSMenuItem {
-        let entry = NSMenuItem(title: text, action: action, keyEquivalent: "")
-        entry.target = target
-        return entry
-    }
-
-    private func rebuildMenu() {
-        let menu = NSMenu()
-        menu.addItem(menuLine("服务：\(serviceState)"))
-        menu.addItem(menuLine("辅助功能：\(accessibility ? "已授权" : "未授权")"))
-        menu.addItem(menuLine("屏幕录制：\(screenRecording ? "已授权" : "未授权")"))
-        menu.addItem(.separator())
-        // Magpie-style: the agent list IS the main state. ● connected,
-        // ◐ wired/running but not talking, ○ not linked yet.
-        if agentRows.isEmpty {
-            menu.addItem(menuLine("Agent：探测中…"))
-        } else {
-            for agent in agentRows {
-                let state = agent["state"] as? String ?? "○ 未验证接入"
-                var line = "\(agent["name"] as? String ?? "") · \(state)"
-                if let tool = agent["lastTool"] as? String, !tool.isEmpty {
-                    line += " · \(tool)（\(relativeTime(Int(agent["idleSeconds"] as? Int ?? 0)))）"
-                }
-                menu.addItem(menuLine(line))
-            }
-            menu.addItem(menuLine("一键连接未接入的 Agent", self, #selector(connectAgents)))
-        }
-        menu.addItem(.separator())
-        if pauseActive() {
-            menu.addItem(menuLine("继续操作", self, #selector(resumeAction)))
-        } else {
-            menu.addItem(menuLine("暂停操作", self, #selector(pauseAction)))
-        }
-        menu.addItem(.separator())
-        menu.addItem(menuLine("控制台…", self, #selector(showConsole(_:))))
-        menu.addItem(menuLine("设置…", self, #selector(showSettings(_:))))
-        menu.addItem(menuLine("打开系统设置·辅助功能", self, #selector(openAXPrefs)))
-        menu.addItem(menuLine("打开系统设置·屏幕录制", self, #selector(openScreenPrefs)))
-        menu.addItem(menuLine("弹出授权窗口", self, #selector(requestPermissions)))
-        menu.addItem(menuLine("在访达中显示服务程序", self, #selector(revealBinary)))
-        menu.addItem(.separator())
-        menu.addItem(menuLine("重启服务", self, #selector(restartAction)))
-        menu.addItem(menuLine("退出菜单栏", self, #selector(quitAction)))
-        menu.delegate = self
-        item.menu = menu
-    }
-
-    private func relativeTime(_ seconds: Int) -> String {
-        if seconds < 2 { return "刚才" }
-        if seconds < 60 { return "\(seconds)s 前" }
-        if seconds < 3600 { return "\(seconds / 60)m 前" }
-        return "\(seconds / 3600)h 前"
-    }
-
-    @objc private func pauseAction() { markPause(); rebuildMenu(); updateIcon() }
-    @objc private func resumeAction() { clearPause(); rebuildMenu(); updateIcon() }
-    @objc private func openAXPrefs() { openSystemSettings("Privacy_Accessibility") }
-    @objc private func requestPermissions() { requestPermissionsIfMissing() }
-    @objc private func openScreenPrefs() { openSystemSettings("Privacy_ScreenCapture") }
-    @objc private func revealBinary() { revealServiceBinary() }
-    @objc private func restartAction() { restartService(); refresh() }
-    @objc private func quitAction() { NSApp.terminate(nil) }
-
-    @objc private func saveSettings() {
-        guard let token = try? JSONSerialization.jsonObject(
-            with: Data(contentsOf: URL(fileURLWithPath: serviceConfigPath))) as? [String: Any] else {
-            return
-        }
-        var config: [String: Any] = [
-            "port": Int(portField.stringValue) ?? 47777,
-            "token": token["token"] as? String ?? "",
-            "screenshotMaxDimension": Int(dimensionField.stringValue) ?? 1600,
-            "pauseOnUserActivity": pauseSwitch.state == .on,
-            "autoHalo": haloSwitch.state == .on,
-        ]
-        if config["token"] as? String == "" {
-            config["token"] = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        }
-        if let data = try? JSONSerialization.data(withJSONObject: config,
-                                                  options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: URL(fileURLWithPath: serviceConfigPath))
-        }
-        writeAllowedAppsFile(allowTextView.string)
-        restartService()
-        refresh()
-        consoleWindow?.close()
-    }
-
-    private func label(_ text: String, _ frame: NSRect) -> NSTextField {
-        let field = NSTextField(labelWithString: text)
-        field.frame = frame
-        return field
-    }
-
-    @objc private func showSettings(_ sender: Any?) { showConsole(tab: 2) }
-    @objc private func showConsole(_ sender: Any?) { showConsole(tab: 0) }
-
-    private func showConsole(tab: Int) {
-        if consoleWindow == nil { consoleWindow = buildConsoleWindow() }
-        tabView?.selectTabViewItem(at: tab)
-        consoleWindow?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        loadSettingsFields()
-        reloadConsoleTables()
-    }
-
-    private func buildConsoleWindow() -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 470),
-                              styleMask: [.titled, .closable, .miniaturizable],
-                              backing: .buffered, defer: false)
-        window.title = "Computer Use 控制台"
-        window.center()
-        let tabs = NSTabView(frame: NSRect(x: 8, y: 8, width: 644, height: 454))
-        tabs.autoresizingMask = [.width, .height]
-        tabs.addTabViewItem(tabItem("代理", makeAgentsTab))
-        tabs.addTabViewItem(tabItem("连接", makeClientsTab))
-        tabs.addTabViewItem(tabItem("使用", makeUsageTab))
-        tabs.addTabViewItem(tabItem("设置", makeSettingsTab))
-        tabs.addTabViewItem(tabItem("诊断", makeDiagnosticsTab))
-        window.contentView?.addSubview(tabs)
-        tabView = tabs
-        return window
-    }
-
-    private func tabItem(_ title: String, _ build: () -> NSView) -> NSTabViewItem {
-        let entry = NSTabViewItem(identifier: title)
-        entry.label = title
-        entry.view = build()
-        return entry
-    }
-
-    private func makeTable(_ columns: [(String, String, CGFloat)], tag: Int) -> NSTableView {
-        let table = NSTableView()
-        table.usesAlternatingRowBackgroundColors = true
-        table.tag = tag
-        table.dataSource = self
-        table.delegate = self
-        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
-        for (id, title, width) in columns {
-            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
-            column.title = title
-            column.width = width
-            table.addTableColumn(column)
-        }
-        return table
-    }
-
-    private func scrollable(_ table: NSTableView, in view: NSView) {
-        let scroll = NSScrollView(frame: view.bounds.insetBy(dx: 10, dy: 10))
-        scroll.autoresizingMask = [.width, .height]
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        scroll.documentView = table
-        view.addSubview(scroll)
-    }
-
-    private func makeClientsTab() -> NSView {
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 644, height: 420))
-        clientsTable = makeTable([("client", "客户端", 140), ("state", "状态", 60),
-                                  ("via", "通道", 66), ("tool", "最近动作", 130),
-                                  ("ago", "距今", 76), ("calls", "调用 / 最近用时", 140)], tag: 100)
-        scrollable(clientsTable!, in: view)
-        return view
-    }
-
-    private func makeAgentsTab() -> NSView {
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 644, height: 420))
-        agentsTable = makeTable([("name", "Agent", 130), ("state", "状态", 120),
-                                 ("tool", "最近动作", 130), ("ago", "距今", 76),
-                                 ("calls", "调用", 80), ("note", "说明", 108)], tag: 102)
-        let scroll = NSScrollView(frame: NSRect(x: 10, y: 48, width: 624, height: 362))
-        scroll.autoresizingMask = [.width, .height]
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        scroll.documentView = agentsTable
-        view.addSubview(scroll)
-
-        let connect = NSButton(title: "一键连接未接入的 Agent", target: self,
-                               action: #selector(connectAgents))
-        connect.frame = NSRect(x: 10, y: 10, width: 200, height: 28)
-        connect.bezelStyle = .rounded
-        view.addSubview(connect)
-        let reload = NSButton(title: "刷新", target: self, action: #selector(refreshConsole))
-        reload.frame = NSRect(x: 216, y: 10, width: 90, height: 28)
-        reload.bezelStyle = .rounded
-        view.addSubview(reload)
-        let hint = NSTextField(wrappingLabelWithString:
-            "配置、握手、工具清单和成功调用分别验证。写入配置后请重连客户端，并在新会话调用 list_windows。")
-        hint.frame = NSRect(x: 316, y: 8, width: 318, height: 36)
-        hint.font = NSFont.systemFont(ofSize: 11)
-        hint.textColor = .secondaryLabelColor
-        view.addSubview(hint)
-        return view
-    }
-
-    private func makeUsageTab() -> NSView {
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 644, height: 420))
-        usageTable = makeTable([("tool", "工具", 220), ("calls", "次数", 80),
-                                ("avg", "平均用时", 100), ("total", "累计用时", 100)], tag: 101)
-        scrollable(usageTable!, in: view)
-        return view
-    }
-
-    private func makeSettingsTab() -> NSView {
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 644, height: 420))
-        view.addSubview(label("服务端口", NSRect(x: 16, y: 372, width: 100, height: 20)))
-        portField = NSTextField(frame: NSRect(x: 116, y: 368, width: 110, height: 24))
-        view.addSubview(portField)
-        view.addSubview(label("截图长边上限（像素）", NSRect(x: 250, y: 372, width: 170, height: 20)))
-        dimensionField = NSTextField(frame: NSRect(x: 424, y: 368, width: 70, height: 24))
-        view.addSubview(dimensionField)
-
-        pauseSwitch = NSButton(checkboxWithTitle: "你一动键鼠就暂停", target: nil, action: nil)
-        pauseSwitch.frame = NSRect(x: 16, y: 338, width: 260, height: 20)
-        view.addSubview(pauseSwitch)
-        haloSwitch = NSButton(checkboxWithTitle: "操作时显示橙色指示条", target: nil, action: nil)
-        haloSwitch.frame = NSRect(x: 290, y: 338, width: 280, height: 20)
-        view.addSubview(haloSwitch)
-
-        view.addSubview(label("允许控制的应用（每行一个 bundle id 或名称；留空=全部允许）",
-                              NSRect(x: 16, y: 282, width: 520, height: 20)))
-        let scroll = NSScrollView(frame: NSRect(x: 16, y: 156, width: 612, height: 120))
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        allowTextView = NSTextView(frame: scroll.bounds)
-        allowTextView.isEditable = true
-        allowTextView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        scroll.documentView = allowTextView
-        view.addSubview(scroll)
-
-        let save = NSButton(title: "保存并重启服务", target: self, action: #selector(saveSettings))
-        save.frame = NSRect(x: 16, y: 112, width: 160, height: 30)
-        save.bezelStyle = .rounded
-        view.addSubview(save)
-        let openConfig = NSButton(title: "打开配置文件", target: self, action: #selector(openConfigFile))
-        openConfig.frame = NSRect(x: 186, y: 112, width: 130, height: 30)
-        openConfig.bezelStyle = .rounded
-        view.addSubview(openConfig)
-        let openSystem = NSButton(title: "打开系统设置", target: self, action: #selector(openAXPrefs))
-        openSystem.frame = NSRect(x: 326, y: 112, width: 130, height: 30)
-        openSystem.bezelStyle = .rounded
-        view.addSubview(openSystem)
-
-        let hint = NSTextField(wrappingLabelWithString:
-            "权限授予对象是 Computer Use.app 本体：\n" +
-            "/Applications/Computer Use.app\n" +
-            "在“打开系统设置”里把它加入“辅助功能”和“屏幕录制”，一次即可；改完设置要保存才会重启服务生效。")
-        hint.frame = NSRect(x: 16, y: 20, width: 612, height: 76)
-        hint.font = NSFont.systemFont(ofSize: 12)
-        hint.textColor = .secondaryLabelColor
-        view.addSubview(hint)
-        return view
-    }
-
-    private func makeDiagnosticsTab() -> NSView {
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 644, height: 420))
-        let scroll = NSScrollView(frame: NSRect(x: 10, y: 48, width: 624, height: 362))
-        scroll.autoresizingMask = [.width, .height]
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        let report = NSTextView(frame: scroll.bounds)
-        report.isEditable = false
-        report.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        diagnosticsView = report
-        scroll.documentView = report
-        view.addSubview(scroll)
-
-        let reload = NSButton(title: "刷新", target: self, action: #selector(refreshConsole))
-        reload.frame = NSRect(x: 10, y: 10, width: 90, height: 28)
-        reload.bezelStyle = .rounded
-        view.addSubview(reload)
-        let log = NSButton(title: "打开服务日志", target: self, action: #selector(openServiceLog))
-        log.frame = NSRect(x: 106, y: 10, width: 130, height: 28)
-        log.bezelStyle = .rounded
-        view.addSubview(log)
-        let copy = NSButton(title: "复制诊断信息", target: self, action: #selector(copyDiagnostics))
-        copy.frame = NSRect(x: 242, y: 10, width: 130, height: 28)
-        copy.bezelStyle = .rounded
-        view.addSubview(copy)
-        return view
-    }
-
-    private func loadSettingsFields() {
-        guard portField != nil else { return }
-        let config = loadServiceConfig(portOverride: nil, tokenOverride: nil)
-        portField.stringValue = String(config.port)
-        dimensionField.stringValue = String(config.screenshotMaxDimension ?? 1600)
-        pauseSwitch.state = (config.pauseOnUserActivity ?? true) ? .on : .off
-        haloSwitch.state = (config.autoHalo ?? true) ? .on : .off
-        allowTextView.string = readAllowedAppsFile()
-    }
-
-    private func reloadConsoleTables() {
-        clientsTable?.reloadData()
-        usageTable?.reloadData()
-        agentsTable?.reloadData()
-        if consoleWindow?.isVisible == true {
-            diagnosticsView?.string = diagnosticsText()
-        }
-    }
-
-    private func diagnosticsText() -> String {
-        let front = (statusCache["frontmost"] as? [String: Any])?["app"] as? String ?? "未知"
-        var lines: [String] = [
-            "服务：\(serviceState)（pid \(statusCache["pid"] as? Int ?? 0)｜端口 \(servicePort())）",
-            "辅助功能：\(accessibility ? "已授权" : "未授权")｜屏幕录制：\(screenRecording ? "已授权" : "未授权")｜暂停：\(pauseActive() ? "是" : "否")",
-            "前台应用：\(front)｜屏幕上的窗口：\(statusCache["windows"] as? Int ?? 0) 个",
-        ]
-        let age = Int(clientsCache["activityAge"] as? Int ?? 99999)
-        if let text = (clientsCache["activity"] as? [String: Any])?["text"] as? String,
-           !text.isEmpty, age < 60 {
-            lines.append("正在做：\(text)（\(relativeTime(age))）")
-        } else {
-            lines.append("正在做：空闲")
-        }
-        lines.append("已连接的客户端：\(clientsCache["count"] as? Int ?? 0) 个")
-        for row in clientRows.prefix(10) {
-            lines.append("  · \(row["client"] as? String ?? "未知")  MCP pid \(row["mcpPid"] as? Int ?? 0)"
-                + "  通道 \(row["via"] as? String ?? "local")"
-                + "  \(relativeTime(Int(row["idleSeconds"] as? Int ?? 0)))"
-                + "  调用 \(row["calls"] as? Int ?? 0) 次")
-        }
-        lines.append("")
-        lines.append("配置文件：\(serviceConfigPath)")
-        lines.append("服务日志：\(serviceLogPath)")
-        lines.append("最近日志：")
-        lines.append(contentsOf: tailLines(serviceLogPath, 18).map { "  " + $0 })
-        return lines.joined(separator: "\n")
-    }
-
-    @objc private func refreshConsole() { refresh() }
-
-    @objc private func connectAgents() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let results = agentsConnect(ids: nil)
-            DispatchQueue.main.async {
-                self?.refresh()
-                let summary = results.map { row -> String in
-                    let name = row["name"] as? String ?? ""
-                    switch row["status"] as? String {
-                    case "wired": return "✓ \(name)：已写入配置（重启该 Agent 后生效）"
-                    case "already": return "· \(name)：配置已存在；请重连 MCP 并在新会话验证调用"
-                    case "managed": return "· \(name)：\(row["note"] as? String ?? "由该应用自身管理")"
-                    default: return "✗ \(name)：失败（\(row["error"] as? String ?? "未知原因")）"
-                    }
-                }.joined(separator: "\n")
-                let alert = NSAlert()
-                alert.messageText = "一键连接结果"
-                alert.informativeText = summary
-                alert.alertStyle = .informational
-                alert.runModal()
-            }
-        }
-    }
-
-    @objc private func openServiceLog() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-t", serviceLogPath]
-        try? process.run()
-    }
-
-    @objc private func copyDiagnostics() {
-        let board = NSPasteboard.general
-        board.clearContents()
-        board.setString(diagnosticsText(), forType: .string)
-    }
-
-    @objc private func openConfigFile() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-t", serviceConfigPath]
-        try? process.run()
-    }
-}
-
-extension MenuBarController: NSTableViewDataSource, NSTableViewDelegate {
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        if tableView.tag == 100 { return clientRows.count }
-        if tableView.tag == 102 { return agentRows.count }
-        return usageRows.count
-    }
-
-    func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?,
-                   row: Int) -> Any? {
-        guard row < (tableView.tag == 100 ? clientRows.count
-                                          : tableView.tag == 102 ? agentRows.count
-                                                                 : usageRows.count),
-              let key = tableColumn?.identifier.rawValue else { return nil }
-        switch (tableView.tag, key) {
-        case (102, "name"): return agentRows[row]["name"] as? String ?? ""
-        case (102, "state"):
-            return agentRows[row]["state"] as? String ?? "○ 未验证接入"
-        case (102, "tool"):
-            return (agentRows[row]["lastTool"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "—"
-        case (102, "ago"):
-            return relativeTime(Int(agentRows[row]["idleSeconds"] as? Int ?? 0))
-        case (102, "calls"):
-            let calls = agentRows[row]["calls"] as? Int ?? 0
-            return calls == 0 ? "—" : "\(calls) 次"
-        case (102, "note"):
-            return agentRows[row]["note"] as? String ?? ""
-        case (100, "client"): return clientRows[row]["client"] as? String ?? "未知"
-        case (100, "state"): return (clientRows[row]["alive"] as? Bool ?? true) ? "在线" : "已退出"
-        case (100, "via"): return clientRows[row]["via"] as? String ?? "local"
-        case (100, "tool"): return (clientRows[row]["lastTool"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "刚连接"
-        case (100, "ago"): return relativeTime(Int(clientRows[row]["idleSeconds"] as? Int ?? 0))
-        case (100, "calls"):
-            let calls = clientRows[row]["calls"] as? Int ?? 0
-            return calls == 0 ? "—" : "\(calls) 次 · \(clientRows[row]["lastMs"] as? Int ?? 0)ms"
-        case (101, "tool"): return usageRows[row]["tool"] as? String ?? ""
-        case (101, "calls"): return usageRows[row]["calls"] as? Int ?? 0
-        case (101, "avg"):
-            let calls = max(1, usageRows[row]["calls"] as? Int ?? 1)
-            return "\(max(1, (usageRows[row]["ms"] as? Int ?? 0) / calls))ms"
-        case (101, "total"): return "\(usageRows[row]["ms"] as? Int ?? 0)ms"
-        default: return nil
-        }
-    }
-}
-
-extension MenuBarController: NSMenuDelegate {
-    func menuWillOpen(_ menu: NSMenu) {
-        // Refreshing here only affects the *next* open; the menu on screen was
-        // already built, so the timer keeps it current instead of rebuilding it
-        // mid-open (which would swap the instance being displayed).
-        refresh()
-    }
-}
-
 func tailLines(_ path: String, _ count: Int) -> [String] {
     guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
     let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
@@ -4758,6 +4239,9 @@ func agentsCatalog() -> [[String: Any]] {
         var entry: [String: Any] = [
             "id": spec.id, "name": spec.name,
             "running": running, "wired": wired,
+            // Managed agents keep their connectors in their own UI; only the
+            // config-file agents get a connect switch in the console.
+            "configurable": spec.configPath != nil,
             "connected": matched.contains { ($0["alive"] as? Bool ?? false) && $0["initializedAt"] != nil },
         ]
         if let best = matched.first {
@@ -4835,6 +4319,47 @@ func agentsConnect(ids: [String]?) -> [[String: Any]] {
     return results
 }
 
+func agentsDisconnect(ids: [String]?) -> [[String: Any]] {
+    var results: [[String: Any]] = []
+    for spec in agentSpecs() {
+        if let ids, !ids.isEmpty, !ids.contains(spec.id) { continue }
+        guard let path = spec.configPath else {
+            results.append(["id": spec.id, "name": spec.name, "status": "managed",
+                            "note": spec.managedNote ?? ""])
+            continue
+        }
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: path),
+              let data = manager.contents(atPath: path),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["mcpServers"] is [String: Any] else {
+            results.append(["id": spec.id, "name": spec.name, "status": "absent"])
+            continue
+        }
+        var servers = object["mcpServers"] as? [String: Any] ?? [:]
+        guard servers[spec.serverName] != nil else {
+            results.append(["id": spec.id, "name": spec.name, "status": "absent"])
+            continue
+        }
+        servers.removeValue(forKey: spec.serverName)
+        var updated = object
+        if servers.isEmpty { updated.removeValue(forKey: "mcpServers") }
+        else { updated["mcpServers"] = servers }
+        let backup = path + ".bak-cu"
+        try? manager.removeItem(atPath: backup)
+        try? manager.copyItem(atPath: path, toPath: backup)
+        do {
+            let data = try JSONSerialization.data(withJSONObject: updated,
+                                                  options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            results.append(["id": spec.id, "name": spec.name, "status": "removed", "backup": backup])
+        } catch {
+            results.append(["id": spec.id, "name": spec.name, "status": "error", "error": "\(error)"])
+        }
+    }
+    return results
+}
+
 func acquireMenuBarLock() -> Bool {
     let path = NSString(string: "~/.cu/menubar.pid").expandingTildeInPath
     if let text = try? String(contentsOfFile: path, encoding: .utf8),
@@ -4847,15 +4372,26 @@ func acquireMenuBarLock() -> Bool {
     return true
 }
 
-func runMenuBar(openSettings: Bool, openMenu: Bool = false, openConsole: Bool = false) -> Never {
-    guard acquireMenuBarLock() else { exit(0) }
+func runMenuBar(openSettings: Bool, openMenu: Bool = false, openConsole: Bool = false,
+                snapshotConsole: String? = nil, snapshotPage: String? = nil,
+                snapshotGuide: String? = nil, selftest: Bool = false) -> Never {
+    // Snapshot/selftest processes are one-shot helpers: they must not take over
+    // the menu-bar instance, so they skip the single-instance lock.
+    let oneShot = snapshotConsole != nil || snapshotGuide != nil || selftest
+    if !oneShot {
+        guard acquireMenuBarLock() else { exit(0) }
+    }
     let previous = frontmostBeforeLaunch()
     let app = NSApplication.shared
     let controller = MenuBarController()
     controller.launchFrontPid = previous
     controller.openSettingsAtLaunch = openSettings
-    controller.openMenuAtLaunch = openMenu
-    controller.openConsoleAtLaunch = openConsole
+    controller.openMenuAtLaunch = openMenu && !oneShot
+    controller.openConsoleAtLaunch = openConsole && !oneShot
+    controller.snapshotPath = snapshotConsole
+    controller.snapshotPage = snapshotPage
+    controller.guideSnapshotPath = snapshotGuide
+    controller.selftestMode = selftest
     app.delegate = controller
     app.run()
     exit(0)
@@ -6165,6 +5701,10 @@ case "agents-connect":
     let ids = args["id"]?.split(separator: ",").map(String.init)
     emit(["ok": true, "results": agentsConnect(ids: ids)])
 
+case "agents-disconnect":
+    let ids = args["id"]?.split(separator: ",").map(String.init)
+    emit(["ok": true, "results": agentsDisconnect(ids: ids)])
+
 case "cursor-overlay":
     runCursorOverlay()
 
@@ -6177,41 +5717,55 @@ case "service":
     serve(config)
 
 case "app":
-    // Launched from the .app bundle: keep a single menu-bar instance. A second
-    // launch does NOT exit immediately — LaunchServices would report "not open
-    // anymore" for the process it just started. Instead it asks the running copy
-    // to retire (clean exit, so the LaunchAgent stays dead) and takes over.
-    let others = NSRunningApplication.runningApplications(withBundleIdentifier: "local.cu.app")
-        .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-    var previous: pid_t? = others.first?.processIdentifier
-    // The login agent may run a copy without a bundle id; the pid file catches it.
-    if previous == nil,
-       let text = try? String(contentsOfFile: NSString(string: "~/.cu/menubar.pid").expandingTildeInPath,
-                              encoding: .utf8),
-       let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
-       pid > 0, pid != getpid(), kill(pid, 0) == 0 {
-        previous = pid
-    }
-    if let old = previous {
-        DistributedNotificationCenter.default().postNotificationName(
-            NSNotification.Name("local.cu.handover"), object: nil, userInfo: nil,
-            deliverImmediately: true)
-        for _ in 0..<30 {
-            if kill(old, 0) != 0 { break }
-            usleep(100_000)
+    // Snapshot/selftest runs are one-shot helpers launched from the same bundle;
+    // they must not retire the running menu-bar instance.
+    let oneShot = args.flag("selftest-ui") || args["snapshot-console"] != nil
+        || args["snapshot-guide"] != nil
+    if !oneShot {
+        // Launched from the .app bundle: keep a single menu-bar instance. A second
+        // launch does NOT exit immediately — LaunchServices would report "not open
+        // anymore" for the process it just started. Instead it asks the running copy
+        // to retire (clean exit, so the LaunchAgent stays dead) and takes over.
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: "local.cu.app")
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        var previous: pid_t? = others.first?.processIdentifier
+        // The login agent may run a copy without a bundle id; the pid file catches it.
+        if previous == nil,
+           let text = try? String(contentsOfFile: NSString(string: "~/.cu/menubar.pid").expandingTildeInPath,
+                                  encoding: .utf8),
+           let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+           pid > 0, pid != getpid(), kill(pid, 0) == 0 {
+            previous = pid
+        }
+        if let old = previous {
+            DistributedNotificationCenter.default().postNotificationName(
+                NSNotification.Name("local.cu.handover"), object: nil, userInfo: nil,
+                deliverImmediately: true)
+            for _ in 0..<30 {
+                if kill(old, 0) != 0 { break }
+                usleep(100_000)
+            }
+        }
+        if httpGetJSON(port: loadServiceConfig(portOverride: nil, tokenOverride: nil).port,
+                       path: "/v1/status", timeout: 0.6) == nil {
+            restartService()
+            usleep(900_000)
         }
     }
-    if httpGetJSON(port: loadServiceConfig(portOverride: nil, tokenOverride: nil).port,
-                   path: "/v1/status", timeout: 0.6) == nil {
-        restartService()
-        usleep(900_000)
-    }
     runMenuBar(openSettings: args.flag("open-settings"), openMenu: args.flag("open-menu"),
-               openConsole: !args.flag("quiet"))
+               openConsole: !args.flag("quiet"),
+               snapshotConsole: args["snapshot-console"],
+               snapshotPage: args["snapshot-page"],
+               snapshotGuide: args["snapshot-guide"],
+               selftest: args.flag("selftest-ui"))
 
 case "menubar":
     runMenuBar(openSettings: args.flag("open-settings"), openMenu: args.flag("open-menu"),
-               openConsole: !args.flag("quiet"))
+               openConsole: !args.flag("quiet"),
+               snapshotConsole: args["snapshot-console"],
+               snapshotPage: args["snapshot-page"],
+               snapshotGuide: args["snapshot-guide"],
+               selftest: args.flag("selftest-ui"))
 
 case "selfcheck":
     let front = frontmost()
@@ -6315,7 +5869,13 @@ case "help", "--help", "-h", "":
       cu zoom --window <id>           (press the window's zoom / full-screen button)
       cu guards                       (secure input + user idle, for debugging)
       cu service [--port 47777] [--token <t>]   (local HTTP service; see README)
+      cu agents                       (per-agent MCP wiring state)
+      cu agents-connect [--id a,b]    (write our MCP entry into agent configs)
+      cu agents-disconnect [--id a,b] (remove our MCP entry again)
       cu menubar [--open-settings]    (menu bar app: status, pause, settings)
+      cu menubar --snapshot-console <png> [--snapshot-page overview|connections|settings|diagnostics|agent-setup]
+      cu menubar --snapshot-guide <png>   (render the permission guide panel)
+      cu menubar --selftest-ui        (machine-checkable console UI report)
       cu selfcheck                    (permissions, pause, overlay, allowlist in one report)
       cu cover --window <id> [--seconds 0] [--label "…"]   (occluder over the window)
       cu space --window <id>          (bring the window to the current Space)

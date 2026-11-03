@@ -25,6 +25,21 @@ fi
 PLIST="$HOME/Library/LaunchAgents/local.cu.service.plist"
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.cu"
 
+PORT=$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.cu/config.json')))['port'])" 2>/dev/null || echo 47777)
+
+# bootout returns before the old process exits; a bootstrap that lands while the
+# old service still holds the port dies with bind_failed and only recovers after
+# launchd's retry timer. Wait for the port to be released first.
+wait_port_free() {
+    i=0
+    while [ "$i" -lt 50 ]; do
+        if ! /usr/bin/nc -z 127.0.0.1 "$PORT" 2>/dev/null; then return 0; fi
+        sleep 0.2
+        i=$((i + 1))
+    done
+    return 0
+}
+
 cat > "$PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -75,6 +90,7 @@ restart_agent() {
         sleep 0.2
         i=$((i + 1))
     done
+    wait_port_free
     launchctl bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1 || \
         launchctl kickstart -k "gui/$(id -u)/$label" >/dev/null 2>&1 || true
 }
@@ -83,7 +99,6 @@ restart_agent "$PLIST" local.cu.service
 restart_agent "$MENU_PLIST" local.cu.menubar
 sleep 1
 
-PORT=$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.cu/config.json')))['port'])")
 echo
 echo "service: http://127.0.0.1:$PORT (engine: $APP_BIN)"
 curl -s "http://127.0.0.1:$PORT/v1/status" | python3 -m json.tool || true

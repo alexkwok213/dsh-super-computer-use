@@ -7,7 +7,7 @@ mkdir -p bin
 swiftc -O -swift-version 5 \
   -target arm64-apple-macos14.0 \
   -framework AppKit -framework ApplicationServices -framework ScreenCaptureKit -framework Vision \
-  -o bin/cu Sources/main.swift
+  -o bin/cu Sources/*.swift
 # Toolchain defaults to minos 28 (newer than this machine's 27); LaunchServices
 # then refuses the binary as an app main executable with -10825 even though
 # direct exec works. Pin the deployment target.

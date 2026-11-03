@@ -147,3 +147,31 @@ Click-through must be a window-level property, Stop must still latch pause, no c
 - Summary evidence: `build/evidence/optimization-summary.png`.
 - Final state: engine `a246368617a7e274…` installed and running; all regressions green (observation 12, lifecycle 4, capture-daemon 3, core 5, halo_view, halo_live).
 - Deliberately not claimed: "fastest in market". A fair head-to-head needs Claude's or Kimi's own privileged service running, which is not available here and not something to install or launch unprompted.
+
+## Round — aura feedback correction (2026-11-03, user report)
+
+The user reported a large tint covering much of the screen that never switched off, and
+asked for an edge-hugging breathing light that only appears while the agent is operating.
+Root causes and fixes:
+
+1. **Persistent session overlay.** `cu_click` auto-starts a visual session
+   (`config.autoSession`) when a `windowId` is passed, and nothing ends it. A
+   `cu cursor-overlay` process (started 12:23 by the plugin host, parent DSH) survived
+   for more than an hour, keeping the aura at full opacity. The orphan was killed; the
+   overlay now exits after 2 idle hours instead of running forever.
+2. **Wrong aura geometry.** The aura was one radial `CAGradientLayer` centered on the
+   screen with `endPoint (1,1)` → ~1000 pt radius, so the “edge” tint covered a large
+   part of the display. Replaced with four 72 pt edge bands (linear gradients,
+   transparent on the inner side) inside a container whose opacity carries the 55–100 %
+   breathing animation (1.8 s, autoreverse).
+3. **Wrong trigger.** `aura true` now only arms the feedback; `cursor` / `click` /
+   `label` commands light the rim for 2 s and fade over 0.5 s. Continuous actions read
+   as a breathing rim; idle is fully transparent (no ambient glow).
+4. **Regression pin.** New `engine/tests/aura_view.py` compiles the real
+   `CursorLayerView` offscreen and asserts: armed-idle transparent; a pulse draws a
+   ≤100 pt rim on all four edges with a clear centre; fade clears it; the activity
+   timestamp updates. Wired into `run_all.sh` (full section).
+
+Verified live after reinstall (service buildId `09c04b3215d8…`): pulse vs idle mean RGB
+difference 0.046 (~12/255) in the outer 60 pt band and 0.0003 in the centre; after the
+2 s fade the edge difference returns to 0.0001; no overlay process or window left behind.

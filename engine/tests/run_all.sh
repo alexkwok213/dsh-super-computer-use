@@ -25,4 +25,6 @@ echo "== background";  python3 tests/background.py --rounds 5 | tail -2
 echo "== window ops";   python3 tests/window_ops.py | tail -4
 echo "== deep tree";    python3 tests/deepfind.py | tail -6
 echo "== widgets";      python3 tests/demo_controls.py | tail -5
+echo "== console ui";   python3 tests/console_ui.py | tail -5
+echo "== aura view";    python3 tests/aura_view.py | tail -1
 echo "== chromium";    python3 tests/chromium.py --rounds 5 | tail -3

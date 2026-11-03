@@ -19,8 +19,9 @@ DSH  ──加载──▶  本仓库根目录（Cordis 插件，JS）
 | `engine/Sources/` | 原生引擎源码（Swift） |
 | `engine/build.sh` | 编译 `engine/bin/cu` |
 | `engine/install-app.sh` | 打包并安装 `Computer Use.app`，注册 launchd 服务 |
-| `engine/tests/` | 原生回归测试（光环/抓屏/窗口查询） |
+| `engine/tests/` | 原生回归测试（光环/抓屏/窗口查询/控制台界面） |
 | `docs/` | 设计与验证记录；`docs/legacy/` 为合并前两个仓库的历史文档；`docs/demo/` 为演示素材 |
+| `docs/ui/` | 控制台界面的对照参考（`reference/`）与改造后截图（`console-after/`） |
 
 ## 安装
 
@@ -68,10 +69,28 @@ pnpm add link:/path/to/dsh-super-computer-use
 `cu_scroll` `cu_screenshot` `cu_session` `cu_find` `cu_batch`
 
 **视觉反馈**
-- 全屏柔光：蓝→青→紫径向边缘辉光，中心透明
+- 边缘呼吸光：只在 agent 真正操作时出现的屏幕四边窄光带（蓝→青→紫，约 72pt），停手约 2 秒后自动淡出
 - 渐变光环：跟随目标窗口，独立停止面板
 - 毛玻璃 HUD：实时动作文本 + 计时器 + 脉冲状态灯
 - 光标层：虚拟箭头滑向目标、动作标签、点击涟漪（不移动真实鼠标）
+
+**菜单栏控制台**（菜单栏 `● CU` → 控制台…）
+
+无边框毛玻璃圆角面板，一页看完：应用图标与标题、权限卡片（状态点 / 一键「去授权」+ 可拖拽的悬浮授权引导）、
+本地 agent 连接开关（直接写入 / 移除 MCP 配置并回读状态）、服务状态卡（端口、在线客户端、正在做什么、检测 / 重启）。
+底部固定版本、暂停与三个图标入口（连接与使用 / 诊断 / 设置）；「＋ 其他 agent」页给出可直接复制的 MCP 配置，
+复制后按钮变「已复制」。视觉与交互参考 Claude CU Bridge，对照见 `docs/ui/reference/claude-cu-ui-notes.md`，
+改造后截图在 `docs/ui/console-after/`。
+
+![控制台概览](docs/ui/console-after/console-overview-live.png)
+
+界面本身可以被机器验证，不靠肉眼回归：
+
+```bash
+cu menubar --selftest-ui                       # 控制台结构的 JSON 断言
+cu menubar --snapshot-console /tmp/c.png --snapshot-page overview   # 任一页渲染成 PNG
+cu menubar --snapshot-guide /tmp/guide.png     # 授权引导浮窗
+```
 
 **引擎命令**（除插件外也可直接用）
 
@@ -80,6 +99,8 @@ cu windows | snapshot --pid <pid> [--window <id>] [--max-nodes 1500] [--no-actio
 cu click --ref <ref> --pid <pid> [--background]
 cu shot --window <id> --format jpeg --max-dim 1280
 cu halo --window <id> --label "..." | cu capsule --label "..." | cu cursor-overlay | cu capture-daemon
+cu agents | agents-connect [--id …] | agents-disconnect [--id …]
+cu menubar [--open-settings] | --selftest-ui | --snapshot-console <png> | --snapshot-guide <png>
 ```
 
 ## 实测性能（同一台 Mac，中位数）
@@ -100,6 +121,10 @@ cu halo --window <id> --label "..." | cu capsule --label "..." | cu cursor-overl
 - **失败不重放**：动作已派发但观察失败时，保留动作结果并标记 `actionReplaySafe: false`
 - **截断可见**：快照超过节点预算时返回 `truncated: true` + `limit`，可用 `maxNodes` 提高
 - **用户可中断**：胶囊与光环上的停止键会写入暂停标记，所有变更类动作随即被拦截
+- **控制台不粘焦点**：只有你点开控制台时才激活窗口；关掉后立即把焦点还给之前的应用
+- **界面可回归**：`--selftest-ui` / `--snapshot-console` / `--snapshot-guide` 让每次改版都有断言与截图证据
+- **光效不常驻**：边缘呼吸光只在动作时亮起；overlay 进程 2 小时无活动自动退出，不会遗留常驻光斑
+- **授权可自愈**：缺权限时给系统设置深链 + 可拖拽应用卡片的引导浮窗；失效授权只在日志有证据且确实缺权限时才重置
 
 ## 历史
 
