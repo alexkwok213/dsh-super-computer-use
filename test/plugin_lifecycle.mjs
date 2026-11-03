@@ -32,11 +32,11 @@ test('batch reports a step that exceeded the deadline as outcome unknown', async
   assert.equal(res.outcomeUnknown, true);
 });
 
-test('dockDsh defaults to false, matching the tool docs', async () => {
+test('dockDsh defaults to true: DSH shrinks right and the target takes the left', async () => {
   const m = new CuSessionManager();
   const calls = [];
   m.exec = async (argv) => {
-    calls.push(argv[0]);
+    calls.push(argv);
     if (argv[0] === 'windows') {
       return { ok: true, windows: [
         { windowId: 7, pid: 5, app: 'Target', bounds: { x: 10, y: 40, width: 800, height: 600 } },
@@ -49,9 +49,30 @@ test('dockDsh defaults to false, matching the tool docs', async () => {
   m.writeActivity = () => {};
   m.clearPauseLatch = () => {};
   m.stopVisualIndicatorsOnly = async () => {};
-  // dockDsh omitted -> must NOT move windows even though a DSH window exists.
+  // dockDsh omitted -> the documented default is to dock: a target window
+  // narrower than the display would otherwise sit under the DSH panel.
   await m.startVisualSession({ windowId: 7 });
-  assert.ok(!calls.includes('movewindow'), `movewindow should not run by default: ${calls}`);
+
+  const moves = calls.filter((argv) => argv[0] === 'movewindow');
+  const arg = (argv, flag) => Number(argv[argv.indexOf(flag) + 1]);
+  assert.equal(moves.length, 2, `expected a DSH dock and a target move: ${JSON.stringify(calls)}`);
+
+  const dshMove = moves.find((argv) => arg(argv, '--window') === 9);
+  assert.ok(dshMove, 'DSH window must be docked');
+  // 1728-wide display -> DSH keeps the right 576 pt, the target gets 1152.
+  assert.equal(arg(dshMove, '--x'), 1152);
+  assert.equal(arg(dshMove, '--w'), 576);
+  assert.equal(arg(dshMove, '--y'), 30);
+  assert.equal(arg(dshMove, '--h'), 970);
+
+  const targetMove = moves.find((argv) => arg(argv, '--window') === 7);
+  assert.ok(targetMove, 'target window must take the left side');
+  assert.equal(arg(targetMove, '--x'), 0);
+  assert.equal(arg(targetMove, '--w'), 1152);
+
+  // The dock is reversible: the pre-dock geometry has to be remembered.
+  assert.deepEqual(m.dockedDshWindow, { windowId: 9, x: 0, y: 30, w: 1728, h: 1000 });
+  assert.deepEqual(m.savedTargetBounds, { windowId: 7, x: 10, y: 40, w: 800, h: 600 });
 });
 
 test('repeated same-target start is idempotent (no redundant resume/move)', async () => {

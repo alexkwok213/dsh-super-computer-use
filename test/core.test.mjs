@@ -47,13 +47,20 @@ test("CuSessionManager caches snapshot refs and computes compact deltas", () => 
     assert.equal(first.mode, "full");
     assert.equal(first.lines.length, 2);
 
-    // Provenance lookup works for same pid + window
+    // Provenance lookup works for same pid + window. The frame is cached too:
+    // without it a ref click had no point to aim the overlay at.
     const prov = manager.resolveRefProvenance(4242, "e1", 9001);
     assert.deepEqual(prov, {
       ref: "e1",
       role: "AXButton",
       title: "Demo Button 0",
       windowId: 9001,
+      x: 10,
+      y: 20,
+      w: 100,
+      h: 30,
+      cx: 60,
+      cy: 35,
     });
 
     // Cross-window lookup is rejected to prevent mis-clicking another window
