@@ -402,6 +402,7 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
     assert.equal(batchVal.completedSteps, 3);
     assert.equal(batchVal.totalSteps, 3);
     assert.ok(batchVal.durationMs < 3000, `Batch took too long: ${batchVal.durationMs}ms`);
+    assert.ok(batchVal.timings?.steps >= 0, JSON.stringify(batchVal.timings));
     assert.ok(batchVal.preview?.ok, "Batch should include final preview");
 
     // Stop visual session and clean up capsule/halo

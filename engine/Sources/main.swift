@@ -3656,6 +3656,7 @@ func serve(_ config: ServiceConfig) -> Never {
     emit(["ok": true, "service": "listening", "port": config.port,
           "base": "http://127.0.0.1:\(config.port)", "config": serviceConfigPath])
     let queue = DispatchQueue(label: "cu.service")
+    let readQueue = DispatchQueue(label: "cu.service.read", attributes: .concurrent)
     while true {
         var client = sockaddr_in()
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
@@ -3671,11 +3672,13 @@ func serve(_ config: ServiceConfig) -> Never {
         setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout,
                    socklen_t(MemoryLayout<timeval>.size))
         queue.async {
-            defer { close(clientFD) }
             guard let request = readHTTP(clientFD) else {
                 writeHTTP(clientFD, status: 400, body: jsonData(["ok": false, "error": "bad_request"]))
+                close(clientFD)
                 return
             }
+            let handle: () -> Void = {
+            defer { close(clientFD) }
             let authorized = request.headers["authorization"] == "Bearer \(config.token)"
             switch (request.method, request.path) {
             case ("GET", "/v1/status"):
@@ -3795,6 +3798,16 @@ func serve(_ config: ServiceConfig) -> Never {
                 writeHTTP(clientFD, status: 200, body: jsonData(["ok": true, "paused": false]))
             default:
                 writeHTTP(clientFD, status: 404, body: jsonData(["ok": false, "error": "not_found"]))
+            }
+            }
+            // Health and catalogue reads answer on their own concurrent queue: a
+            // 20 s action must not make the console look frozen, and a status
+            // query must not queue behind a slow screenshot. Writes stay on the
+            // serial queue, so action order is unchanged.
+            if request.method == "GET" {
+                readQueue.async(execute: handle)
+            } else {
+                handle()
             }
         }
     }

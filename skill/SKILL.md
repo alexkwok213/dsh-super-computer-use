@@ -31,7 +31,9 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
 
 5. **Multi-Step Execution with `cu_batch` (Codex / Claude Fast-Action Loop)**
    - For compound tasks (e.g. click search box -> type keyword -> press return), prefer `cu_batch` instead of round-tripping to the model for each individual keystroke or click.
-   - `cu_batch` runs all steps locally in ~50-200ms, updates the floating status capsule live, and delivers the single final observation delta + preview.
+   - `cu_batch` runs all steps locally, updates the floating status capsule live, and delivers the single final observation delta + preview.
+   - A step can be `{action: "expect", query/enabled/value/contains/ref, timeoutMs}`: it polls until the app reaches that state and, with `stopOnError`, stops the batch there. That is the checkpoint to use when the next step depends on loading. Blind `settleMs` (default 60 ms between steps) is only a fallback; it is reported in `timings.settleMs`.
+   - `cu_batch` returns `budgetExceeded: true` when a run overshoots `timeoutMs` even if every step landed, so a slow run is never mistaken for a fast one.
 
 6. **Post-Action Waiting and Verification**
    - Every mutating tool returns `observation.changed` (`true`/`false`/`null`), `observation.waitedMs` and `observation.reads`. The adapter re-reads the tree while it is still identical to the pre-action baseline, inside a short budget (~300 ms), so a sheet or search result that paints late is not missed. `changed: true` means the tree moved—not that the business action succeeded.

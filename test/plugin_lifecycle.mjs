@@ -148,3 +148,73 @@ test('the split follows the display that holds the target, including negative or
   assert.equal(m.lastLayout.source, 'screens');
   assert.equal(m.lastLayout.screen.name, 'Studio Display');
 });
+
+test('a single-step batch that overshoots its budget says so', async () => {
+  const m = new CuSessionManager();
+  m.exec = async () => {
+    await new Promise((r) => setTimeout(r, 80));
+    return { ok: true };
+  };
+  const res = await m.executeBatch({
+    pid: 1,
+    steps: [{ action: 'key', name: 'tab' }],
+    timeoutMs: 20,
+  });
+  // The action may have landed; it is still not a clean, fast success.
+  assert.equal(res.ok, true);
+  assert.equal(res.budgetExceeded, true);
+  assert.equal(res.budgetMs, 20);
+  assert.ok(res.durationMs >= 80);
+});
+
+test('a batch inside its budget carries no budget flag', async () => {
+  const m = new CuSessionManager();
+  m.exec = async () => ({ ok: true });
+  const res = await m.executeBatch({ pid: 1, steps: [{ action: 'key', name: 'tab' }], timeoutMs: 5000 });
+  assert.equal(res.budgetExceeded, undefined);
+  assert.equal(res.budgetMs, 5000);
+});
+
+test('an expect step is a checkpoint: the batch stops when the app never gets there', async () => {
+  const m = new CuSessionManager();
+  const calls = [];
+  m.exec = async (argv) => {
+    calls.push(argv[0]);
+    if (argv[0] === 'expect') {
+      return { ok: false, error: 'expect_failed', message: 'the control is no longer in the tree' };
+    }
+    return { ok: true };
+  };
+  const res = await m.executeBatch({
+    pid: 1,
+    steps: [
+      { action: 'click', x: 10, y: 10 },
+      { action: 'expect', query: '导入完成', timeoutMs: 100 },
+      { action: 'click', x: 20, y: 20 },
+    ],
+    settleMs: 0,
+    timeoutMs: 5000,
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'expect_failed');
+  assert.equal(res.failedStep, 1);
+  assert.equal(res.results.length, 2, 'the step after the failed checkpoint never runs');
+  assert.deepEqual(calls, ['click', 'expect']);
+});
+
+test('timings attribute the batch budget to settle, work and overhead', async () => {
+  const m = new CuSessionManager();
+  m.exec = async () => {
+    await new Promise((r) => setTimeout(r, 10));
+    return { ok: true };
+  };
+  const res = await m.executeBatch({
+    pid: 1,
+    steps: Array.from({ length: 3 }, () => ({ action: 'key', name: 'tab' })),
+    settleMs: 40,
+    timeoutMs: 5000,
+  });
+  assert.ok(res.timings.settleMs >= 75, JSON.stringify(res.timings));
+  assert.ok(res.timings.steps >= 25, JSON.stringify(res.timings));
+  assert.ok(res.timings.overheadMs < 120, JSON.stringify(res.timings));
+});
