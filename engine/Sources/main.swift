@@ -340,7 +340,7 @@ struct Capture {
 @available(macOS 14.0, *)
 func capture(windowId: CGWindowID? = nil, screen: Bool = false,
              displayIndex: Int = 0, maxDimension: Int = 0,
-             timeout: TimeInterval = 4) throws -> Capture {
+             timeout: TimeInterval = 1.5) throws -> Capture {
     let semaphore = DispatchSemaphore(value: 0)
     var outcome: Result<Capture, Error>!
     Task.detached {
@@ -2060,11 +2060,12 @@ final class CursorLayerView: NSView {
 
 // MARK: - capture daemon
 
-/// Persistent ScreenCaptureKit capture process. Holding one warm
-/// `SCShareableContent` and reusing it drops steady-state window captures to
-/// ~53 ms median (p90 58 ms, n=20 on this machine) versus 146–177 ms for a
-/// per-shot `screencapture` spawn plus refine. Protocol: one JSON object per
-/// stdin line, one JSON reply per stdout line.
+/// Persistent capture process. Holding one warm `SCShareableContent` keeps the
+/// ScreenCaptureKit path to ~53 ms median (p90 58 ms, n=20 on this machine) when
+/// it answers at all; when it does not, the same process falls back to
+/// `screencapture`, which measured 111–118 ms warm here versus 146–177 ms for a
+/// per-shot spawn plus refine. Protocol: one JSON object per stdin line, one
+/// JSON reply per stdout line.
 final class CaptureDaemon {
     private var cached: SCShareableContent?
 
@@ -2076,7 +2077,9 @@ final class CaptureDaemon {
                 false, onScreenWindowsOnly: true)
             sem.signal()
         }
-        sem.wait()
+        // Bounded: an unresponsive window server must not wedge daemon startup,
+        // which runs on the main thread and would block the ready banner forever.
+        if sem.wait(timeout: .now() + 2) == .timedOut { return nil }
         return fresh
     }
 
@@ -2089,8 +2092,30 @@ final class CaptureDaemon {
     }
 
     /// Runs one capture synchronously (SCK is async-only). Returns nil on failure.
+    ///
+    /// ScreenCaptureKit's async completions do not arrive in every process
+    /// context, and when they do not, the old 8 s wait made every preview cost a
+    /// full timeout and return nothing (the plugin then paid a second capture on
+    /// the CLI path). A healthy SCK answers in 100–300 ms, so the wait is short
+    /// and a stall falls through to `screencapture`, which keeps its own TCC
+    /// identity and measured ~250–380 ms here.
     func capture(windowId: CGWindowID?, screen: Bool, displayIndex: Int,
                  maxDimension: Int = 0) -> Capture? {
+        if !sckStalled, let shot = captureViaScreenCaptureKit(
+            windowId: windowId, screen: screen, displayIndex: displayIndex,
+            maxDimension: maxDimension) {
+            return shot
+        }
+        return captureViaCLI(windowId: windowId, screen: screen,
+                             displayIndex: displayIndex)
+    }
+
+    /// True once SCK stopped answering, so later requests skip its timeout.
+    private var sckStalled = false
+
+    private func captureViaScreenCaptureKit(windowId: CGWindowID?, screen: Bool,
+                                            displayIndex: Int,
+                                            maxDimension: Int) -> Capture? {
         func attempt(_ list: SCShareableContent) -> Capture? {
             let sem = DispatchSemaphore(value: 0)
             var box: Capture?
@@ -2099,7 +2124,10 @@ final class CaptureDaemon {
                                   displayIndex: displayIndex, maxDimension: maxDimension)
                 sem.signal()
             }
-            if sem.wait(timeout: .now() + 8) == .timedOut { return nil }
+            if sem.wait(timeout: .now() + 1.5) == .timedOut {
+                sckStalled = true
+                return nil
+            }
             return box
         }
         // A window opened after the daemon started is absent from the cached
@@ -2115,6 +2143,16 @@ final class CaptureDaemon {
         refresh()
         guard let refreshed = content() else { return nil }
         return attempt(refreshed)
+    }
+
+    private func captureViaCLI(windowId: CGWindowID?, screen: Bool,
+                               displayIndex: Int) -> Capture? {
+        let bounds = windowId.flatMap { id in
+            onScreenWindows().first(where: { $0.id == id })?.bounds
+        }
+        if !screen, windowId != nil, bounds == nil { return nil }
+        return try? cliCapture(windowId: windowId, screen: screen,
+                               displayIndex: displayIndex, bounds: bounds)
     }
 
     private func shoot(_ list: SCShareableContent, windowId: CGWindowID?,
