@@ -4,22 +4,23 @@
 # deployment target, so LaunchServices accepts a self-compiled Mach-O (the
 # old script-launcher workaround is gone).
 set -eu
-cd "$(dirname "$0")"
+HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+cd "$HERE"
 
 ./build.sh >/dev/null
-
-HERE="$(cd "$(dirname "$0")" && pwd)"
 # One product version: the plugin package owns it, the app bundle reports it.
 VERSION=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$HERE/../package.json" 2>/dev/null || echo "0.1.0")
 
 NAME="Computer Use"                    # bundle/file name stays stable: TCC + launchd paths
-PRODUCT="DSH Super Computer Use"       # one user-visible product name everywhere
+PRODUCT="Super Computer Use"             # unified product brand name
 BUNDLE="build/$NAME.app"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 cp bin/cu "$BUNDLE/Contents/MacOS/$NAME"
 cp mcp/tools.json "$BUNDLE/Contents/Resources/tools.json"
 cp build/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns"
+# Keep the plugin self-contained at a stable path inside the signed bundle.
+sh "$HERE/package-plugin.sh" "$HERE/.." "$BUNDLE/Contents/Resources"
 
 cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -99,7 +100,7 @@ sleep 1
 # (measured with tests/focus_probe.command).
 if ! launchctl print "gui/$(id -u)/local.cu.menubar" >/dev/null 2>&1; then
     launchctl kickstart -k "gui/$(id -u)/local.cu.menubar" >/dev/null 2>&1 || \
-        open -g "$DEST/$NAME.app"
+        echo "Warning: menu-bar service could not be started; check launchctl for local.cu.menubar." >&2
 fi
 echo
 echo "$PRODUCT is now in $DEST (bundle file: Computer Use.app) — look for it in Applications/Launchpad."

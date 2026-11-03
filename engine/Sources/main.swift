@@ -22,6 +22,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import CoreMedia
 import CryptoKit
 import Foundation
 import ObjectiveC
@@ -879,7 +880,7 @@ func secureInputPID() -> pid_t? {
 }
 
 func userIdleSeconds() -> Double {
-    let types: [CGEventType] = [.keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown, .scrollWheel]
+    let types: [CGEventType] = [.keyDown, .leftMouseDown, .rightMouseDown, .scrollWheel]
     let values = types.map {
         CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0)
     }
@@ -976,11 +977,23 @@ func appIdentifier(_ pid: pid_t) -> (bundle: String, name: String) {
     return (app?.bundleIdentifier ?? "", app?.localizedName ?? "")
 }
 
+func userInterventionGuarded() -> Bool {
+    if ProcessInfo.processInfo.environment.keys.contains("CU_NO_USER_PAUSE") {
+        return false
+    }
+    if let data = FileManager.default.contents(atPath: serviceConfigPath),
+       let decoded = try? JSONDecoder().decode(ServiceConfig.self, from: data),
+       decoded.pauseOnUserActivity == false {
+        return false
+    }
+    return userIntervened()
+}
+
 func preflight(action: String, point: CGPoint?, pid: pid_t?, requireFocus: Bool,
                secureAllowed: Bool, ignoreSheet: Bool) -> [String: Any]? {
     let extras: [String: Any] = ["action": action,
                                  "userIdleSeconds": (userIdleSeconds() * 1000).rounded() / 1000]
-    if userIntervened(), !ProcessInfo.processInfo.environment.keys.contains("CU_NO_USER_PAUSE") {
+    if userInterventionGuarded() {
         return ["ok": false, "error": "user_recently_active",
                 "message": "the user typed or clicked after the last action; pausing briefly",
                 "retryAfterMs": 400].merging(extras) { $1 }
@@ -2230,6 +2243,77 @@ func runCaptureDaemon() -> Never {
     exit(0)
 }
 
+/// Keeps a real ScreenCaptureKit display stream alive for the lifetime of a CU
+/// session. Besides warming the capture path, this is what makes macOS show its
+/// own "screen recording is active" indicator in the menu bar — the same system
+/// reminder Codex's built-in computer use shows while it drives the desktop.
+final class ScreenRecordingIndicator: NSObject, SCStreamOutput {
+    private var stream: SCStream?
+    private let sampleQueue = DispatchQueue(label: "cu.screen-indicator.samples")
+
+    func start() -> String? {
+        if stream != nil { return nil }
+        let sem = DispatchSemaphore(value: 0)
+        var displays: [SCDisplay] = []
+        Task {
+            if let content = try? await SCShareableContent.excludingDesktopWindows(
+                false, onScreenWindowsOnly: true) {
+                displays = content.displays
+            }
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 5)
+        guard let display = displays.first else { return "no_display" }
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let configuration = SCStreamConfiguration()
+        // Deliberately tiny and slow: the goal is the system indicator and a
+        // warm capture path, not frames. One frame per second costs almost
+        // nothing while still qualifying as an active screen capture.
+        configuration.width = 32
+        configuration.height = 18
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+        configuration.queueDepth = 1
+        configuration.showsCursor = false
+        do {
+            let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
+            try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
+            try stream.startCapture()
+            self.stream = stream
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    func stop() {
+        try? stream?.stopCapture()
+        stream = nil
+    }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+                of outputType: SCStreamOutputType) {
+        // Frames are intentionally ignored; the stream exists for its liveness.
+    }
+}
+
+/// Ask the always-running menu-bar app to own the display stream. Owning it in
+/// the app (a real bundle process with its own Screen Recording grant) is what
+/// makes macOS raise its system indicator reliably, and it lets our menu-bar
+/// item show the same "recording" state while a session is active.
+func runScreenIndicator() -> Never {
+    let on: Bool
+    if let state = args["state"] {
+        on = state != "off"
+    } else {
+        on = !args.flag("off")
+    }
+    DistributedNotificationCenter.default().post(
+        name: NSNotification.Name("local.cu.screen-indicator"),
+        object: nil, userInfo: ["active": on])
+    emit(["ok": true, "screenIndicator": on ? "on" : "off"])
+    exit(0)
+}
+
 func runCursorOverlay() -> Never {
     let previous = frontmostBeforeLaunch()
     let app = NSApplication.shared
@@ -3328,7 +3412,7 @@ func windowsPayload(explicitPid: Int? = nil) -> [String: Any] {
             "windows": windows]
 }
 
-func runEngine(_ argv: [String], config: ServiceConfig? = nil) -> [String: Any] {
+func runEngine(_ argv: [String], config: ServiceConfig? = nil, noUserPause: Bool = false) -> [String: Any] {
     var direct: [String: Any]?
     if argv == ["frontmost"] { direct = frontmostPayload() }
     if argv == ["cursor"] { direct = cursorPayload() }
@@ -3342,7 +3426,7 @@ func runEngine(_ argv: [String], config: ServiceConfig? = nil) -> [String: Any] 
     process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
     process.arguments = argv
     var environment = ProcessInfo.processInfo.environment
-    if config?.pauseOnUserActivity == false { environment["CU_NO_USER_PAUSE"] = "1" }
+    if noUserPause || config?.pauseOnUserActivity == false { environment["CU_NO_USER_PAUSE"] = "1" }
     // Children of the daemon never receive SCK completion callbacks.
     environment["CU_SHOT_CLI"] = "1"
     process.environment = environment
@@ -3500,7 +3584,8 @@ func serve(_ config: ServiceConfig) -> Never {
                     return
                 }
                 let execStarted = DispatchTime.now().uptimeNanoseconds
-                let execResult = runEngine(argv, config: config)
+                let noUserPause = request.headers["x-cu-no-user-pause"] == "1"
+                let execResult = runEngine(argv, config: config, noUserPause: noUserPause)
                 recordHTTPCall(peerPort: peerPort,
                                tool: argv.first ?? "exec",
                                ms: Int((DispatchTime.now().uptimeNanoseconds - execStarted) / 1_000_000),
@@ -4168,6 +4253,8 @@ struct AgentSpec {
 func agentSpecs() -> [AgentSpec] {
     let home = NSHomeDirectory()
     return [
+        AgentSpec(id: "dsh", name: "DeepSeek Harness", processes: ["DeepSeek Harness"],
+                  configPath: nil, managedNote: "由 DSH desktop profile 管理"),
         AgentSpec(id: "qoder", name: "Qoder CN", processes: ["Qoder"],
                   configPath: nil, managedNote: "由 Qoder 设置 → 连接器 管理；需握手和调用记录确认"),
         AgentSpec(id: "workbuddy", name: "WorkBuddy", processes: ["WorkBuddy"],
@@ -4213,10 +4300,36 @@ func runningProcessNames() -> Set<String> {
     })
 }
 
+func dshProfileState() -> String {
+    let path = NSHomeDirectory() + "/.dsh/profiles/desktop/package.json"
+    guard let data = FileManager.default.contents(atPath: path),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          object["dependencies"] == nil || object["dependencies"] is [String: Any],
+          object["dsh"] == nil || object["dsh"] is [String: Any] else { return "unknown" }
+    let dsh = object["dsh"] as? [String: Any] ?? [:]
+    guard dsh["profile"] == nil || dsh["profile"] is [String: Any] else { return "unknown" }
+    let profile = dsh["profile"] as? [String: Any] ?? [:]
+    guard profile["bundles"] == nil || profile["bundles"] is [String] else { return "unknown" }
+    let dependencies = object["dependencies"] as? [String: Any] ?? [:]
+    let dependency = dependencies["dsh-super-computer-use"] is String
+    let bundle = (profile["bundles"] as? [String] ?? []).contains("dsh-super-computer-use")
+    return dependency && bundle ? "configured" : dependency || bundle ? "partial" : "absent"
+}
+
 func agentsCatalog() -> [[String: Any]] {
     let rows = (clientsReport()["clients"] as? [[String: Any]]) ?? []
     let names = runningProcessNames()
-    return agentSpecs().map { spec in
+    return agentSpecs().filter { spec in
+        guard spec.id == "qoder" else { return true }
+        let running = names.contains { name in spec.processes.contains { name.hasPrefix($0) } }
+        let roots = ["/Applications", NSHomeDirectory() + "/Applications"]
+        let installed = roots.contains { root in
+            ["Qoder.app", "Qoder CN.app"].contains { app in
+                FileManager.default.fileExists(atPath: root + "/" + app)
+            }
+        }
+        return running || installed
+    }.map { spec in
         var wired = false
         if let path = spec.configPath,
            let data = FileManager.default.contents(atPath: path),
@@ -4232,6 +4345,7 @@ func agentsCatalog() -> [[String: Any]] {
             let info = row["clientInfo"] as? [String: Any] ?? [:]
             let reported = (info["name"] as? String ?? "").lowercased()
             let isCode = client.contains("claude-code") || client == "claude" && (row["appPath"] as? String ?? "").contains(".app") == false || reported.contains("claude-code")
+            if spec.id == "dsh" { return client == "dsh-computer-use" && (row["via"] as? String) == "http" }
             if spec.id == "claude-code" { return isCode }
             if spec.id == "claude-desktop" { return client.contains("claude") && !isCode }
             return spec.processes.contains { client.contains($0.lowercased()) }
@@ -4250,6 +4364,17 @@ func agentsCatalog() -> [[String: Any]] {
             entry["calls"] = best["calls"] ?? 0
         }
         let live = matched.filter { $0["alive"] as? Bool ?? false }
+        if spec.id == "dsh" {
+            let config = dshProfileState()
+            let verified = live.contains { ($0["lastOk"] as? Bool ?? false) && ($0["calls"] as? Int ?? 0) > 0 }
+            entry["configState"] = config
+            entry["wired"] = config == "configured"
+            entry["connected"] = verified
+            entry["state"] = verified ? "● 调用已验证" : "○ 未验证接入"
+            let details = ["configured": "插件依赖和 bundle 已配置", "partial": "插件配置不完整", "absent": "插件未配置", "unknown": "无法读取插件配置"]
+            entry["note"] = verified ? "最近调用成功；\(details[config] ?? "")" : "\(details[config] ?? "无法读取插件配置") · 尚无成功调用验证"
+            return entry
+        }
         let verified = live.contains { $0["lastSuccessfulCallAt"] != nil }
         let listed = live.contains { $0["toolsListedAt"] != nil }
         let initialized = live.contains { $0["initializedAt"] != nil }
@@ -4297,8 +4422,13 @@ func agentsConnect(ids: [String]?) -> [[String: Any]] {
                   let text = String(data: data, encoding: .utf8) else { return "" }
             return text
         }
-        if let existing = servers[spec.serverName] as? [String: Any], canonical(existing) == canonical(desired) {
-            results.append(["id": spec.id, "name": spec.name, "status": "already"])
+        if let existing = servers[spec.serverName] {
+            if let entry = existing as? [String: Any], canonical(entry) == canonical(desired) {
+                results.append(["id": spec.id, "name": spec.name, "status": "already"])
+            } else {
+                results.append(["id": spec.id, "name": spec.name, "status": "error",
+                                "error": "同名 MCP 配置与本程序配置不一致，已保留原配置：\(spec.serverName)"])
+            }
             continue
         }
         servers[spec.serverName] = desired
@@ -4337,8 +4467,18 @@ func agentsDisconnect(ids: [String]?) -> [[String: Any]] {
             continue
         }
         var servers = object["mcpServers"] as? [String: Any] ?? [:]
-        guard servers[spec.serverName] != nil else {
+        guard let existing = servers[spec.serverName] else {
             results.append(["id": spec.id, "name": spec.name, "status": "absent"])
+            continue
+        }
+        let desired = agentMCPEntry(name: spec.serverName)
+        let desiredData = try? JSONSerialization.data(withJSONObject: desired, options: [.sortedKeys])
+        let existingData = (existing as? [String: Any]).flatMap {
+            try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys])
+        }
+        guard let desiredData, let existingData, existingData == desiredData else {
+            results.append(["id": spec.id, "name": spec.name, "status": "error",
+                            "error": "同名 MCP 配置与本程序配置不一致，已保留原配置：\(spec.serverName)"])
             continue
         }
         servers.removeValue(forKey: spec.serverName)
@@ -5534,6 +5674,9 @@ case "cursor-overlay":
 case "capture-daemon":
     runCaptureDaemon()
 
+case "screen-indicator":
+    runScreenIndicator()
+
 case "release":
     releaseMouse()
     let point = cursorPosition()
@@ -5731,9 +5874,6 @@ case "agents-connect":
 case "agents-disconnect":
     let ids = args["id"]?.split(separator: ",").map(String.init)
     emit(["ok": true, "results": agentsDisconnect(ids: ids)])
-
-case "cursor-overlay":
-    runCursorOverlay()
 
 case "service":
     let config = loadServiceConfig(portOverride: args.int("port"), tokenOverride: args["token"])

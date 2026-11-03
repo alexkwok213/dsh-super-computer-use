@@ -100,7 +100,7 @@ def wait_frontmost_away_from(binary, timeout=2.0):
 def console_windows(binary):
     report = run_json(binary, ["windows"], timeout=20)
     return [window for window in report.get("windows", [])
-            if window.get("app") in ("Computer Use", "DSH Super Computer Use")]
+            if window.get("app") in ("Computer Use", "Super Computer Use", "DSH Super Computer Use")]
 
 
 def running_menu_bar_pids():
@@ -172,7 +172,7 @@ def test_selftest(binary):
 
 
 def test_snapshots(binary, workdir):
-    """Every page renders a 1040x1560 PNG and gives focus back."""
+    """Every page renders a 1040x1560 PNG without showing its window."""
     rows = []
     for page in SNAPSHOT_PAGES:
         before = frontmost(binary)
@@ -182,14 +182,13 @@ def test_snapshots(binary, workdir):
         check(report.get("ok") is True, "%s: snapshot ok=false: %r" % (page, report))
         check(os.path.abspath(report.get("path", "")) == os.path.abspath(path),
               "%s: snapshot wrote %r, expected %r" % (page, report.get("path"), path))
-        check(report.get("via") in ("screencapturekit", "bitmap"),
-              "%s: unexpected capture path %r" % (page, report.get("via")))
+        check(report.get("via") == "offscreen-bitmap",
+              "%s: snapshot was not rendered offscreen: %r" % (page, report.get("via")))
+        check(report.get("windowVisible") is False and report.get("windowKey") is False,
+              "%s: snapshot window became visible or key: %r" % (page, report))
         check((report.get("width"), report.get("height")) == CONSOLE_SIZE,
               "%s: reported size %rx%r" % (page, report.get("width"), report.get("height")))
         size = check_png(path, CONSOLE_SIZE)
-        if report.get("via") == "screencapturekit":
-            check(isinstance(report.get("windowId"), int) and report["windowId"] > 0,
-                  "%s: SCK capture without a windowId" % page)
         after = wait_frontmost_away_from(binary)
         check(after.get("app") != "Computer Use",
               "%s: console snapshot left the Computer Use process frontmost" % page)

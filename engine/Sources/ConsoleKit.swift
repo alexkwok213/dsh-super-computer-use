@@ -149,6 +149,7 @@ func CUIAppIcon() -> NSImage {
 
 func CUIAgentIcon(_ id: String) -> NSImage {
     let paths: [String: [String]] = [
+        "dsh": ["/Applications/DeepSeek Harness.app"],
         "workbuddy": ["/Applications/WorkBuddy.app"],
         "qoder": ["/Applications/Qoder.app", "/Applications/Qoder CN.app"],
         "claude-desktop": ["/Applications/Claude.app"],

@@ -1,4 +1,4 @@
-// ConsoleApp — the menu-bar host for the DSH Super Computer Use control panel.
+// ConsoleApp — the menu-bar host for the Computer Use control panel.
 //
 // Replaces the old tabbed NSTabView console. The menu-bar item, status menu,
 // pause latch, agent config writers, permission prompts and diagnostics stay
@@ -108,6 +108,9 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     private var usageRows: [[String: Any]] = []
     private var agentRows: [[String: Any]] = []
     private var console: CUConsoleController?
+    private let screenIndicator = ScreenRecordingIndicator()
+    private var screenIndicatorOn = false
+    private var screenIndicatorTimer: Timer?
     private var lastFrontPid: pid_t = 0
     private var busyAgents: Set<String> = []
     private var firstRefreshDone = false
@@ -150,6 +153,15 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         }
         // Serve capture requests from the CLI/service: they run where ScreenCaptureKit
         // callbacks never fire, while this app has its own Screen Recording grant.
+        // The CU plugin asks the app to own a display stream for the duration of
+        // a session. A real bundle process gets the system screen-recording
+        // indicator; the menu-bar item mirrors that state for quick visibility.
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("local.cu.screen-indicator"), object: nil, queue: .main
+        ) { [weak self] note in
+            let active = (note.userInfo?["active"] as? Bool) ?? false
+            self?.setScreenIndicator(active)
+        }
         DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("local.cu.capture-request"), object: nil, queue: .main
         ) { note in
@@ -352,26 +364,12 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         let requested = snapshotPage ?? "overview"
         let page = CUConsolePage(rawValue: requested)
             ?? (requested == "agent-setup" ? .agentSetup : .overview)
-        // Active window = the state a user actually sees (switches and materials
-        // render their active appearance). The one-shot process hands focus back
-        // to whoever had it before exiting.
-        console?.show(page: page, activate: true)
-        // A menu-bar (accessory) app does not get key status from a background
-        // launch, and inactive controls render grey. Promote the one-shot process
-        // to .regular just long enough to render, then hand focus back.
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        _ = NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
-        console?.window?.makeKeyAndOrderFront(nil)
-        console?.window?.makeKey()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            let result = self?.console?.captureSnapshot(to: path)
-                ?? ["ok": false, "error": "no_console"]
-            NSApp.setActivationPolicy(.accessory)
-            yieldFocus(to: self?.launchFrontPid ?? 0)
-            emit(result)
-            exit((result["ok"] as? Bool ?? false) ? 0 : 1)
-        }
+        // Build and render the view without ever ordering or activating its window.
+        console?.show(page: page, activate: false, offscreen: true)
+        let result = console?.captureSnapshot(to: path)
+            ?? ["ok": false, "error": "no_console"]
+        emit(result)
+        exit((result["ok"] as? Bool ?? false) ? 0 : 1)
     }
 
     private func runSelftest() {
@@ -392,6 +390,42 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
 
     // MARK: status icon & menu
 
+    /// Own the ScreenCaptureKit display stream in this app process. Starting it
+    /// off the main thread keeps a slow SCShareableContent lookup from freezing
+    /// the menu bar; the system privacy indicator follows the stream's lifetime.
+    private func setScreenIndicator(_ active: Bool) {
+        guard active != screenIndicatorOn else { return }
+        screenIndicatorOn = active
+        screenIndicatorTimer?.invalidate()
+        screenIndicatorTimer = nil
+        if active {
+            // Safety net: a crashed plugin must not leave the system indicator on.
+            screenIndicatorTimer = Timer.scheduledTimer(withTimeInterval: 7200, repeats: false) {
+                [weak self] _ in
+                self?.setScreenIndicator(false)
+            }
+        }
+        let indicator = screenIndicator
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            if active {
+                if let error = indicator.start() {
+                    NSLog("screen indicator failed: %@", error)
+                    DispatchQueue.main.async {
+                        self?.screenIndicatorOn = false
+                        self?.updateIcon()
+                    }
+                }
+            } else {
+                indicator.stop()
+            }
+        }
+        updateIcon()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        screenIndicator.stop()
+    }
+
     private func updateIcon() {
         let color: NSColor
         if !serviceRunning {
@@ -406,10 +440,11 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         // A template SF Symbol loses its tint in the menu bar; a coloured dot in
         // the title keeps green/orange/red readable at a glance.
         item.button?.attributedTitle = NSAttributedString(
-            string: "● CU",
+            string: screenIndicatorOn ? "● CU · REC" : "● CU",
             attributes: [.foregroundColor: color,
                          .font: NSFont.systemFont(ofSize: 12, weight: .semibold)])
-        item.button?.toolTip = "DSH Super Computer Use｜服务：\(serviceState)｜辅助功能 \(accessibility ? "✓" : "✗")｜屏幕录制 \(screenRecording ? "✓" : "✗")"
+        let recordingState = screenIndicatorOn ? "进行中（系统菜单栏显示隐私指示）" : "空闲"
+        item.button?.toolTip = "Super Computer Use｜服务：\(serviceState)｜辅助功能 \(accessibility ? "✓" : "✗")｜屏幕录制 \(screenRecording ? "✓" : "✗")｜会话录屏 \(recordingState)"
     }
 
     private func menuLine(_ text: String, _ target: AnyObject? = nil, _ action: Selector? = nil) -> NSMenuItem {

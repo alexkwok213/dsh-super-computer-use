@@ -16,7 +16,8 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
 2. **Session Visibility & Target Preview (Claude + Codex Hybrid UX)**
    - Before operating on a target window, call `cu_session` with `action: "start"`, passing `windowId`, `pid`, `appName`, and `preview: true`.
    - This displays the non-activating top-right status capsule (`cu capsule`) and window border halo (`cu halo`) with a user Stop button, and returns an inline thumbnail preview of the target window in the chat.
-   - Set `dockDsh: true` on `cu_session(action="start")` only when foreground side-by-side layout is needed; when done, always call `cu_session` with `action: "stop"` to dismiss overlays and restore window bounds.
+   - By default the DSH window shrinks to the right third and the target window takes the left, so the user can watch the work. `cu_click`'s first automatic session also shrinks DSH (but never moves the target, because the click coordinates are already resolved). Pass `dockDsh: false` to leave the desktop untouched.
+   - While a session is active the menu bar shows `● CU · REC` and macOS raises its screen-recording privacy indicator. Always call `cu_session` with `action: "stop"` when done: it restores both window frames and clears the indicator. A 15-minute safety timer does the same if the session is abandoned.
 
 3. **AX Snapshot & Delta Observation First, Screenshot/OCR When Needed**
    - Start with `cu_windows` to find the target `pid` and `windowId`.

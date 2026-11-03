@@ -12,6 +12,8 @@ import {
 } from "../lib/core.mjs";
 import { apply, registerCuTools } from "../lib/index.mjs";
 
+process.env.CU_NO_USER_PAUSE = "1";
+
 test("renderNodeLine formats snapshot nodes compactly", () => {
   const line = renderNodeLine({
     ref: "e12",
@@ -196,7 +198,6 @@ test("live CU service + isolated cu demo window roundtrip (background click + de
       "--window",
       String(demoWin.windowId),
     ]);
-    if (!snap1Raw.ok) console.error("snap1Raw failure detail:", snap1Raw);
     assert.equal(snap1Raw.ok, true);
     const snap1 = manager.recordSnapshot(demoWin.pid, demoWin.windowId, snap1Raw, { full: true });
     const btnNode = (snap1Raw.nodes || []).find((n) => n.title === "Demo Button 0");
@@ -209,7 +210,7 @@ test("live CU service + isolated cu demo window roundtrip (background click + de
       manager
     );
     const clickRes = await manager.exec(clickArgv);
-    assert.equal(clickRes.ok, true);
+    assert.equal(clickRes.ok, true, JSON.stringify(clickRes));
 
     // 3. Re-snapshot and verify button title changed to Demo Button 1
     const snap2Raw = await manager.exec([
@@ -304,7 +305,7 @@ test("DSH plugin apply() registers 12 cu_* tools, skill, inline image preview, a
     },
   };
 
-  apply(mockCtx, {});
+  apply(mockCtx, { autoDockDsh: false });
   assert.equal(registeredTools.size, 12);
   const skillNames = registeredSkills.map((s) => s.name).sort();
   assert.deepEqual(skillNames, ["computer-use", "cu", "dsh-computer-use"]);
@@ -317,7 +318,7 @@ test("DSH plugin apply() registers 12 cu_* tools, skill, inline image preview, a
   };
 
   const manager = new CuSessionManager();
-  const demoProc = spawn(manager.resolveBinaryPath(), ["demo", "--seconds", "10"], {
+  const demoProc = spawn(manager.resolveBinaryPath(), ["demo", "--seconds", "60"], {
     stdio: "ignore",
   });
 
@@ -340,6 +341,7 @@ test("DSH plugin apply() registers 12 cu_* tools, skill, inline image preview, a
         windowId: demoWin.windowId,
         pid: demoWin.pid,
         appName: "CU Demo",
+        dockDsh: false,
         preview: true,
       },
       mockExec
@@ -371,7 +373,7 @@ test("DSH plugin apply() registers 12 cu_* tools, skill, inline image preview, a
       },
       mockExec
     );
-    assert.equal(clickVal.ok, true);
+    assert.equal(clickVal.ok, true, JSON.stringify(clickVal));
     assert.equal(clickVal.observation?.mode, "delta");
     assert.ok(clickVal.observation.changes.some((c) => c.includes("Demo Button 1")));
 
@@ -403,4 +405,117 @@ test("DSH plugin apply() registers 12 cu_* tools, skill, inline image preview, a
     for (const cleanup of effects) await cleanup?.();
     demoProc.kill("SIGTERM");
   }
+});
+
+test("visual session docks DSH by default and restores it on stop", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "cu-layout-"));
+  const calls = [];
+  const manager = new CuSessionManager({ stateDir });
+  manager.resolveBinaryPath = () => "/nonexistent/cu";
+  manager.exec = async (argv) => {
+    calls.push(argv);
+    if (argv[0] === "windows") {
+      return {
+        ok: true,
+        windows: [
+          { windowId: 11, pid: 1, app: "DeepSeek Harness", title: "DSH",
+            bounds: { x: 0, y: 33, width: 1728, height: 998 } },
+          { windowId: 22, pid: 2, app: "Safari", title: "Safari",
+            bounds: { x: 100, y: 100, width: 800, height: 600 } },
+        ],
+      };
+    }
+    return { ok: true };
+  };
+
+  const started = await manager.startVisualSession({
+    windowId: 22, pid: 2, appName: "Safari", dockDsh: true, splitScreen: true,
+    halo: false, cursor: false, seconds: 60,
+  });
+  assert.equal(started.dockedDsh, true);
+  assert.equal(started.targetSplit, true);
+
+  const flag = (argv, name) => argv[argv.indexOf(name) + 1];
+  const dshMove = calls.find((a) => a[0] === "movewindow" && a[2] === "11");
+  assert.ok(dshMove, "DSH window should be moved");
+  assert.equal(flag(dshMove, "--x"), "1152");
+  assert.equal(flag(dshMove, "--w"), "576");
+  const targetMove = calls.find((a) => a[0] === "movewindow" && a[2] === "22");
+  assert.ok(targetMove, "target window should take the left side");
+  assert.equal(flag(targetMove, "--x"), "0");
+  assert.equal(flag(targetMove, "--w"), "1152");
+  assert.ok(calls.some((a) => a[0] === "screen-indicator" && a[2] === "on"),
+    "session should raise the menu-bar screen-recording indicator");
+
+  await manager.stopVisualSession();
+  const dshRestore = calls.filter((a) => a[0] === "movewindow" && a[2] === "11").pop();
+  assert.equal(flag(dshRestore, "--x"), "0");
+  assert.equal(flag(dshRestore, "--w"), "1728");
+  const targetRestore = calls.filter((a) => a[0] === "movewindow" && a[2] === "22").pop();
+  assert.equal(flag(targetRestore, "--x"), "100");
+  assert.equal(flag(targetRestore, "--w"), "800");
+  assert.ok(calls.some((a) => a[0] === "screen-indicator" && a[2] === "off"),
+    "stopping the session should clear the indicator");
+  rmSync(stateDir, { recursive: true, force: true });
+});
+
+test("auto-session shrinks DSH without moving the click target", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "cu-autolayout-"));
+  const calls = [];
+  const manager = new CuSessionManager({ stateDir });
+  manager.resolveBinaryPath = () => "/nonexistent/cu";
+  manager.exec = async (argv) => {
+    calls.push(argv);
+    if (argv[0] === "windows") {
+      return {
+        ok: true,
+        windows: [
+          { windowId: 11, pid: 1, app: "DeepSeek Harness", title: "DSH",
+            bounds: { x: 0, y: 33, width: 1728, height: 998 } },
+          { windowId: 22, pid: 2, app: "Safari", title: "Safari",
+            bounds: { x: 100, y: 100, width: 800, height: 600 } },
+        ],
+      };
+    }
+    return { ok: true };
+  };
+  await manager.startVisualSession({
+    windowId: 22, pid: 2, appName: "Safari", dockDsh: true, splitScreen: false,
+    halo: false, cursor: false, seconds: 60,
+  });
+  assert.ok(calls.some((a) => a[0] === "movewindow" && a[2] === "11"),
+    "auto-session should shrink DSH");
+  assert.ok(!calls.some((a) => a[0] === "movewindow" && a[2] === "22"),
+    "auto-session must not move the target while a click is pending");
+  await manager.stopVisualSession();
+  rmSync(stateDir, { recursive: true, force: true });
+});
+
+test("dockDsh false leaves both windows untouched", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "cu-nolayout-"));
+  const calls = [];
+  const manager = new CuSessionManager({ stateDir });
+  manager.resolveBinaryPath = () => "/nonexistent/cu";
+  manager.exec = async (argv) => {
+    calls.push(argv);
+    if (argv[0] === "windows") {
+      return {
+        ok: true,
+        windows: [
+          { windowId: 11, pid: 1, app: "DeepSeek Harness", title: "DSH",
+            bounds: { x: 0, y: 33, width: 1728, height: 998 } },
+          { windowId: 22, pid: 2, app: "Safari", title: "Safari",
+            bounds: { x: 100, y: 100, width: 800, height: 600 } },
+        ],
+      };
+    }
+    return { ok: true };
+  };
+  await manager.startVisualSession({
+    windowId: 22, pid: 2, appName: "Safari", dockDsh: false, splitScreen: true,
+    halo: false, cursor: false, seconds: 60,
+  });
+  assert.ok(!calls.some((a) => a[0] === "movewindow"), "no window may move");
+  await manager.stopVisualSession();
+  rmSync(stateDir, { recursive: true, force: true });
 });

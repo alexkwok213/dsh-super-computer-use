@@ -795,6 +795,41 @@ def auto_halo(pid: int) -> None:
     AUTO_SESSIONS[pid] = process
 
 
+def indicator_target(*, window_id=None, pid=None, point=None) -> int | None:
+    """Resolve an indicator target without changing focus or posting input."""
+    try:
+        if window_id is not None:
+            return pid_for_window(int(window_id))
+        if pid is not None:
+            return int(pid) or None
+        if point is None:
+            return None
+        x, y = point
+        listing = windows_listing(max_age=0)
+        if not listing.get("ok"):
+            return None
+        for window in listing.get("windows", []):
+            if window.get("axOnly"):
+                continue
+            bounds = window.get("bounds") or {}
+            if (bounds["x"] <= x < bounds["x"] + bounds["width"] and
+                    bounds["y"] <= y < bounds["y"] + bounds["height"]):
+                return int(window.get("pid", 0)) or None
+    except Exception:
+        pass
+    return None
+
+
+def indicate_success(result: dict, pid: int | None, *, dry_run=False) -> None:
+    """The optional indicator must never change or retry an action."""
+    if not CAPSULE or not pid or dry_run or not result.get("ok"):
+        return
+    try:
+        auto_halo(pid)
+    except Exception:
+        pass
+
+
 INDICATOR_TIMER = None
 
 
@@ -1766,6 +1801,7 @@ def call_tool(name: str, arguments: dict) -> dict:
         if arguments.get("selection"):
             args += ["--selection", str(arguments["selection"])]
         result = run_cu(*args)
+        indicate_success(result, pid)
         return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
                 "isError": not result.get("ok", False)}
 
@@ -1786,6 +1822,7 @@ def call_tool(name: str, arguments: dict) -> dict:
         if title:
             args += ["--title", title]
         result = run_cu(*args)
+        indicate_success(result, pid)
         return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
                 "isError": not result.get("ok", False)}
 
@@ -1794,7 +1831,6 @@ def call_tool(name: str, arguments: dict) -> dict:
         if isinstance(context, dict):
             return {"content": [{"type": "text", "text": json.dumps(context)}], "isError": True}
         pid, role, title, scope = context
-        auto_halo(pid)
         args = ["action", "--pid", str(pid), "--ref", str(arguments["ref"]),
                 "--name", str(arguments["name"]), "--role", role]
         if scope is not None:
@@ -1802,6 +1838,7 @@ def call_tool(name: str, arguments: dict) -> dict:
         if title:
             args += ["--title", title]
         result = run_cu(*args)
+        indicate_success(result, pid)
         return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
                 "isError": not result.get("ok", False)}
 
@@ -2242,7 +2279,6 @@ def call_tool(name: str, arguments: dict) -> dict:
             if isinstance(context, dict):
                 return {"content": [{"type": "text", "text": json.dumps(context)}], "isError": True}
             pid, role, title, scope = context
-            auto_halo(pid)
             args = ["click", "--pid", str(pid), "--ref", str(arguments["ref"]), "--role", role]
             if title:
                 args += ["--title", title]
@@ -2259,6 +2295,7 @@ def call_tool(name: str, arguments: dict) -> dict:
             if arguments.get("dryRun"):
                 args.append("--dry-run")
             result = run_cu(*args)
+            indicate_success(result, pid, dry_run=arguments.get("dryRun", False))
             return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
                     "isError": not result.get("ok", False)}
         if "x" not in arguments or "y" not in arguments:
@@ -2279,16 +2316,16 @@ def call_tool(name: str, arguments: dict) -> dict:
             args += ["--pid", str(int(arguments["pid"]))]
         if "windowId" in arguments:
             args += ["--window", str(int(arguments["windowId"]))]
-            target = pid_for_window(int(arguments["windowId"]))
-            if target:
-                auto_halo(target)
             if arguments.get("force"):
                 args.append("--force")
         if arguments.get("phantom", True):
             args.append("--phantom")
         if arguments.get("dryRun"):
             args.append("--dry-run")
+        target = indicator_target(window_id=arguments.get("windowId"), pid=arguments.get("pid"),
+                                  point=(arguments["x"], arguments["y"]))
         result = run_cu(*args)
+        indicate_success(result, target, dry_run=arguments.get("dryRun", False))
         return {"content": [{"type": "text", "text": json.dumps(result)}], "isError": not result.get("ok", False)}
 
     if name == "type_text":
@@ -2329,9 +2366,12 @@ def call_tool(name: str, arguments: dict) -> dict:
         args = ["scroll", "--dy", str(arguments["dy"])]
         if "dx" in arguments:
             args += ["--dx", str(arguments["dx"])]
+        target = None
         if "x" in arguments and "y" in arguments:
             args += ["--x", str(arguments["x"]), "--y", str(arguments["y"])]
+            target = indicator_target(point=(arguments["x"], arguments["y"]))
         result = run_cu(*args)
+        indicate_success(result, target)
         return {"content": [{"type": "text", "text": json.dumps(result)}], "isError": not result.get("ok", False)}
 
     if name == "drag":
@@ -2343,7 +2383,11 @@ def call_tool(name: str, arguments: dict) -> dict:
             args += ["--pid", str(int(arguments["pid"]))]
         if (arguments.get("windowId") or arguments.get("pid")) and not arguments.get("foreground"):
             args.append("--background")
+        target = indicator_target(window_id=arguments.get("windowId"),
+                                  pid=arguments.get("pid") if not arguments.get("foreground") else None,
+                                  point=(start["x"], start["y"]))
         result = run_cu(*args)
+        indicate_success(result, target)
         return {"content": [{"type": "text", "text": json.dumps(result)}], "isError": not result.get("ok", False)}
 
     if name == "highlight_window":

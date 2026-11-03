@@ -1,4 +1,4 @@
-// ConsolePages — the six pages of the DSH Super Computer Use control panel.
+// ConsolePages — the six pages of the Computer Use control panel.
 //
 // Layout mirrors the reference panel: 24 pt margins, 472 pt cards, hero lockup,
 // permission CTA card, per-agent switches, a service card, and a copyable MCP
@@ -56,7 +56,7 @@ final class CUOverviewPage: CUFlippedView {
         heroIcon.layer?.borderColor = NSColor.white.withAlphaComponent(0.8).cgColor
         addSubview(heroIcon)
 
-        let title = CUILabel("DSH Super Computer Use", size: 23, weight: .bold, align: .center)
+        let title = CUILabel("Super Computer Use", size: 23, weight: .bold, align: .center)
         title.frame = CUIRect(CUI.inset, 90, CUI.cardWidth, 30)
         addSubview(title)
         let subtitle = CUILabel("让 agent 使用你的电脑", size: 14, color: CUI.secondary, align: .center)
@@ -67,7 +67,7 @@ final class CUOverviewPage: CUFlippedView {
         permissionsHeader.frame = CUIRect(CUI.inset, 158, CUI.cardWidth, 20)
         addSubview(permissionsHeader)
         let permissionsDetail = CUILabel(
-            "允许 agent 查看屏幕、点击、输入和滚动。\n系统设置中对应应用名为「DSH Super Computer Use」，开启后需重启应用生效。",
+            "允许 agent 查看屏幕、点击、输入和滚动。\n系统设置中对应应用名为「Super Computer Use」，开启后需重启应用生效。",
             size: 13, color: CUI.secondary)
         permissionsDetail.frame = CUIRect(CUI.inset, 181, CUI.cardWidth, 34)
         addSubview(permissionsDetail)
@@ -183,7 +183,7 @@ final class CUOverviewPage: CUFlippedView {
         }
         if state.contains("已请求工具清单") { return "已请求工具清单 · 在新会话验证调用" }
         if state.contains("已握手") { return "已握手 · 尚未请求工具清单" }
-        if wired { return running ? "已配置 · 应用正在运行" : "已配置 · 重启客户端后生效" }
+        if wired { return running ? "已配置 · 会话连接未验证" : "已配置 · 启动客户端后验证" }
         if connected { return "正在连接 · 尚未验证调用" }
         if running { return "应用已打开 · 尚未接入" }
         return "未接入 · 打开开关即可配置"
@@ -693,7 +693,7 @@ final class CUGuidePanel: NSPanel {
         let icon = NSImageView(frame: CUIRect(10, 12, 20, 20))
         icon.image = CUIAppIcon()
         row.addSubview(icon)
-        let name = CUIInlineLabel("DSH Super Computer Use", size: 12, weight: .medium, color: CUI.primary)
+        let name = CUIInlineLabel("Super Computer Use", size: 12, weight: .medium, color: CUI.primary)
         name.frame = CUIRect(36, 12, 180, 20)
         row.addSubview(name)
         let relaunch = NSButton(title: "重启生效", target: self, action: #selector(relaunchTapped))
@@ -707,11 +707,15 @@ final class CUGuidePanel: NSPanel {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    func present(screenRecording: Bool) {
+    func configure(screenRecording: Bool) {
         titleLabel.stringValue = screenRecording ? "屏幕录制授权" : "辅助功能授权"
         detailLabel.stringValue = screenRecording
-            ? "在系统设置中允许 DSH Super Computer Use。\n如没自动出现，把下方应用卡片拖进列表，\n打开开关后点「重启生效」。"
-            : "在系统设置中允许 DSH Super Computer Use。\n如没自动出现，把下方应用卡片拖进列表，\n打开开关后点「重启生效」。"
+            ? "在系统设置中允许 Super Computer Use。\n如没自动出现，把下方应用卡片拖进列表，\n打开开关后点「重启生效」。"
+            : "在系统设置中允许 Super Computer Use。\n如没自动出现，把下方应用卡片拖进列表，\n打开开关后点「重启生效」。"
+    }
+
+    func present(screenRecording: Bool) {
+        configure(screenRecording: screenRecording)
         if let target = NSScreen.main {
             setFrameOrigin(NSPoint(x: target.visibleFrame.midX - 180,
                                    y: target.visibleFrame.minY + 90))

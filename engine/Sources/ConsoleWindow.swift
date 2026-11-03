@@ -92,7 +92,7 @@ final class CUConsoleController: NSObject, NSWindowDelegate {
             contentRect: CUIRect(0, 0, CUI.width, targetHeight),
             styleMask: [.borderless],
             backing: .buffered, defer: false)
-        window.title = "DSH Super Computer Use"
+        window.title = "Super Computer Use"
         window.isReleasedWhenClosed = false
         window.backgroundColor = .clear
         window.isOpaque = false
@@ -197,7 +197,7 @@ final class CUConsoleController: NSObject, NSWindowDelegate {
         }
     }
 
-    func show(page: CUConsolePage, activate: Bool = true) {
+    func show(page: CUConsolePage, activate: Bool = true, offscreen: Bool = false) {
         let window = ensureWindow()
         _ = pageView(for: page)
         footer?.update(version: model.version, paused: model.paused)
@@ -213,7 +213,9 @@ final class CUConsoleController: NSObject, NSWindowDelegate {
             scroll.isHidden = candidate != page
         }
         backButton?.isHidden = page == .overview
-        if activate {
+        if offscreen {
+            return
+        } else if activate {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         } else {
@@ -261,8 +263,10 @@ final class CUConsoleController: NSObject, NSWindowDelegate {
     /// opening System Settings, so the guide can be checked without breaking a
     /// real grant.
     func captureGuideSnapshot(to path: String) -> [String: Any] {
-        showPermissionGuide(screenRecording: false)
-        guard let panel = guide, let view = panel.contentView else {
+        let panel = CUGuidePanel()
+        // Configure the guide without ever ordering its window onto the screen.
+        panel.configure(screenRecording: false)
+        guard let view = panel.contentView else {
             return ["ok": false, "error": "no_guide"]
         }
         panel.displayIfNeeded()
@@ -294,47 +298,30 @@ final class CUConsoleController: NSObject, NSWindowDelegate {
 
     // MARK: snapshots & selftest
 
-    /// Render the visible console window to a PNG. Prefers a real window capture
-    /// (ScreenCaptureKit) so vibrancy is in the image; falls back to a view bitmap.
+    /// Render the unshown console view without ordering a window or taking focus.
     func captureSnapshot(to path: String) -> [String: Any] {
         let window = ensureWindow()
-        window.displayIfNeeded()
-        window.contentView?.layoutSubtreeIfNeeded()
-        let pid = ProcessInfo.processInfo.processIdentifier
-        var windowId: CGWindowID?
-        for _ in 0..<20 {
-            if let info = onScreenWindows().first(where: { $0.pid == pid }) {
-                windowId = info.id
-                break
-            }
-            usleep(100_000)
+        guard !window.isVisible, !window.isKeyWindow, let view = window.contentView else {
+            return ["ok": false, "error": "window_not_offscreen", "path": path]
         }
-        if let windowId, #available(macOS 14.0, *) {
-            do {
-                let shot = try capture(windowId: windowId, screen: false,
-                                       displayIndex: 0, maxDimension: 0, timeout: 12)
-                try shot.png.write(to: URL(fileURLWithPath: path))
-                return ["ok": true, "path": path, "via": "screencapturekit",
-                        "windowId": Int(windowId),
-                        "windowKey": window.isKeyWindow,
-                        "switchOn": overviewPage.switchOnCount,
-                        "switchTotal": overviewPage.agentRowCount,
-                        "width": Int((shot.size.width * shot.scale).rounded()),
-                        "height": Int((shot.size.height * shot.scale).rounded())]
-            } catch {
-                // Fall through to the bitmap path; the caller still gets evidence.
-            }
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            return ["ok": false, "error": "no_bitmap", "path": path]
         }
-        if let view = window.contentView,
-           let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-            view.cacheDisplay(in: view.bounds, to: rep)
-            if let data = rep.representation(using: .png, properties: [:]) {
-                try? data.write(to: URL(fileURLWithPath: path))
-                return ["ok": true, "path": path, "via": "bitmap",
-                        "width": rep.pixelsWide, "height": rep.pixelsHigh]
-            }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else {
+            return ["ok": false, "error": "no_png", "path": path]
         }
-        return ["ok": false, "error": "capture_failed", "path": path]
+        do {
+            try data.write(to: URL(fileURLWithPath: path))
+        } catch {
+            return ["ok": false, "error": "\(error)", "path": path]
+        }
+        return ["ok": true, "path": path, "via": "offscreen-bitmap",
+                "windowVisible": window.isVisible, "windowKey": window.isKeyWindow,
+                "switchOn": overviewPage.switchOnCount,
+                "switchTotal": overviewPage.agentRowCount,
+                "width": rep.pixelsWide, "height": rep.pixelsHigh]
     }
 
     func selftestReport() -> [String: Any] {

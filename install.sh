@@ -26,5 +26,5 @@ else
 fi
 
 echo
-echo "完成。首次安装需在「系统设置 → 隐私与安全性」给「DSH Super Computer Use」"
+echo "完成。首次安装需在「系统设置 → 隐私与安全性」给「Super Computer Use」"
 echo "（磁盘上为 /Applications/Computer Use.app）授予辅助功能与屏幕录制。"
