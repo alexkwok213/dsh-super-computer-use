@@ -92,7 +92,7 @@ final class CUConsoleController: NSObject, NSWindowDelegate {
             contentRect: CUIRect(0, 0, CUI.width, targetHeight),
             styleMask: [.borderless],
             backing: .buffered, defer: false)
-        window.title = "Computer Use"
+        window.title = "DSH Super Computer Use"
         window.isReleasedWhenClosed = false
         window.backgroundColor = .clear
         window.isOpaque = false

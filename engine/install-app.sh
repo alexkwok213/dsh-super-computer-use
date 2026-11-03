@@ -8,7 +8,12 @@ cd "$(dirname "$0")"
 
 ./build.sh >/dev/null
 
-NAME="Computer Use"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# One product version: the plugin package owns it, the app bundle reports it.
+VERSION=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$HERE/../package.json" 2>/dev/null || echo "0.1.0")
+
+NAME="Computer Use"                    # bundle/file name stays stable: TCC + launchd paths
+PRODUCT="DSH Super Computer Use"       # one user-visible product name everywhere
 BUNDLE="build/$NAME.app"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
@@ -21,13 +26,13 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>$NAME</string>
-    <key>CFBundleDisplayName</key><string>$NAME</string>
+    <key>CFBundleName</key><string>$PRODUCT</string>
+    <key>CFBundleDisplayName</key><string>$PRODUCT</string>
     <key>CFBundleIdentifier</key><string>local.cu.app</string>
     <key>CFBundleExecutable</key><string>$NAME</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
@@ -36,7 +41,6 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
 IDENTITY="${CU_SIGN_IDENTITY:-$(cat "$HERE/signing-identity" 2>/dev/null || true)}"
 SIGN_ID="-"
 if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY"; then
@@ -98,5 +102,5 @@ if ! launchctl print "gui/$(id -u)/local.cu.menubar" >/dev/null 2>&1; then
         open -g "$DEST/$NAME.app"
 fi
 echo
-echo "Computer Use is now in $DEST — look for it in Applications/Launchpad."
+echo "$PRODUCT is now in $DEST (bundle file: Computer Use.app) — look for it in Applications/Launchpad."
 echo "It has no Dock icon by design; the item is in the menu bar (● CU)."

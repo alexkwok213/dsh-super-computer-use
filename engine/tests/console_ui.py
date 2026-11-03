@@ -35,7 +35,7 @@ INSTALLED_BIN = "/Applications/Computer Use.app/Contents/MacOS/Computer Use"
 SELFTEST_PAGES = ["overview", "connections", "settings", "diagnostics", "agentSetup"]
 SNAPSHOT_PAGES = ["overview", "connections", "settings", "diagnostics", "agent-setup"]
 CONSOLE_SIZE = (1040, 1560)   # 520x780 @2x
-GUIDE_SIZE = (720, 300)       # 360x150 @2x
+GUIDE_SIZE = (720, 344)       # 360x172 @2x
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
@@ -99,7 +99,8 @@ def wait_frontmost_away_from(binary, timeout=2.0):
 
 def console_windows(binary):
     report = run_json(binary, ["windows"], timeout=20)
-    return [window for window in report.get("windows", []) if window.get("app") == "Computer Use"]
+    return [window for window in report.get("windows", [])
+            if window.get("app") in ("Computer Use", "DSH Super Computer Use")]
 
 
 def running_menu_bar_pids():

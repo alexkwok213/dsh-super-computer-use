@@ -1,4 +1,4 @@
-// ConsoleApp — the menu-bar host for the Computer Use control panel.
+// ConsoleApp — the menu-bar host for the DSH Super Computer Use control panel.
 //
 // Replaces the old tabbed NSTabView console. The menu-bar item, status menu,
 // pause latch, agent config writers, permission prompts and diagnostics stay
@@ -409,7 +409,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             string: "● CU",
             attributes: [.foregroundColor: color,
                          .font: NSFont.systemFont(ofSize: 12, weight: .semibold)])
-        item.button?.toolTip = "CU 服务：\(serviceState)｜辅助功能 \(accessibility ? "✓" : "✗")｜屏幕录制 \(screenRecording ? "✓" : "✗")"
+        item.button?.toolTip = "DSH Super Computer Use｜服务：\(serviceState)｜辅助功能 \(accessibility ? "✓" : "✗")｜屏幕录制 \(screenRecording ? "✓" : "✗")"
     }
 
     private func menuLine(_ text: String, _ target: AnyObject? = nil, _ action: Selector? = nil) -> NSMenuItem {

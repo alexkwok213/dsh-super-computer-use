@@ -19,21 +19,32 @@ DSH  ──加载──▶  本仓库根目录（Cordis 插件，JS）
 | `engine/Sources/` | 原生引擎源码（Swift） |
 | `engine/build.sh` | 编译 `engine/bin/cu` |
 | `engine/install-app.sh` | 打包并安装 `Computer Use.app`，注册 launchd 服务 |
+| `install.sh` | 一条命令装完整个产品（引擎 + 提示接入 DSH 插件） |
+| `assets/icon.png` | 插件与 App 共用的产品图标 |
 | `engine/tests/` | 原生回归测试（光环/抓屏/窗口查询/控制台界面） |
 | `docs/` | 设计与验证记录；`docs/legacy/` 为合并前两个仓库的历史文档；`docs/demo/` 为演示素材 |
 | `docs/ui/` | 控制台界面的对照参考（`reference/`）与改造后截图（`console-after/`） |
 
 ## 安装
 
+一个产品、一个命令：
+
+```bash
+./install.sh          # 引擎（app + launchd 服务）→ 再按提示接入 DSH 插件
+```
+
+分步说明如下。
+
 ### 1. 引擎（必须先装）
 
 ```bash
 cd engine
 ./build.sh            # 产出 engine/bin/cu，用稳定签名身份签名
-./install-app.sh      # 安装 /Applications/Computer Use.app + launchd 服务
+./install-app.sh      # 安装 /Applications/Computer Use.app（显示名 DSH Super Computer Use）+ launchd 服务
 ```
 
-首次安装后需在「系统设置 → 隐私与安全性」给 **Computer Use.app** 授予
+首次安装后需在「系统设置 → 隐私与安全性」给 **DSH Super Computer Use**
+（磁盘路径 `/Applications/Computer Use.app`，这是同一个东西）授予
 **辅助功能** 与 **屏幕录制** 权限。
 
 签名身份**不随仓库提交**。想做到「重编译不丢授权」，在本机建一个文件：
@@ -128,7 +139,19 @@ cu menubar [--open-settings] | --selftest-ui | --snapshot-console <png> | --snap
 
 ## 常见疑问
 
-**启动台/应用程序里的 “Computer Use” 是什么？可以删吗？**
+**为什么 DSH 插件页叫「DSH Super Computer Use」，磁盘上的 app 却叫 `Computer Use.app`？**
+
+这是同一个产品的两层，**显示名已经统一为「DSH Super Computer Use」**：
+
+- 插件页 / 启动台 / 权限列表里看到的名字 = 产品名「DSH Super Computer Use」。
+- `/Applications/Computer Use.app`、bundle id `local.cu.app`、launchd 标签 `local.cu.*`、命令行 `cu`
+  是**内部稳定标识**，故意不跟着改：macOS 的辅助功能/屏幕录制授权绑定这些身份，改名字会丢授权。
+  路径看起来不同，就像 Chrome 的 app 文件叫 `Google Chrome.app` 一样，是内部名。
+
+版本只有一个来源：根目录 `package.json`（当前 `0.2.0`）；插件的版本号和 App 的
+`CFBundleShortVersionString` 都由它生成，所以两边永远一致。
+
+**启动台/应用程序里的 “DSH Super Computer Use” 是什么？可以删吗？**
 
 它就是引擎本体：launchd 后台服务（`local.cu.service`）、菜单栏助手（`local.cu.menubar`）、
 **辅助功能/屏幕录制两项权限的宿主**，以及控制台窗口，全都在这个 app 里。DSH 插件只是适配层，
