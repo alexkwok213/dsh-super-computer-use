@@ -1,0 +1,63 @@
+{
+  "name": "dsh-super-computer-use",
+  "description": "Computer Use for DeepSeek Harness — a complete package: DSH Cordis plugin (12 cu_* tools, floating capsule, target halo, inline preview) plus the native macOS Swift engine (Accessibility, ScreenCaptureKit, CGEvent) it drives.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.mjs",
+  "exports": {
+    ".": {
+      "default": "./lib/index.mjs"
+    },
+    "./core": {
+      "default": "./lib/core.mjs"
+    },
+    "./locale/*": "./locale/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "locale",
+    "skill",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "engine"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "computer-use",
+    "macos",
+    "desktop-automation",
+    "accessibility",
+    "ai-agent",
+    "screen-control"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "dsh": ">=0.1.5-rc.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-attachment": "^0.1.5-rc.3 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.1.5-rc.3 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.3 || ^0.2.0-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-attachment": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "test": "node --test test/core.test.mjs"
+  }
+}

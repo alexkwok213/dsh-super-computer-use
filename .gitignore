@@ -1,0 +1,17 @@
+.DS_Store
+node_modules/
+__pycache__/
+*.py[cod]
+*.log
+*.bak
+*.bak-*
+.env
+.env.*
+*.pem
+*.key
+
+# engine build artefacts (rebuild with engine/build.sh)
+engine/bin/
+engine/build/*.app/
+engine/build/*.icns.tmp
+engine/build/evidence/
