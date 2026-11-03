@@ -1,5 +1,5 @@
 ---
-name: dsh-super-computer-use
+name: super-computer-use
 description: Control macOS desktop applications (Jianying/CapCut, WeChat, Finder, Notes, native clients) using the local CU engine with background AX actions, floating status capsule/halo, and inline target window previews. For web browser tasks, prefer browser-skill (bsk_*) instead.
 ---
 

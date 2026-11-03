@@ -70,7 +70,7 @@ security find-identity -v -p codesigning | awk -F'"' '/Apple Development/{print 
 pnpm add link:/path/to/dsh-super-computer-use
 ```
 
-在目标 DSH profile 中安装依赖，并确保 `package.json` 的 `dsh.profile.bundles` 包含 `dsh-super-computer-use`，然后重启 DSH 并验证插件已加载。可用技能名是 `/computer-use`、`/dsh-computer-use` 和 `/cu`；工具加载成功时会注册 12 个 `cu_*` 工具。
+在目标 DSH profile 中安装依赖，并确保 `package.json` 的 `dsh.profile.bundles` 包含 `dsh-super-computer-use`，然后重启 DSH 并验证插件已加载。技能名是 `/super-computer-use`（`/` 菜单里敲 `/super` 就能排到第一条）；工具加载成功时会注册 12 个 `cu_*` 工具。
 
 ## 能力
 

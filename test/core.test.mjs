@@ -308,7 +308,7 @@ test("DSH plugin apply() registers 12 cu_* tools, skill, inline image preview, a
   apply(mockCtx, { autoDockDsh: false });
   assert.equal(registeredTools.size, 12);
   const skillNames = registeredSkills.map((s) => s.name).sort();
-  assert.deepEqual(skillNames, ["computer-use", "cu", "dsh-computer-use"]);
+  assert.deepEqual(skillNames, ["super-computer-use"]);
 
   const mockExec = {
     signal: new AbortController().signal,
@@ -456,6 +456,27 @@ test("visual session docks DSH by default and restores it on stop", async () => 
   assert.equal(flag(targetRestore, "--w"), "800");
   assert.ok(calls.some((a) => a[0] === "screen-indicator" && a[2] === "off"),
     "stopping the session should clear the indicator");
+  rmSync(stateDir, { recursive: true, force: true });
+});
+
+test("stopVisualSession returns lossless JSON for an auto-session without appName", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "cu-stopjson-"));
+  const manager = new CuSessionManager({ stateDir });
+  manager.resolveBinaryPath = () => "/nonexistent/cu";
+  manager.exec = async (argv) => (argv[0] === "windows"
+    ? { ok: true, windows: [{ windowId: 22, pid: 2, app: "Safari", title: "Safari",
+        bounds: { x: 0, y: 0, width: 800, height: 600 } }] }
+    : { ok: true });
+
+  await manager.startVisualSession({
+    windowId: 22, pid: 2, dockDsh: false, splitScreen: false,
+    halo: false, cursor: false, seconds: 60,
+  });
+  const stopped = await manager.stopVisualSession();
+
+  assert.equal(stopped.previous.app, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(stopped)), stopped,
+    "tool output must survive the host's lossless-JSON validation");
   rmSync(stateDir, { recursive: true, force: true });
 });
 
