@@ -171,6 +171,21 @@ pnpm add link:/path/to/super-computer-use    # 或手改 package.json 里的 lin
 验证：`readlink` 指向仓库，且 `node -e 'import("dsh-super-computer-use")'`（在 profile 目录下）能打印出 `apply`。
 重启后 `cu_status` 应返回 `vision` 与 `lastImage` 字段——没有这两个字段说明跑的还是旧版插件。
 
+**重启后工具还是没起来？先看 `~/.cu/plugin-boot.log`**
+
+宿主在注册每个工具时校验 `parameters` 的 schema DSL，不合法就**抛错**。而注册发生在插件的 `apply()` 里，
+所以一个参数写错会让整个插件的 13 个工具一起消失，界面上没有任何错误提示。日志里会留下：
+
+```
+module evaluated (pid 12345)
+apply() entered
+tool cu_click rejected: parameters.expect.additionalProperties must be explicitly true or false
+```
+
+DSL 里最容易踩的三条：`type: "object"` 必须显式写 `additionalProperties: true|false`；
+每个参数的 `required` 只能写 `true`（不能写 `false` 或数组）；对象的嵌套属性同样要满足这两条。
+`npm test` 里的 `test/tool_schema.mjs` 会把全部 13 个工具按同一套规则验一遍，改 schema 后先跑它。
+
 
 **Super Computer Use 和 DSH Super Computer Use 是什么关系？**
 
