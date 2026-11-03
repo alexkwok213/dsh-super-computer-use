@@ -179,3 +179,46 @@ test('cu_expect without a target explains itself instead of calling the engine',
 test('buildCommandArgv refuses an expect with neither ref nor query', () => {
   assert.throws(() => buildCommandArgv('expect', { pid: 1 }), /ref or query/);
 });
+
+test('a long poll says what it is waiting for, then confirms it', async () => {
+  const activities = [];
+  const tools = new Map();
+  const ctx = {
+    tools: { register: (d) => { tools.set(d.name, d); return () => {}; } },
+    get: () => undefined,
+  };
+  const manager = new CuSessionManager();
+  manager._cursorWrite = () => true;
+  manager.writeActivity = (text) => activities.push(String(text));
+  manager.activeSession = { windowId: 7, pid: 42 };
+  manager.exec = async (argv) => {
+    if (argv[0] === 'expect') return { ok: true, action: 'expect', ref: 'k0.1', ms: 300 };
+    if (argv[0] === 'snapshot') return { ok: true, pid: 42, app: 'P', count: 0, nodes: [] };
+    return { ok: true, action: 'click', x: 1, y: 2 };
+  };
+  registerCuTools({ ctx, manager, config: { autoSession: false, observeBudgetMs: 0 } });
+
+  await tools.get('cu_click').execute({ ref: 'k0.1', expect: { query: '导入完成', timeoutMs: 600 } }, { signal: new AbortController().signal });
+
+  assert.ok(activities.includes('等待 「导入完成」'), JSON.stringify(activities));
+  assert.ok(activities.includes('已确认 「导入完成」'), JSON.stringify(activities));
+});
+
+test('a poll too short to be seen does not repaint the capsule', async () => {
+  const activities = [];
+  const tools = new Map();
+  const ctx = {
+    tools: { register: (d) => { tools.set(d.name, d); return () => {}; } },
+    get: () => undefined,
+  };
+  const manager = new CuSessionManager();
+  manager._cursorWrite = () => true;
+  manager.writeActivity = (text) => activities.push(String(text));
+  manager.activeSession = { windowId: 7, pid: 42 };
+  manager.exec = async (argv) =>
+    argv[0] === 'expect' ? { ok: true, action: 'expect', ms: 5 } : { ok: true, action: 'click', x: 1, y: 2 };
+  registerCuTools({ ctx, manager, config: { autoSession: false, observeBudgetMs: 0 } });
+
+  await tools.get('cu_expect').execute({ ref: 'k0.1', timeoutMs: 100 }, { signal: new AbortController().signal });
+  assert.ok(!activities.some((a) => a.startsWith('等待')), JSON.stringify(activities));
+});

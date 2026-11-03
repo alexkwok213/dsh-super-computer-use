@@ -1932,11 +1932,13 @@ final class CursorLayerView: NSView {
         arrow.opacity = 1
         arrowGlow.opacity = 1
         let next = arrowPath(at: target)
-        if glide {
+        if glide && !reduceMotion {
             let anim = CABasicAnimation(keyPath: "path")
-            anim.fromValue = arrow.path
+            // Continue from what is on screen. Animating from the model value
+            // makes a fast batch look like it jumps backwards on every step.
+            anim.fromValue = arrow.presentation()?.path ?? arrow.path
             anim.toValue = next
-            anim.duration = 0.28
+            anim.duration = Self.glideDuration
             anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
             for shape in [arrow, arrowGlow] { shape.add(anim, forKey: "glide") }
         }
@@ -1945,6 +1947,21 @@ final class CursorLayerView: NSView {
         arrow.path = next
         arrowGlow.path = next
         CATransaction.commit()
+    }
+
+    /// Timings measured against the previous 280 ms glide / 500 ms ripple: a
+    /// click should read as one quick gesture, not a slow tour of the desktop.
+    static let glideDuration: CFTimeInterval = 0.14
+    static let rippleDuration: CFTimeInterval = 0.24
+
+    /// macOS "Reduce Motion", plus an explicit override for reviewers who want a
+    /// static overlay. Re-read on the system notification, not per frame.
+    var reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        || ProcessInfo.processInfo.environment["CU_REDUCE_MOTION"] == "1"
+
+    func refreshMotionPreference() {
+        reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            || ProcessInfo.processInfo.environment["CU_REDUCE_MOTION"] == "1"
     }
 
     /// Show a short action label just below-right of the cursor tip.
@@ -1960,7 +1977,11 @@ final class CursorLayerView: NSView {
         let width = (text as NSString).size(withAttributes: [.font: font]).width + 16
         let height: CGFloat = 20
         // Cursor tip is at p; place the chip below-right so it never covers it.
-        let rect = CGRect(x: p.x + 12, y: p.y - 30, width: width, height: height)
+        // Keep the chip on screen even for a control near an edge, and clear of
+        // the control itself so the next click target is never covered.
+        let clampedX = min(max(p.x + 12, 4), max(4, bounds.width - width - 4))
+        let clampedY = min(max(p.y - 30, 4), max(4, bounds.height - height - 4))
+        let rect = CGRect(x: clampedX, y: clampedY, width: width, height: height)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let oldPath = labelBubble.path
@@ -1974,7 +1995,7 @@ final class CursorLayerView: NSView {
             let grow = CABasicAnimation(keyPath: "opacity")
             grow.fromValue = 0.4
             grow.toValue = 1
-            grow.duration = 0.18
+            grow.duration = reduceMotion ? 0.05 : 0.12
             labelBubble.add(grow, forKey: "fade")
             labelText.add(grow, forKey: "fade")
         }
@@ -1998,7 +2019,7 @@ final class CursorLayerView: NSView {
         fade.fromValue = 0.95
         fade.toValue = 0
         for animation in [expand, fade] {
-            animation.duration = 0.5
+            animation.duration = reduceMotion ? 0.1 : Self.rippleDuration
             animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
         }
         ripple.add(expand, forKey: "expand")
@@ -2399,6 +2420,15 @@ func runCursorOverlay() -> Never {
     let view = CursorLayerView(frame: NSRect(origin: .zero, size: union.size))
     view.overlayOrigin = union.origin
     view.mainScreenTop = mainTop
+    // Follow the system accessibility setting live: a user can turn Reduce
+    // Motion on during a session.
+    var motionObserver: NSObjectProtocol?
+    motionObserver = NSWorkspace.shared.notificationCenter.addObserver(
+        forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+        object: nil, queue: .main) { [weak view] _ in
+        view?.refreshMotionPreference()
+    }
+    _ = motionObserver
     panel.contentView = view
     panel.orderFrontRegardless()
     stayInBackground(previous)
