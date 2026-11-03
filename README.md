@@ -151,6 +151,27 @@ cu menubar [--open-settings] | --selftest-ui | --snapshot-console <png> | --snap
 
 ## 常见疑问
 
+**重启后 `cu_*` 工具全没了？**
+
+先看 plugin 链接指向哪里：
+
+```bash
+readlink ~/.dsh/profiles/<profile>/node_modules/dsh-super-computer-use
+```
+
+DSH 从 profile 的 `package.json` 解析 `dsh-super-computer-use`（`link:<仓库路径>`），重启时按这个路径加载。
+如果它指向一个空目录（例如另一个同名工作区），插件整包解析失败，13 个工具和技能会一起消失，日志里不会留明显错误。
+把链接改回真实仓库后重装再重启：
+
+```bash
+cd ~/.dsh/profiles/<profile>
+pnpm add link:/path/to/super-computer-use    # 或手改 package.json 里的 link: 再 pnpm install
+```
+
+验证：`readlink` 指向仓库，且 `node -e 'import("dsh-super-computer-use")'`（在 profile 目录下）能打印出 `apply`。
+重启后 `cu_status` 应返回 `vision` 与 `lastImage` 字段——没有这两个字段说明跑的还是旧版插件。
+
+
 **Super Computer Use 和 DSH Super Computer Use 是什么关系？**
 
 产品整体品牌为 **Super Computer Use**：它是本机的多 AI 应用引擎与菜单栏控制台；而 **DSH Super Computer Use** 是 DeepSeek Harness 专用的插件适配层，通过本机服务调用引擎。WorkBuddy、Claude 等支持 MCP 的 AI 应用也可以直接接入本体。配置存在并不代表客户端当前会话已连接，需通过工具调用验证。
