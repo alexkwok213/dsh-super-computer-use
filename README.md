@@ -33,7 +33,17 @@ cd engine
 ```
 
 首次安装后需在「系统设置 → 隐私与安全性」给 **Computer Use.app** 授予
-**辅助功能** 与 **屏幕录制** 权限。签名身份固定，重编译不会丢授权。
+**辅助功能** 与 **屏幕录制** 权限。
+
+签名身份**不随仓库提交**。想做到「重编译不丢授权」，在本机建一个文件：
+
+```bash
+security find-identity -v -p codesigning | awk -F'"' '/Apple Development/{print $2; exit}' \
+  > engine/signing-identity
+```
+
+`engine/signing-identity` 已在 `.gitignore` 中。没有该文件时会退回 ad-hoc 签名
+（能跑，但每次重编译 macOS 都会重新询问权限）。也可用 `CU_SIGN_IDENTITY` 覆盖。
 
 校验：
 
@@ -81,7 +91,7 @@ cu halo --window <id> --label "..." | cu capsule --label "..." | cu cursor-overl
 | 窗口截图 · 全屏窗口 | 296 ms | 75 ms |
 | 会话启动 | — | 107 ms |
 
-详见 `docs/2026-11-02-cu-visual-refresh.md`。
+详见 `docs/superpowers/plans/2026-11-02-cu-visual-refresh.md`。
 
 ## 设计要点
 

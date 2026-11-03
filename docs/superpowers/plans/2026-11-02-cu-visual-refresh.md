@@ -22,7 +22,7 @@ Design call: narrow blue/cyan/violet gradient border, restrained breathing glow 
 
 ## Subsequent work from plugin audit
 
-Plugin source is a separate sibling repository, /Users/johnkwok/Downloads/work/dsh-computer-use, linked by the desktop profile. Read-only audit found: startup implicitly resumes and docks; display geometry is hard-coded; optional observation failures erase successful actions; batch timeout checks do not bound the final step; an unbounded fetch blocks the execution queue. Fix with behavioral tests before redesigning the complete persistent overlay channel.
+Plugin source is a separate sibling repository, ~/Downloads/work/dsh-computer-use, linked by the desktop profile. Read-only audit found: startup implicitly resumes and docks; display geometry is hard-coded; optional observation failures erase successful actions; batch timeout checks do not bound the final step; an unbounded fetch blocks the execution queue. Fix with behavioral tests before redesigning the complete persistent overlay channel.
 
 ## Review focus
 

@@ -36,7 +36,8 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-IDENTITY="${CU_SIGN_IDENTITY:-Apple Development: g690322603@outlook.com (8UL3844UU8)}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+IDENTITY="${CU_SIGN_IDENTITY:-$(cat "$HERE/signing-identity" 2>/dev/null || true)}"
 SIGN_ID="-"
 if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY"; then
     SIGN_ID="$IDENTITY"

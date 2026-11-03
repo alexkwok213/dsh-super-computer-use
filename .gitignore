@@ -15,3 +15,6 @@ engine/bin/
 engine/build/*.app/
 engine/build/*.icns.tmp
 engine/build/evidence/
+
+# local code-signing identity (never commit: repo is public)
+engine/signing-identity

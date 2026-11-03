@@ -177,7 +177,7 @@ If target app is not DSH and foreground interaction is required, lower DSH windo
 **Files:**
 - Create: `packages/dsh-mac-computer-use/scripts/bundle-bin.mjs`
 - Modify: `packages/dsh-mac-computer-use/package.json`
-- Integrate: Link into `/Users/johnkwok/.dsh/profiles/desktop`
+- Integrate: Link into `~/.dsh/profiles/desktop`
 
 **Interfaces:**
 - Consumes: Compiled `bin/cu` from root project.
