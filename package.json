@@ -60,7 +60,7 @@
   },
   "scripts": {
     "test": "node --test test/*.mjs",
-    "test:unit": "node --test test/visual_feedback.mjs test/verification.mjs test/preview_budget.mjs test/identity.mjs test/plugin_observation.mjs test/plugin_lifecycle.mjs test/capture_daemon.mjs",
+    "test:unit": "node --test test/visual_feedback.mjs test/verification.mjs test/preview_budget.mjs test/identity.mjs test/capability.mjs test/plugin_observation.mjs test/plugin_lifecycle.mjs test/capture_daemon.mjs",
     "test:desktop": "node --test test/core.test.mjs"
   },
   "icon": "assets/icon.png"

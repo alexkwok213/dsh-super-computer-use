@@ -9,6 +9,11 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
 
 ## Core Principles
 
+0. **Ask `cu_status` Once, Then Stop Repeating Yourself**
+   - `cu_status` reports `vision.supported` (`true`/`false`/`null` with a `reason`) and `lastImage` (what the last capture actually delivered). `false` or `null` means a screenshot is a file path, not evidence: do not reason about pixels, use `cu_find`/`cu_expect`/`cu_snapshot` instead.
+   - While a session is running, `pid` and `windowId` may be omitted: actions, snapshots and screenshots fall back to the session's target. Pass them explicitly only to act on a different window.
+
+
 1. **Background First (Never Steal the User's Pointer or Focus by Default)**
    - `cu_click`, `cu_type`, `cu_key`, and `cu_scroll` default to `foreground: false` (background execution via `AXPress` or PID-targeted events).
    - Only set `foreground: true` when an app's custom canvas or modal sheet explicitly requires foreground delivery, and ask/warn before taking foreground focus.
