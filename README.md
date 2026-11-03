@@ -113,16 +113,23 @@ cu agents | agents-connect [--id …] | agents-disconnect [--id …]
 cu menubar [--open-settings] | --selftest-ui | --snapshot-console <png> | --snapshot-guide <png>
 ```
 
-## 实测性能（同一台 Mac，中位数）
+## 实测性能
 
-| 指标 | 优化前 | 优化后 |
-|---|---|---|
-| 点击 + 观察 + 预览（端到端） | ≈1400 ms | 472 ms |
-| 快照 · 全树 498 节点 | 892 ms | 206 ms |
-| 窗口截图 · 全屏窗口 | 296 ms | 75 ms |
-| 会话启动 | — | 107 ms |
+`npm run bench` 是一套固定任务集的基准（demo 窗口，无需第三方 app），数字直接取自工具返回的
+`timings`，可重复跑、可比较模型和引擎版本。2026-11-03 的基线（每项 12 次）：
 
-详见 `docs/superpowers/plans/2026-11-02-cu-visual-refresh.md`。
+| 任务 | 成功率 | P50 | P95 |
+|---|---|---|---|
+| AX 快照 | 12/12 | 97 ms | 183 ms |
+| ref 点击 + 观察 | 12/12 | 287 ms | 335 ms |
+| 输入 + 显式后置条件 | 12/12 | 487 ms | 573 ms |
+| 批处理 click→wait→key | 12/12 | 524 ms | 690 ms |
+| 窗口截图（冷 daemon） | 12/12 | 346 ms | 398 ms |
+| 结束会话 | 12/12 | 0 ms | 1 ms |
+
+首个视觉反馈为 0 ms：光标提示在调用引擎之前就已发给 overlay。
+完整的「优化前 → 优化后」与复跑方法见 `docs/bench/README.md`，机器可读结果在
+`docs/bench/baseline.json`。
 
 ## 设计要点
 
@@ -130,6 +137,10 @@ cu menubar [--open-settings] | --selftest-ui | --snapshot-console <png> | --snap
 - **常驻抓屏**：`capture-daemon` 复用 `SCShareableContent` 缓存，按目标尺寸直接出图
 - **失败不重放**：动作已派发但观察失败时，保留动作结果并标记 `actionReplaySafe: false`
 - **截断可见**：快照超过节点预算时返回 `truncated: true` + `limit`，可用 `maxNodes` 提高
+- **观察有节律**：动作后的观察在树没变化时按预算重读（默认 300 ms），并报告 `changed` / `waitedMs` / `reads`；"树动了" 只是重新观察的信号，不等于业务成功
+- **后置条件优先**：动作可带 `expect`（或单独调 `cu_expect`），由引擎轮询到条件成立；`cu_batch` 里的 `expect` 步骤就是检查点
+- **目标有身份**：每次观察带 `snapshotId`，ref 点击可带上它，快照过期时返回 `stale_snapshot` 而不是命中同名控件
+- **坐标有出处**：`cu screens` 给真实显示器可用区域，截图带 `capturedAt` / `displayId`，窗口移动后按实时 bounds 计算 origin
 - **用户可中断**：胶囊与光环上的停止键会写入暂停标记，所有变更类动作随即被拦截
 - **会话侧栏布局**：进入操作会话时 DSH 窗口缩到右侧三分之一、目标窗口占左侧，结束时自动还原；首次点击也会缩窗但不动目标窗口（避免点击坐标失效）
 - **录屏有提醒**：会话期间菜单栏显示 `● CU · REC`，同时 macOS 升起系统录屏隐私指示；结束时一起消失
