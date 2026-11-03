@@ -436,6 +436,7 @@ test("visual session docks DSH by default and restores it on stop", async () => 
     return { ok: true };
   };
 
+  manager.warmCaptureDaemon = () => {};
   const started = await manager.startVisualSession({
     windowId: 22, pid: 2, appName: "Safari", dockDsh: true, splitScreen: true,
     halo: false, cursor: false, seconds: 60,
@@ -476,6 +477,7 @@ test("stopVisualSession returns lossless JSON for an auto-session without appNam
         bounds: { x: 0, y: 0, width: 800, height: 600 } }] }
     : { ok: true });
 
+  manager.warmCaptureDaemon = () => {};
   await manager.startVisualSession({
     windowId: 22, pid: 2, dockDsh: false, splitScreen: false,
     halo: false, cursor: false, seconds: 60,
@@ -508,6 +510,7 @@ test("auto-session shrinks DSH without moving the click target", async () => {
     }
     return { ok: true };
   };
+  manager.warmCaptureDaemon = () => {};
   await manager.startVisualSession({
     windowId: 22, pid: 2, appName: "Safari", dockDsh: true, splitScreen: false,
     halo: false, cursor: false, seconds: 60,
@@ -540,6 +543,7 @@ test("dockDsh false leaves both windows untouched", async () => {
     }
     return { ok: true };
   };
+  manager.warmCaptureDaemon = () => {};
   await manager.startVisualSession({
     windowId: 22, pid: 2, appName: "Safari", dockDsh: false, splitScreen: true,
     halo: false, cursor: false, seconds: 60,

@@ -49,6 +49,7 @@ test('dockDsh defaults to true: DSH shrinks right and the target takes the left'
   m.writeActivity = () => {};
   m.clearPauseLatch = () => {};
   m.stopVisualIndicatorsOnly = async () => {};
+  m.warmCaptureDaemon = () => {};
   // dockDsh omitted -> the documented default is to dock: a target window
   // narrower than the display would otherwise sit under the DSH panel.
   await m.startVisualSession({ windowId: 7 });
@@ -92,6 +93,7 @@ test('repeated same-target start is idempotent (no redundant resume/move)', asyn
   m.writeActivity = () => {};
   m.clearPauseLatch = () => {};
   m.stopVisualIndicatorsOnly = async () => {};
+  m.warmCaptureDaemon = () => {};
   await m.startVisualSession({ windowId: 7, dockDsh: true });
   const firstResume = calls.filter((c) => c === 'resume').length;
   calls.length = 0;
@@ -130,6 +132,7 @@ test('the split follows the display that holds the target, including negative or
   m.writeActivity = () => {};
   m.clearPauseLatch = () => {};
   m.stopVisualIndicatorsOnly = async () => {};
+  m.warmCaptureDaemon = () => {};
 
   await m.startVisualSession({ windowId: 7 });
 

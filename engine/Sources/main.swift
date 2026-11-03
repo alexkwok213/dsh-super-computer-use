@@ -2097,6 +2097,36 @@ final class CursorLayerView: NSView {
 final class CaptureDaemon {
     private var cached: SCShareableContent?
 
+    /// ScreenCaptureKit's async capture either works in this process or it does
+    /// not; it is a property of the OS build and the process context, not of the
+    /// moment. Remembering a stall across daemon restarts keeps the very first
+    /// preview of a session at ~300 ms instead of paying the 1.5 s detection
+    /// again. It expires, so an OS update that fixes the path is picked up.
+    private static let stallMarker = NSString(string: "~/.cu/sck-stall.json").expandingTildeInPath
+    private static let osBuild = ProcessInfo.processInfo.operatingSystemVersionString
+
+    private static func stalledRecently() -> Bool {
+        guard let data = FileManager.default.contents(atPath: stallMarker),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["os"] as? String == osBuild,
+              let at = object["at"] as? Double else { return false }
+        return Date().timeIntervalSince1970 - at < 24 * 60 * 60
+    }
+
+    private static func rememberStall(_ stalled: Bool) {
+        if !stalled {
+            try? FileManager.default.removeItem(atPath: stallMarker)
+            return
+        }
+        let object: [String: Any] = ["at": Date().timeIntervalSince1970, "os": osBuild]
+        let directory = (stallMarker as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: directory,
+                                                 withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: object) {
+            try? data.write(to: URL(fileURLWithPath: stallMarker))
+        }
+    }
+
     private func fetchContent() -> SCShareableContent? {
         let sem = DispatchSemaphore(value: 0)
         var fresh: SCShareableContent?
@@ -2139,7 +2169,7 @@ final class CaptureDaemon {
     }
 
     /// True once SCK stopped answering, so later requests skip its timeout.
-    private var sckStalled = false
+    private var sckStalled = CaptureDaemon.stalledRecently()
 
     private func captureViaScreenCaptureKit(windowId: CGWindowID?, screen: Bool,
                                             displayIndex: Int,
@@ -2161,8 +2191,22 @@ final class CaptureDaemon {
                 sem.signal()
             }
             if sem.wait(timeout: .now() + 1.5) == .timedOut {
+                if !sckStalled { Self.rememberStall(true) }
                 sckStalled = true
                 return nil
+            }
+            if box == nil {
+                // It answered, but with nothing: the window was in the list, so
+                // this is a capture failure, not a missing window. Prefer the
+                // CLI path for the rest of this OS build instead of paying the
+                // 1.5 s detection on every new daemon.
+                if !sckStalled { Self.rememberStall(true) }
+                sckStalled = true
+                return nil
+            }
+            if sckStalled {
+                sckStalled = false
+                Self.rememberStall(false)
             }
             return box
         }
