@@ -20,7 +20,7 @@ DSH  ──加载──▶  本仓库根目录（Cordis 插件，JS）
 | `engine/build.sh` | 编译 `engine/bin/cu` |
 | `engine/install-app.sh` | 打包并安装 `Computer Use.app`，注册 launchd 服务 |
 | `engine/tests/` | 原生回归测试（光环/抓屏/窗口查询） |
-| `docs/` | 设计与验证记录 |
+| `docs/` | 设计与验证记录；`docs/legacy/` 为合并前两个仓库的历史文档；`docs/demo/` 为演示素材 |
 
 ## 安装
 

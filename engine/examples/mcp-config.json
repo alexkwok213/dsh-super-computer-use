@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "computer-use": {
+      "command": "python3",
+      "args": [
+        "/Users/johnkwok/Library/Application Support/cu/mcp/server.py"
+      ],
+      "env": {
+        "CU_BIN": "/Applications/Computer Use.app/Contents/MacOS/Computer Use"
+      }
+    }
+  }
+}
