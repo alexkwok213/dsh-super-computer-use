@@ -212,14 +212,52 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int) -> Never {
     Task { try? await stream.startCapture() }
     emit(["ok": true, "preview": "starting"])
 
-    let finish = Timer(timeInterval: Double(max(1, seconds)), repeats: false) { _ in
+    var finished = false
+    let finishOnce: () -> Void = {
+        if finished { return }
+        finished = true
         stream.stopCapture { _ in }
         let first = capture.firstFrameAt.map { Int($0.timeIntervalSince(start) * 1000) }
         emit(["ok": capture.frames > 0, "preview": "shown", "frames": capture.frames,
               "firstFrameMs": first ?? NSNull()])
         exit(capture.frames > 0 ? 0 : 1)
     }
+    let finish = Timer(timeInterval: Double(max(1, seconds)), repeats: false) { _ in finishOnce() }
     RunLoop.main.add(finish, forMode: .common)
+
+    // preview.visible / preview.stop protocol (Spec §6.1): hiding pauses the
+    // stream so a hidden card costs no capture; showing resumes without replaying
+    // backlog; stop closes it. One JSON ack per command.
+    DispatchQueue(label: "cu.preview.stdin").async {
+        while let line = readLine(strippingNewline: true) {
+            guard let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let cmd = obj["cmd"] as? String else { continue }
+            DispatchQueue.main.async {
+                switch cmd {
+                case "visible":
+                    let visible = obj["visible"] as? Bool ?? true
+                    if visible {
+                        panel.orderFrontRegardless()
+                        Task { try? await stream.startCapture() }
+                    } else {
+                        panel.orderOut(nil)
+                        stream.stopCapture { _ in }
+                    }
+                    emit(["ok": true, "cmd": "visible", "visible": visible, "frames": capture.frames])
+                case "status":
+                    let first = capture.firstFrameAt.map { Int($0.timeIntervalSince(start) * 1000) }
+                    emit(["ok": true, "cmd": "status", "frames": capture.frames,
+                          "firstFrameMs": first ?? NSNull()])
+                case "stop":
+                    emit(["ok": true, "cmd": "stop", "frames": capture.frames])
+                    finishOnce()
+                default:
+                    break
+                }
+            }
+        }
+    }
     app.run()
     exit(0)
 }

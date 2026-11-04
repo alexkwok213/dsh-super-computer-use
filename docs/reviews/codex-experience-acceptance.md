@@ -26,7 +26,7 @@
 | Task 4 统一动作事件 + native 流（M1） | **通过** | `test/action_events.mjs` + `action_event_stream.py`；服务端 `/v1/exec` 分块 NDJSON 转发**未做**（JS 已安全回退单 JSON） |
 | Task 5 常驻可打断多屏动画（M1/F6） | **通过（单屏）** | rim 持久 + 默认关、latest-wins 调度、Reduce-Motion 拆除、字素标签、per-display 面板、类迁出；**多显示器真机（混合缩放/上下错位/热插拔）未测** |
 | Task 6 基准纠正 + 呈现测量（F5） | **通过** | `bench/results.mjs` + 真实 demo（click 2/2 计数变化）；`firstVisibleMs` 在本机**未测**（如实标 untested，非 0） |
-| Task 7 原生观看预览（M2 / SCK） | **部分（核心通过）** | 几何/降级契约离屏通过；`PreviewCapture` 真实 SCStream 抓窗口（首帧 68 ms，3 s 44 帧）；**可见预览卡片** `cu preview`（AVSampleBufferDisplayLayer，320pt，`cu windows` 见到标题 `cu preview`，**首帧 73 ms、88 帧**，不可捕获窗口 0.14 s 干净降级）。**helper 内 `preview.start/visible/stop` 协议、120 ms 淡入/切换交叉淡化、隐藏暂停、超时静态帧回退仍待接**。 |
+| Task 7 原生观看预览（M2 / SCK） | **部分（核心通过）** | 几何/降级契约离屏通过；`PreviewCapture` 真实 SCStream 抓窗口（首帧 68 ms）；**可见预览卡片** `cu preview`（AVSampleBufferDisplayLayer，`cu windows` 见 `cu preview`，首帧 73 ms、88 帧）；**visible/stop/status 控制协议**：隐藏暂停抓流实测 **pausedGrowth=0**，恢复后续抓到 35 帧。剩：120 ms 淡入/切换交叉淡化、首帧超时静态帧回退、并入 cursor helper、30 分钟资源**未测**。 |
 | Task 8 持续 AX 身份（M3 / F4） | **未实现** | `AXSessionWorker.swift`、elementToken 身份校验未开发 |
 | Task 9 宿主集成 / 录像 | **部分** | 本记录 + 回归 + build 修复完成；**真实 DSH 大模型端到端任务、30–60 s 演示录像、30 分钟长跑资源**，未测 |
 
