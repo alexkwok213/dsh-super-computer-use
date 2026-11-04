@@ -197,17 +197,21 @@ test("live CU service + isolated cu demo window roundtrip (background click + de
       await new Promise((r) => setTimeout(r, 150));
     }
     assert.ok(demoWin, "cu demo window should appear in window list");
-    await new Promise((r) => setTimeout(r, 300));
-
-    // 1. Snapshot the demo window
-    const snap1Raw = await manager.exec([
-      "snapshot",
-      "--pid",
-      String(demoWin.pid),
-      "--window",
-      String(demoWin.windowId),
-    ]);
-    assert.equal(snap1Raw.ok, true);
+    // A freshly shown window can lag its CGWindow/AX frames by a few ticks;
+    // retry until the engine can address THIS window before asserting.
+    let snap1Raw = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      snap1Raw = await manager.exec([
+        "snapshot",
+        "--pid",
+        String(demoWin.pid),
+        "--window",
+        String(demoWin.windowId),
+      ]);
+      if (snap1Raw?.ok === true) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    assert.equal(snap1Raw.ok, true, JSON.stringify(snap1Raw));
     const snap1 = manager.recordSnapshot(demoWin.pid, demoWin.windowId, snap1Raw, { full: true });
     const btnNode = (snap1Raw.nodes || []).find((n) => n.title === "Demo Button 0");
     assert.ok(btnNode, "Demo Button 0 should exist in snapshot");
@@ -343,6 +347,20 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
       await new Promise((r) => setTimeout(r, 150));
     }
     assert.ok(demoWin, "cu_windows should find cu demo window");
+    // Wait until the engine can address the window before starting a session
+    // whose inline preview would otherwise race the AX/CG frame match.
+    let addressable = false;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const probe = await manager.exec([
+        "snapshot", "--pid", String(demoWin.pid), "--window", String(demoWin.windowId),
+      ]).catch(() => null);
+      if (probe?.ok === true) {
+        addressable = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    assert.equal(addressable, true, "demo window never became addressable");
 
     // Start visual session (spawns capsule + halo + captures Codex-style inline preview)
     const sessionTool = registeredTools.get("cu_session");

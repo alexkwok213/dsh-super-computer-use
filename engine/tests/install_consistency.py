@@ -100,8 +100,9 @@ def main() -> int:
         ["pgrep", "-f", "cu-preview preview-stream"], capture_output=True, text=True
     ).stdout.strip()
 
+    leftover_ok = not helpers
     payload = {
-        "ok": same_build and copies_match and all(signatures.values()) and build_matches and permissions,
+        "ok": same_build and copies_match and all(signatures.values()) and build_matches and permissions and leftover_ok,
         "hashes": hashes,
         "unsignedPayload": unsigned,
         "signatures": signatures,

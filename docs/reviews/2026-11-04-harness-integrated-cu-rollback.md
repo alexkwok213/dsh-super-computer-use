@@ -28,9 +28,12 @@ standalone 签名（identifier `cu`，CDHash `b58d9c70…`）。不要用 app �
 `.rollback/round2-verified-20261104-2329`。
 
 ```bash
+set -euo pipefail
 cd /Users/johnkwok/Downloads/work/super-computer-use
 SNAP="$PWD/.rollback/round2-pre-20261104-2319"
-test -d "$SNAP/Computer Use.app" || { echo "缺少快照，停止"; exit 1; }
+test -d "$SNAP/Computer Use.app" || { echo "缺少 app 快照，停止"; exit 1; }
+test -x "$SNAP/bin/cu" || { echo "缺少 service 快照，停止"; exit 1; }
+test -x "$SNAP/bin/cu-preview" || { echo "缺少 preview 快照，停止"; exit 1; }
 SUPPORT="$HOME/Library/Application Support/cu"
 
 # 1) 先停两个 login agent，避免替换正在执行的二进制
@@ -38,8 +41,8 @@ launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.cu.menubar.pl
 launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.cu.service.plist" 2>/dev/null || true
 sleep 1
 
-# 2) 恢复 app 与 standalone 引擎副本
-rm -rf "/Applications/Computer Use.app"
+# 2) 先把旧 app 移到可恢复位置，再恢复；ditto 失败时不要留下半套安装
+mv "/Applications/Computer Use.app" "/Applications/Computer Use.app.rollback-$(date +%s)"
 ditto "$SNAP/Computer Use.app" "/Applications/Computer Use.app"
 cp "$SNAP/bin/cu" "$SUPPORT/bin/cu"
 cp "$SNAP/bin/cu-preview" "$SUPPORT/bin/cu-preview"

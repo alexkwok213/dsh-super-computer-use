@@ -302,6 +302,12 @@ test("S1: after a UI stop, coordinate click / type / batch produce zero native i
     h.nativeInputs.every((argv) => !INPUT_COMMANDS.has(argv[0])),
     "no input command may reach the native executor after a user stop",
   );
+  // A rejected ordinary action must not re-claim the desk or replace the
+  // stopped card with failed/running.
+  const view = h.registry.snapshot("chat-a");
+  assert.equal(view.state, "cleanup_unknown");
+  assert.equal(view.error, null);
+  assert.equal(view.cuSessionId, cuSessionId);
 });
 
 test("S1: an explicit cu_session start clears the user stop and input works again", async () => {
@@ -349,4 +355,31 @@ test("S1: an explicit cu_session start clears the user stop and input works agai
   });
   assert.notEqual(clicked.ok, false);
   assert.ok(h.nativeInputs.some((argv) => argv[0] === "click"), "the explicit restart must restore input");
+});
+
+test("a stop click after a natural end still latches the user pause", async () => {
+  const h = createToolHarness();
+  await h.call("cu_session", {
+    action: "start", windowId: 7, pid: 42, preview: false, halo: false, capsule: false,
+    cursor: false, dockDsh: false, splitScreen: false,
+  });
+  // Natural/agent end: no user pause.
+  await h.call("cu_session", { action: "stop", pause: false });
+  assert.equal(h.manager.pauseLatched, false);
+  const cuSessionId = h.registry.cuSessionId();
+
+  const again = await h.registry.control({
+    hostSessionId: "chat-a",
+    cuSessionId,
+    command: "stop",
+  });
+  assert.equal(again.ok, true);
+  assert.equal(again.alreadyStopped, true);
+  assert.equal(h.manager.pauseLatched, true, "the Stop click itself must latch even when already stopped");
+  const before = h.nativeInputs.length;
+  await assert.rejects(
+    h.call("cu_click", { x: 12, y: 24, windowId: 7, pid: 42, observe: false, preview: false }),
+    (error) => error?.code === "PAUSED_BY_USER",
+  );
+  assert.equal(h.nativeInputs.length, before);
 });

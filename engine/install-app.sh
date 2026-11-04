@@ -44,7 +44,7 @@ PLIST
 
 IDENTITY="${CU_SIGN_IDENTITY:-$(cat "$HERE/signing-identity" 2>/dev/null || true)}"
 SIGN_ID="-"
-if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY"; then
+if [ -n "$IDENTITY" ] && security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY"; then
     SIGN_ID="$IDENTITY"
 fi
 codesign --force --sign "$SIGN_ID" --identifier local.cu.app "$BUNDLE" >/dev/null
@@ -94,7 +94,7 @@ chmod 755 "$SUPPORT/bin/cu"
 if ! codesign --verify --strict "$SUPPORT/bin/cu" >/dev/null 2>&1; then
     IDENTITY="${CU_SIGN_IDENTITY:-$(cat "$HERE/signing-identity" 2>/dev/null || true)}"
     SIGN_ID="-"
-    if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY"; then
+    if [ -n "$IDENTITY" ] && security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY"; then
         SIGN_ID="$IDENTITY"
     fi
     codesign --force --sign "$SIGN_ID" --identifier local.cu.engine "$SUPPORT/bin/cu" >/dev/null
@@ -103,7 +103,10 @@ fi
 
 # The login agents (service + menu bar) are owned by install-service.sh; the
 # service runs the standalone-signed copy above, the menu bar runs inside the app.
-./install-service.sh >/dev/null 2>&1 || true
+if ! ./install-service.sh; then
+    echo "error: install-service failed; app is installed but the service/preview helper is not verified" >&2
+    exit 1
+fi
 sleep 1
 # install-service.sh has just (re)started both agents through launchd, which
 # starts them without activating anything. Never `open` the app to "start" it:

@@ -238,7 +238,10 @@ window.__ModuleLoader__.load({
         this.store = store;
         this.abort = null;
         this.reader = null;
-        this.canvas = null;
+        // The card and the expanded panel can be mounted at the same time.
+        // One controller may own several canvases; closing one must not detach
+        // the other.
+        this.canvases = new Set();
         this.running = false;
         this.firstFrameTimer = null;
         this.staleTimer = null;
@@ -261,12 +264,13 @@ window.__ModuleLoader__.load({
       }
 
       attach(canvas) {
-        this.canvas = canvas;
-        if (canvas) this.store.notify();
+        if (!canvas) return;
+        this.canvases.add(canvas);
+        this.store.notify();
       }
 
-      detach() {
-        this.canvas = null;
+      detach(canvas) {
+        if (canvas) this.canvases.delete(canvas);
       }
 
       static sameIdentity(a, b) {
@@ -279,13 +283,13 @@ window.__ModuleLoader__.load({
       }
 
       clearCanvas() {
-        const canvas = this.canvas;
-        if (!canvas) return;
-        try {
-          const ctx2d = canvas.getContext("2d", { alpha: false });
-          if (ctx2d?.clearRect) ctx2d.clearRect(0, 0, canvas.width, canvas.height);
-        } catch {
-          // A detached canvas is not a reason to fail the stream.
+        for (const canvas of this.canvases) {
+          try {
+            const ctx2d = canvas.getContext("2d", { alpha: false });
+            if (ctx2d?.clearRect) ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+          } catch {
+            // A detached canvas is not a reason to fail the stream.
+          }
         }
       }
 
@@ -484,12 +488,15 @@ window.__ModuleLoader__.load({
               this.dropped += 1;
               return;
             }
-            const canvas = this.canvas;
-            if (canvas) {
-              const ctx2d = canvas.getContext("2d", { alpha: false });
-              if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
-              if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
-              ctx2d.drawImage(bitmap, 0, 0);
+            for (const canvas of this.canvases) {
+              try {
+                const ctx2d = canvas.getContext("2d", { alpha: false });
+                if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
+                if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
+                ctx2d.drawImage(bitmap, 0, 0);
+              } catch {
+                // One detached canvas must not stop the other from painting.
+              }
             }
             bitmap.close?.();
             this.frames += 1;
@@ -1157,7 +1164,8 @@ window.__ModuleLoader__.load({
         store.preview.attach(canvasRef.current);
         const wants = store.expanded || store.previewWanted;
         if (wants) store.preview.open();
-        return () => store.preview.detach();
+        const attached = canvasRef.current;
+        return () => store.preview.detach(attached);
       }, [store]);
       return h("canvas", {
         ref: canvasRef,
@@ -1379,6 +1387,14 @@ window.__ModuleLoader__.load({
       }, [expandedSession, store]);
 
       useEffect(() => {
+        if (!store) return undefined;
+        // The overlay may be the only mounted view for this store (the card can
+        // be unmounted when the chat changes). Mount it so polling/stop have a
+        // live lifecycle; when the card is also mounted this is a ref count.
+        return store.mount();
+      }, [store]);
+
+      useEffect(() => {
         if (!expandedSession || !store) return undefined;
         // The overlay is the expanded view: keep the store's own flags aligned
         // with it, otherwise a panel reopened after a stop never retries video.
@@ -1396,15 +1412,15 @@ window.__ModuleLoader__.load({
       const target = targetName(snapshot, t);
       return h(
         "div",
-        {
-          className: "scu-root",
-          onClick: (event) => {
-            if (event.target === event.currentTarget) store.closeExpanded();
-          },
-        },
+        { className: "scu-root" },
         h(
           "div",
-          { className: "scu-backdrop" },
+          {
+            className: "scu-backdrop",
+            onClick: (event) => {
+              if (event.target === event.currentTarget) store.closeExpanded();
+            },
+          },
           h(
             "div",
             {

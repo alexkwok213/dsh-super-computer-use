@@ -25,6 +25,10 @@ fi
 # refuses ScreenCaptureKit window capture to a second process at the exact path
 # the launchd service already runs, so ship a byte-identical copy under its own
 # name; resolvePreviewBinary() prefers it.
+if ! codesign --verify --strict "$SERVICE_BIN" >/dev/null 2>&1; then
+    echo "error: $SERVICE_BIN has an invalid standalone signature; not touching the preview helper" >&2
+    exit 1
+fi
 PREVIEW_BIN="$HOME/Library/Application Support/cu/bin/cu-preview"
 if [ ! -x "$PREVIEW_BIN" ] || ! /usr/bin/cmp -s "$SERVICE_BIN" "$PREVIEW_BIN" || \
    ! codesign --verify --strict "$PREVIEW_BIN" >/dev/null 2>&1; then

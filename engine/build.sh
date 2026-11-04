@@ -22,7 +22,7 @@ swiftc -O -swift-version 5 \
 # `cd engine` a second time and abort under `set -e`.
 HERE="$(pwd)"
 IDENTITY="${CU_SIGN_IDENTITY:-$(cat "$HERE/signing-identity" 2>/dev/null || true)}"
-if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY"; then
+if [ -n "$IDENTITY" ] && security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY"; then
   codesign --force --sign "$IDENTITY" bin/cu
 else
   codesign --force --sign - bin/cu

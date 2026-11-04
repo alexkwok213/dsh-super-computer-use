@@ -563,3 +563,43 @@ test("overlay diagnostics are collapsed by default", () => {
   h.expansion.set(null);
   store.stop();
 });
+
+test("card and overlay canvases both paint; detaching one leaves the other", async () => {
+  const streams = [];
+  const fetch = (url) => {
+    if (url.includes("/api/scu/preview")) {
+      const stream = previewStream();
+      streams.push(stream);
+      return Promise.resolve(stream.response);
+    }
+    return new Promise(() => {});
+  };
+  const h = loadClient(fetch);
+  const store = new h.SessionStore("chat-a");
+  const card = canvas();
+  const overlay = canvas();
+  store.preview.attach(card);
+  store.preview.attach(overlay);
+  store.active = true;
+  store.applySnapshot(snapshot({ cuSessionId: "cu-a", targetGeneration: 1 }));
+  store.watching = true;
+  store.previewWanted = true;
+  store.notify();
+  store.preview.open();
+  await h.flush();
+  streams[0].enqueue(frame(meta({ frameId: "one" })));
+  await h.flush();
+  h.images[0].resolve({ width: 2, height: 2, close() {} });
+  await h.flush();
+  assert.equal(card.draws, 1);
+  assert.equal(overlay.draws, 1, "the expanded overlay must also receive the frame");
+
+  store.preview.detach(overlay);
+  streams[0].enqueue(frame(meta({ frameId: "two" })));
+  await h.flush();
+  h.images[h.images.length - 1].resolve({ width: 2, height: 2, close() {} });
+  await h.flush();
+  assert.equal(card.draws, 2, "closing the overlay must not stop the card canvas");
+  assert.equal(overlay.draws, 1);
+  store.stop();
+});

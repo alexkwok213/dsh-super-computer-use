@@ -352,3 +352,46 @@ test("a passed cu_expect is verified; a click with no evidence is unverified, no
   assert.equal(clickResult.ok, true);
   assert.equal(h.registry.snapshot("chat-a").state, "unverified");
 });
+
+test("overlapping manager stops share one cleanup and emit one end notice", async () => {
+  const manager = realManager();
+  const notices = [];
+  manager.onSessionEnd((notice) => notices.push(notice));
+  const first = manager.stopVisualSession();
+  const second = manager.stopVisualSession();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true);
+  assert.equal(manager.activeSession, null);
+  assert.equal(notices.length, 1, "two overlapping stops must not emit two notices");
+});
+
+test("a late notice from the old owner cannot release the new owner", async () => {
+  const manager = realManager();
+  const registry = createCuUiRegistry({ manager });
+  const first = registry.claim("chat-a");
+  const firstTicket = begin(registry, "chat-a", "cu_click");
+  assert.equal(firstTicket.cuSessionId, first.cuSessionId);
+  await registry.control({
+    hostSessionId: "chat-a",
+    cuSessionId: first.cuSessionId,
+    command: "stop",
+    pause: false,
+  });
+  const second = registry.claim("chat-a");
+  assert.notEqual(second.cuSessionId, first.cuSessionId);
+  begin(registry, "chat-a", "cu_type");
+
+  // A late idle/turn-end notice from the retired owner.
+  manager._emitSessionEnd({
+    sessionId: "engine-old",
+    ownerId: first.cuSessionId,
+    reason: "idle_timeout",
+    cleanupState: "unknown",
+  });
+  const view = registry.snapshot("chat-a");
+  assert.equal(view.state, "running");
+  assert.equal(view.cuSessionId, second.cuSessionId);
+  assert.equal(registry.markStopped("chat-a", { cuSessionId: first.cuSessionId }).ignored, "stale_session");
+  assert.equal(registry.snapshot("chat-a").state, "running");
+});
