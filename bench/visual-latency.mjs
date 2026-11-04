@@ -62,7 +62,8 @@ async function main() {
     for (let i = 0; i < 40 && !win; i++) {
       await sleep(150);
       const out = await harness.manager.exec(["windows"]).catch(() => null);
-      win = (out?.windows ?? []).find((w) => w.title === "cu demo window") ?? null;
+      win = (out?.windows ?? []).find((w) => w.title === "cu demo window"
+          && Number(w.windowId) > 0 && w.offStage !== true) ?? null;
     }
     if (!win) throw new Error("demo window never appeared");
     await harness.call("cu_session", {

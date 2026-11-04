@@ -1,0 +1,291 @@
+{
+  "generatedAt": "2026-11-04T04:03:48.972Z",
+  "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+  "macos": "darwin",
+  "node": "v26.0.0",
+  "runs": 2,
+  "summaries": [
+    {
+      "task": "snapshot",
+      "label": "AX snapshot of a native window",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "runs": 2,
+      "success": "2/2",
+      "ok": true,
+      "totalP50": 190,
+      "totalP95": 617,
+      "firstVisibleP50": null,
+      "firstVisibleP95": null,
+      "failures": []
+    },
+    {
+      "task": "click_ref",
+      "label": "click by ref: engine ok AND the counter moved",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "runs": 2,
+      "success": "2/2",
+      "ok": true,
+      "totalP50": 357,
+      "totalP95": 379,
+      "firstVisibleP50": null,
+      "firstVisibleP95": null,
+      "failures": []
+    },
+    {
+      "task": "type_expect",
+      "label": "type a unique token + exact post-condition",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "runs": 2,
+      "success": "2/2",
+      "ok": true,
+      "totalP50": 568,
+      "totalP95": 590,
+      "firstVisibleP50": null,
+      "firstVisibleP95": null,
+      "failures": []
+    },
+    {
+      "task": "batch_flow",
+      "label": "batch: click → key (one roundtrip)",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "runs": 2,
+      "success": "2/2",
+      "ok": true,
+      "totalP50": 445,
+      "totalP95": 490,
+      "firstVisibleP50": null,
+      "firstVisibleP95": null,
+      "failures": []
+    },
+    {
+      "task": "preview",
+      "label": "screenshot preview of the target window",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "runs": 2,
+      "success": "2/2",
+      "ok": true,
+      "totalP50": 304,
+      "totalP95": 328,
+      "firstVisibleP50": null,
+      "firstVisibleP95": null,
+      "failures": []
+    },
+    {
+      "task": "stop",
+      "label": "stop an in-flight task: acceptance + cleanupState",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "runs": 2,
+      "success": "2/2",
+      "ok": true,
+      "totalP50": 0,
+      "totalP95": 0,
+      "firstVisibleP50": null,
+      "firstVisibleP95": null,
+      "failures": []
+    }
+  ],
+  "samples": [
+    {
+      "scenario": "snapshot",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "totalMs": 617
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "nodes": 34
+      },
+      "error": null
+    },
+    {
+      "scenario": "snapshot",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "totalMs": 190
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "nodes": 34
+      },
+      "error": null
+    },
+    {
+      "scenario": "click_ref",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "actionMs": 251,
+        "observeMs": 127,
+        "verifyMs": 0,
+        "totalMs": 379,
+        "firstVisibleMs": null
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "runIndex": 1,
+        "ref": "k0.1",
+        "counterBefore": 0,
+        "counterAfter": 1,
+        "firstVisualCmd": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "click_ref",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "actionMs": 240,
+        "observeMs": 117,
+        "verifyMs": 0,
+        "totalMs": 357,
+        "firstVisibleMs": null
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "runIndex": 2,
+        "ref": "k0.1",
+        "counterBefore": 1,
+        "counterAfter": 2,
+        "firstVisualCmd": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "type_expect",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "actionMs": 354,
+        "observeMs": 116,
+        "verifyMs": 120,
+        "totalMs": 590
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "runIndex": 1,
+        "token": "bench-1-mw1ldnkq-bymfh",
+        "verified": true,
+        "judge": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "type_expect",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "actionMs": 329,
+        "observeMs": 119,
+        "verifyMs": 120,
+        "totalMs": 568
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "runIndex": 2,
+        "token": "bench-2-mw1ldo8h-l3r2d",
+        "verified": true,
+        "judge": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "batch_flow",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "steps": 384,
+        "settleMs": 60,
+        "overheadMs": 1,
+        "verifyMs": 0,
+        "totalMs": 445
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "settleMs": 60
+      },
+      "error": null
+    },
+    {
+      "scenario": "batch_flow",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "steps": 430,
+        "settleMs": 60,
+        "overheadMs": 0,
+        "verifyMs": 0,
+        "totalMs": 490
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "settleMs": 60
+      },
+      "error": null
+    },
+    {
+      "scenario": "preview",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "totalMs": 328,
+        "captureMs": 328
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "via": "daemon",
+        "byteSize": 77128
+      },
+      "error": null
+    },
+    {
+      "scenario": "preview",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "totalMs": 304,
+        "captureMs": 304
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "via": "daemon",
+        "byteSize": 77128
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": "service did not report cleanupState"
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "09a3ca5357cbd63cb529cc3f616206e4658ad78f394031f7cd91ced23c43b4c4",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": "service did not report cleanupState"
+      },
+      "error": null
+    }
+  ]
+}

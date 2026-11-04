@@ -42,3 +42,18 @@
 ## 4. 结论
 
 M0（可信基础：F1/F2/F3/F7/F8）与 M1 的可测试部分（F5/F6 + 统一事件 + 常驻可打断视觉）已落地并有失败→通过证据；M1 的多屏真机验收、M2（观看预览）、M3（真实身份）**尚未完成**。本记录如实反映，不将未测项标为已完成。
+
+## 5. 实测基线（本机 demo，隔离服务）
+
+`node bench/run.mjs --runs 2 --json docs/reviews/codex-experience-bench.json`（时间所限 2 轮/任务，非计划建议的 20 轮；完整原始样本已保存）。构建 `buildId=09a3ca53…`。所有任务均为真实 demo，成功由计数/唯一 token 判定，`firstVisibleMs` 因无屏幕帧分析记为 **untested(null)**，不是 0。
+
+| 任务 | 成功 | P50 ms | P95 ms |
+|---|---|---|---|
+| AX snapshot | 2/2 | 190 | 617 |
+| click by ref（计数必须变化） | 2/2 | 357 | 379 |
+| type 唯一 token + expect | 2/2 | 568 | 590 |
+| batch click→key | 2/2 | 445 | 490 |
+| screenshot preview | 2/2 | 304 | 328 |
+| stop in-flight（受理/收尾） | 2/2 | 0 | 0 |
+
+说明：修了一个 bench 取窗缺陷——它曾把 `windowId 0` 的离屏/应用级条目当成 demo 窗口，导致多数任务 0/2；现要求 `windowId>0 && !offStage`。此为本地执行微基准，不含模型/宿主，不能当业务成功率或端到端模型对比。

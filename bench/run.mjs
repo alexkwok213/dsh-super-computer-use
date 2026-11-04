@@ -77,7 +77,8 @@ async function startDemo(manager) {
   for (let i = 0; i < 40 && !window; i++) {
     await sleep(150);
     const out = await manager.exec(["windows"]).catch(() => null);
-    window = (out?.windows ?? []).find((entry) => entry.title === "cu demo window") ?? null;
+    window = (out?.windows ?? []).find((entry) => entry.title === "cu demo window"
+        && Number(entry.windowId) > 0 && entry.offStage !== true) ?? null;
   }
   if (!window) throw new Error("the demo window never appeared");
   return { demo, window };
