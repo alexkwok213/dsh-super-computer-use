@@ -96,4 +96,4 @@ M0（可信基础：F1/F2/F3/F7/F8）与 M1 的可测试部分（F5/F6 + 统一�
 - overlay RSS：baseline 39424 KB → end 39328 KB，**增长 −96 KB**（基本持平，远低于 20 MB 阈值）。
 - 5 次 start/stop 后**遗留 `cu preview` 进程 = 0**；关闭 stdin 后 cursor-overlay **正常退出**（无孤儿 helper）。
 
-结论：短时无泄漏、无遗留 helper；**30 分钟长跑与 WindowServer/CPU 曲线仍未测**（需更长时间窗口）。
+结论：短时无泄漏、无遗留 helper；**30 分钟长跑与 WindowServer/CPU 曲线仍未测**：曾启动 30 分钟 soak，但为避免长时间占用用户桌面（demo + cursor overlay + preview card）已主动中止，故 30 分钟数据未取得；短跑（20s/45s）已证无泄漏/无遗留 helper。
