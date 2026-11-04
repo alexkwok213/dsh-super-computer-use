@@ -27,7 +27,7 @@
 | Task 5 常驻可打断多屏动画（M1/F6） | **通过（单屏）** | rim 持久 + 默认关、latest-wins 调度、Reduce-Motion 拆除、字素标签、per-display 面板、类迁出；**多显示器真机（混合缩放/上下错位/热插拔）未测** |
 | Task 6 基准纠正 + 呈现测量（F5） | **通过** | `bench/results.mjs` + 真实 demo（click 2/2 计数变化）；`firstVisibleMs` 在本机**未测**（如实标 untested，非 0） |
 | Task 7 原生观看预览（M2 / SCK） | **部分（核心通过）** | 几何/降级契约离屏通过；`PreviewCapture` 真实 SCStream 抓窗口（首帧 68 ms）；**可见预览卡片** `cu preview`（AVSampleBufferDisplayLayer，`cu windows` 见 `cu preview`，首帧 73 ms、88 帧）；**visible/stop/status 控制协议**：隐藏暂停抓流实测 **pausedGrowth=0**，恢复后续抓到 35 帧。剩：120 ms 淡入/切换交叉淡化、首帧超时静态帧回退、并入 cursor helper、30 分钟资源**未测**。 |
-| Task 8 持续 AX 身份（M3 / F4） | **未实现** | `AXSessionWorker.swift`、elementToken 身份校验未开发 |
+| Task 8 持续 AX 身份（M3 / F4） | **部分** | `AXIdentity.swift` 身份契约离屏通过：`elementToken`(opaque)+epoch+pid+window+container 绑定；epoch 重建→`epoch_rebuilt`，换应用/窗口→`stale_target`，同名控件换对象/容器或改标题→`identity_unproven`，仅 snapshotRevision 变化仍 `matched`，路径相同**不**等于身份。**常驻 `AXSessionWorker`（retained AX 对象、通知失效、ref 派发前终检）未接**。 |
 | Task 9 宿主集成 / 录像 | **部分** | 本记录 + 回归 + build 修复完成；**真实 DSH 大模型端到端任务、30–60 s 演示录像、30 分钟长跑资源**，未测 |
 
 ## 3. 明确未测项（不得当作成绩）
