@@ -55,11 +55,21 @@ let clamped = CursorLayerView.clampLabel(long)
 let clampedCount = clamped.count
 let intact = clamped == String(repeating: family, count: 28)
 
+// Per-display geometry: negative-origin left screen and a gap between screens.
+let mainSpec = ScreenSpec(originX: 0, originY: 0, width: 1728, height: 1117)
+let leftSpec = ScreenSpec(originX: -1920, originY: 0, width: 1920, height: 1080)
+let specs = [mainSpec, leftSpec]
+let mTop = mainSpec.originY + mainSpec.height
+let idxLeft = screenIndex(forGlobal: CGPoint(x: -1000, y: 100), screens: specs, mainTop: mTop) ?? -1
+let idxGap = screenIndex(forGlobal: CGPoint(x: 1800, y: 100), screens: specs, mainTop: mTop) ?? -1
+let lp = localPoint(global: CGPoint(x: -1000, y: 100), screen: leftSpec, mainTop: mTop)
+
 let out: [String: Any] = [
   "rimDisabledOpacity": disabled, "rimAfterPulse": afterPulse, "rimAfterActions": afterActions,
   "demoRimOpacity": demoOn, "appliedCursorCount": appliedCount, "droppedCursorCount": droppedCount,
   "animBefore": animBefore, "animAfter": animAfter,
   "clampedCount": clampedCount, "clampedIntact": intact,
+  "idxLeft": idxLeft, "idxGap": idxGap, "leftLocalX": Int(lp.x), "leftLocalY": Int(lp.y),
 ]
 let data = try! JSONSerialization.data(withJSONObject: out, options: [.sortedKeys])
 print(String(decoding: data, as: UTF8.self))
@@ -90,6 +100,10 @@ def main() -> int:
         and payload["animAfter"] == 0
         and payload["clampedCount"] == 28
         and payload["clampedIntact"] is True
+        and payload["idxLeft"] == 1
+        and payload["idxGap"] == -1
+        and payload["leftLocalX"] == 920
+        and payload["leftLocalY"] == 1017
     )
     print(json.dumps({"ok": ok, **payload}, ensure_ascii=False))
     return 0 if ok else 1

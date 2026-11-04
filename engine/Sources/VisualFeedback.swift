@@ -400,3 +400,38 @@ final class CursorLayerView: NSView {
         }
     }
 }
+
+// MARK: - per-display geometry (Task 5)
+
+/// A display in Cocoa coordinates (bottom-left origin). Global input points are
+/// top-left origin anchored on the main display, so the mapping needs `mainTop`.
+struct ScreenSpec {
+    var originX: CGFloat
+    var originY: CGFloat
+    var width: CGFloat
+    var height: CGFloat
+}
+
+/// The display's frame expressed in the global TOP-LEFT coordinate space the
+/// engine reports points in. Screens can have negative origins and vertical
+/// offsets; each is handled independently, never via the union of all screens.
+func screenTopLeftFrame(_ screen: ScreenSpec, mainTop: CGFloat) -> CGRect {
+    CGRect(x: screen.originX,
+           y: mainTop - (screen.originY + screen.height),
+           width: screen.width,
+           height: screen.height)
+}
+
+/// Which display contains a global top-left point, or nil when it falls in a gap
+/// between displays (so a stale cursor is never drawn onto the wrong screen).
+func screenIndex(forGlobal point: CGPoint, screens: [ScreenSpec], mainTop: CGFloat) -> Int? {
+    for (index, screen) in screens.enumerated() {
+        if screenTopLeftFrame(screen, mainTop: mainTop).contains(point) { return index }
+    }
+    return nil
+}
+
+/// Convert a global top-left point into a display's local Cocoa point.
+func localPoint(global: CGPoint, screen: ScreenSpec, mainTop: CGFloat) -> CGPoint {
+    CGPoint(x: global.x - screen.originX, y: mainTop - global.y - screen.originY)
+}

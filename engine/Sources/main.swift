@@ -2173,37 +2173,42 @@ func runCursorOverlay() -> Never {
     let previous = frontmostBeforeLaunch()
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
-    // Cover every display, not just the built-in one: the agent may be driving a
-    // window on a second monitor, whose origin can be negative. The view maps
-    // global top-left points into this union frame below.
+    // One transparent panel PER DISPLAY (Task 5). Each panel maps the global
+    // top-left point space into its own Cocoa frame, so screen gaps, negative
+    // origins and mixed scales never collide the way one union overlay did.
     let screens = NSScreen.screens
-    let union = screens.dropFirst().reduce(screens.first?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)) {
-        $0.union($1.frame)
+    let specs = screens.map {
+        ScreenSpec(originX: $0.frame.origin.x, originY: $0.frame.origin.y,
+                   width: $0.frame.width, height: $0.frame.height)
     }
-    let mainTop = screens.first?.frame.maxY ?? union.maxY
-    let panel = HaloPanel(contentRect: union, styleMask: [.borderless, .nonactivatingPanel],
-                          backing: .buffered, defer: false)
-    panel.isOpaque = false
-    panel.backgroundColor = .clear
-    panel.hasShadow = false
-    panel.level = .statusBar
-    panel.ignoresMouseEvents = true
-    panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications,
-                                .fullScreenAuxiliary, .stationary]
-    let view = CursorLayerView(frame: NSRect(origin: .zero, size: union.size))
-    view.overlayOrigin = union.origin
-    view.mainScreenTop = mainTop
-    // Follow the system accessibility setting live: a user can turn Reduce
-    // Motion on during a session.
+    let mainTop = screens.first?.frame.maxY ?? (specs.first.map { $0.originY + $0.height } ?? 900)
+    var overlays: [(panel: HaloPanel, view: CursorLayerView)] = []
+    for screen in screens {
+        let panel = HaloPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
+                              backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .statusBar
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications,
+                                    .fullScreenAuxiliary, .stationary]
+        let view = CursorLayerView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        view.overlayOrigin = screen.frame.origin
+        view.mainScreenTop = mainTop
+        panel.contentView = view
+        panel.orderFrontRegardless()
+        overlays.append((panel, view))
+    }
+    // Follow the system accessibility setting live on every panel's view.
+    let motionViews = overlays.map { $0.view }
     var motionObserver: NSObjectProtocol?
     motionObserver = NSWorkspace.shared.notificationCenter.addObserver(
         forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
-        object: nil, queue: .main) { [weak view] _ in
-        view?.refreshMotionPreference()
+        object: nil, queue: .main) { _ in
+        for view in motionViews { view.refreshMotionPreference() }
     }
     _ = motionObserver
-    panel.contentView = view
-    panel.orderFrontRegardless()
     stayInBackground(previous)
 
     // Dedicated reader thread: blocking stdin reads must not stall the main run
@@ -2214,26 +2219,37 @@ func runCursorOverlay() -> Never {
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let cmd = object["cmd"] as? String else { continue }
             DispatchQueue.main.async {
-                view.noteActivity()
-                if cmd == "cursor" || cmd == "click" || cmd == "label" { view.pulseAura() }
+                for overlay in overlays { overlay.view.noteActivity() }
+                func targetView(_ point: CGPoint) -> CursorLayerView {
+                    if let index = screenIndex(forGlobal: point, screens: specs, mainTop: mainTop) {
+                        return overlays[index].view
+                    }
+                    return overlays.first!.view
+                }
                 switch cmd {
                 case "cursor":
                     let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
                     let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
+                    let view = targetView(CGPoint(x: x, y: y))
+                    view.pulseAura()
                     view.scheduleCursor(at: CGPoint(x: x, y: y),
                                         glide: object["glide"] as? Bool ?? true)
                 case "click":
                     let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
                     let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
+                    let view = targetView(CGPoint(x: x, y: y))
+                    view.pulseAura()
                     view.clickRipple(at: CGPoint(x: x, y: y))
                 case "label":
                     let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
                     let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
+                    let view = targetView(CGPoint(x: x, y: y))
+                    view.pulseAura()
                     view.showLabel(object["text"] as? String ?? "", at: CGPoint(x: x, y: y))
                 case "aura":
-                    view.setAura(object["visible"] as? Bool ?? true)
+                    for overlay in overlays { overlay.view.setAura(object["visible"] as? Bool ?? true) }
                 case "hide":
-                    view.hide()
+                    for overlay in overlays { overlay.view.hide() }
                 default:
                     break
                 }
@@ -2247,7 +2263,7 @@ func runCursorOverlay() -> Never {
     // after 2 idle hours so the overlay process never lives forever, without
     // pulling the cursor visuals out from under a long-but-alive session.
     let idleTimer = Timer(timeInterval: 30, repeats: true) { _ in
-        if Date().timeIntervalSince(view.lastActivityAt) > 120 * 60 { exit(0) }
+        let lastActivity = overlays.map { $0.view.lastActivityAt }.max() ?? Date(); if Date().timeIntervalSince(lastActivity) > 120 * 60 { exit(0) }
     }
     RunLoop.main.add(idleTimer, forMode: .common)
     emit(["ok": true, "cursor": "ready"])
