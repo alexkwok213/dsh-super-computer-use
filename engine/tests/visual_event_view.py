@@ -13,10 +13,10 @@ import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent  # engine/
-SOURCE = (ROOT / "Sources" / "main.swift").read_text()
+SOURCE = (ROOT / "Sources" / "VisualFeedback.swift").read_text()
 START = "final class CursorLayerView: NSView {"
 END = "// MARK: - capture daemon"
-VIEW = SOURCE[SOURCE.index(START):SOURCE.index(END)]
+VIEW = SOURCE[SOURCE.index(START):]
 
 CHECK = r"""
 let view = CursorLayerView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))

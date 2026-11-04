@@ -4,8 +4,8 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[2]
-source = (root / 'engine/Sources/main.swift').read_text()
-view = source[source.index('final class CursorLayerView: NSView {'):source.index('// MARK: - capture daemon')]
+source = (root / 'engine/Sources/VisualFeedback.swift').read_text()
+view = source[source.index('final class CursorLayerView: NSView {'):]
 check = r'''
 let view = CursorLayerView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
 view.layout()
