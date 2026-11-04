@@ -51,3 +51,39 @@ func samePathImpliesIdentity(_ pathA: String, _ pathB: String) -> Bool {
     _ = pathB
     return false
 }
+
+// MARK: - dispatch resolution (never pick by path)
+
+struct AXCandidate: Equatable {
+    var path: String
+    var epoch: Int
+    var pid: Int
+    var windowId: Int
+    var role: String
+    var title: String
+    var containerToken: String
+    var elementToken: String
+    var enabled: Bool
+    var frameValid: Bool
+}
+
+enum DispatchResolution: Equatable {
+    case dispatch(elementToken: String)
+    case reject(IdentityVerdict)
+}
+
+/// Decide which retained object a token may act on, from a FRESH observation.
+/// Identity is by `elementToken` only: if the token's retained object is absent
+/// or ambiguous we reject, and we NEVER fall back to "the control now at that
+/// path" — that path-match is exactly how two same-named controls got swapped.
+func resolveDispatchTarget(token: AXElementIdentity, candidates: [AXCandidate]) -> DispatchResolution {
+    let matches = candidates.filter { !$0.elementToken.isEmpty && $0.elementToken == token.elementToken }
+    if matches.count != 1 { return .reject(.identityUnproven) }
+    let candidate = matches[0]
+    if candidate.epoch != token.epoch { return .reject(.epochRebuilt) }
+    if candidate.pid != token.pid || candidate.windowId != token.windowId { return .reject(.staleTarget) }
+    if candidate.containerToken != token.containerToken { return .reject(.identityUnproven) }
+    if candidate.role != token.role || candidate.title != token.title { return .reject(.identityUnproven) }
+    if !candidate.enabled || !candidate.frameValid { return .reject(.identityUnproven) }
+    return .dispatch(elementToken: candidate.elementToken)
+}
