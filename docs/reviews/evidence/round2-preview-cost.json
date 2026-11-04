@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "runs": 30,
+  "buildId": null,
+  "buildIdNote": "recorded from /v1/status in docs/reviews/harness-round2-acceptance.md",
+  "off": {
+    "count": 30,
+    "p50": 189.07437500000015,
+    "p95": 254.06883300000027,
+    "failures": []
+  },
+  "on": {
+    "count": 30,
+    "p50": 202.2436660000003,
+    "p95": 284.4371659999997,
+    "failures": [],
+    "firstFrameMs": 341
+  },
+  "p95DeltaPercent": 12,
+  "note": "relative P95 delta; negative means preview-on was faster in this run"
+}

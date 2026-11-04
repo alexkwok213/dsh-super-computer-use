@@ -1,0 +1,504 @@
+{
+  "generatedAt": "2026-11-04T15:32:50.942Z",
+  "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+  "macos": "darwin",
+  "node": "v26.0.0",
+  "runs": 30,
+  "summaries": [
+    {
+      "task": "stop",
+      "label": "stop an in-flight task: acceptance + cleanupState",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "runs": 30,
+      "success": "30/30",
+      "ok": true,
+      "totalP50": 0,
+      "totalP95": 1,
+      "firstVisibleP50": null,
+      "firstVisibleP95": null,
+      "failures": []
+    }
+  ],
+  "samples": [
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 3
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 3,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 1
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 1,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 1
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 1,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 1
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 1,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 1
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 1,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 1
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 1,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 1
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 1,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    },
+    {
+      "scenario": "stop",
+      "buildId": "9815adc15a4c0f35c1671360ed192fcc84fa9eaf9524446920672fc7ac2c1d73",
+      "ok": true,
+      "timings": {
+        "totalMs": 0
+      },
+      "firstVisibleMs": null,
+      "evidence": {
+        "acceptanceMs": 0,
+        "paused": false,
+        "cleanupState": "unknown",
+        "note": null
+      },
+      "error": null
+    }
+  ]
+}

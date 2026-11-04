@@ -1,0 +1,19 @@
+{
+  "switchesCompleted": 20,
+  "switchesNoLeak": true,
+  "hideFirstFrame": true,
+  "hideReleased": true,
+  "reloadFirstFrame": true,
+  "reloadReleased": true,
+  "minimizeFirstFrame": true,
+  "minimizePressed": true,
+  "minimizeFramesContinue": false,
+  "minimizeObserved": {
+    "beforeFrames": 28,
+    "afterFrames": 28
+  },
+  "targetCloseFirstFrame": true,
+  "targetCloseDegraded": true,
+  "targetCloseNoHelper": true,
+  "ok": true
+}

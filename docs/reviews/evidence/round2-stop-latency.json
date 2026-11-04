@@ -1,0 +1,330 @@
+{
+  "report": {
+    "ok": true,
+    "runs": 30,
+    "completed": 30,
+    "failures": [],
+    "gateMs": {
+      "p50": 0.4,
+      "p95": 0.7,
+      "max": 1.6
+    },
+    "acceptMs": {
+      "p50": 15.7,
+      "p95": 32.6,
+      "max": 38.5
+    },
+    "lastInputMs": {
+      "p50": 15.7,
+      "p95": 32.6,
+      "max": 38.5
+    },
+    "zeroMs": {
+      "p50": 15.7,
+      "p95": 32.6,
+      "max": 38.5
+    },
+    "sample": [
+      {
+        "gateMs": 1.6,
+        "acceptMs": 23.2,
+        "lastInputMs": 23.2,
+        "zeroMs": 23.2,
+        "cleanupState": "unknown",
+        "cancelledActions": 1,
+        "lastInputCancelled": "cancelled"
+      },
+      {
+        "gateMs": 0.4,
+        "acceptMs": 17.3,
+        "lastInputMs": 17.3,
+        "zeroMs": 17.3,
+        "cleanupState": "unknown",
+        "cancelledActions": 1,
+        "lastInputCancelled": "cancelled"
+      },
+      {
+        "gateMs": 0.4,
+        "acceptMs": 18.3,
+        "lastInputMs": 18.3,
+        "zeroMs": 18.3,
+        "cleanupState": "unknown",
+        "cancelledActions": 1,
+        "lastInputCancelled": "cancelled"
+      }
+    ],
+    "note": "gateMs is the server-side intent (synchronous gate close); acceptMs is cleanup return; lastInputMs is a real in-flight cu_expect settling; zeroMs is manager session null + registry owner inactive. Client-visible feedback (React paint after the HTTP response) is not measured here."
+  },
+  "samples": [
+    {
+      "gateMs": 1.6,
+      "acceptMs": 23.2,
+      "lastInputMs": 23.2,
+      "zeroMs": 23.2,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 17.3,
+      "lastInputMs": 17.3,
+      "zeroMs": 17.3,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 18.3,
+      "lastInputMs": 18.3,
+      "zeroMs": 18.3,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 6,
+      "lastInputMs": 6,
+      "zeroMs": 6,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.6,
+      "acceptMs": 20.4,
+      "lastInputMs": 20.4,
+      "zeroMs": 20.4,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.5,
+      "acceptMs": 14.9,
+      "lastInputMs": 14.9,
+      "zeroMs": 14.9,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.3,
+      "acceptMs": 5.5,
+      "lastInputMs": 5.5,
+      "zeroMs": 5.5,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 15.7,
+      "lastInputMs": 15.7,
+      "zeroMs": 15.7,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 18.3,
+      "lastInputMs": 18.3,
+      "zeroMs": 18.3,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 5.6,
+      "lastInputMs": 5.6,
+      "zeroMs": 5.6,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.3,
+      "acceptMs": 6.2,
+      "lastInputMs": 6.2,
+      "zeroMs": 6.2,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.7,
+      "acceptMs": 18.3,
+      "lastInputMs": 18.3,
+      "zeroMs": 18.3,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.3,
+      "acceptMs": 19,
+      "lastInputMs": 19,
+      "zeroMs": 19,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.6,
+      "acceptMs": 16.1,
+      "lastInputMs": 16.1,
+      "zeroMs": 16.1,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 6.2,
+      "lastInputMs": 6.2,
+      "zeroMs": 6.2,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.3,
+      "acceptMs": 16.5,
+      "lastInputMs": 16.5,
+      "zeroMs": 16.5,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.3,
+      "acceptMs": 15,
+      "lastInputMs": 15,
+      "zeroMs": 15,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.3,
+      "acceptMs": 12.6,
+      "lastInputMs": 12.6,
+      "zeroMs": 12.6,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 14,
+      "lastInputMs": 14,
+      "zeroMs": 14,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.5,
+      "acceptMs": 11.2,
+      "lastInputMs": 11.2,
+      "zeroMs": 11.2,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 17.4,
+      "lastInputMs": 17.4,
+      "zeroMs": 17.4,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 32.6,
+      "lastInputMs": 32.6,
+      "zeroMs": 32.6,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 4.9,
+      "lastInputMs": 4.9,
+      "zeroMs": 4.9,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.3,
+      "acceptMs": 18.6,
+      "lastInputMs": 18.6,
+      "zeroMs": 18.6,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 15.9,
+      "lastInputMs": 15.9,
+      "zeroMs": 15.9,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 7.4,
+      "lastInputMs": 7.4,
+      "zeroMs": 7.4,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 15.3,
+      "lastInputMs": 15.3,
+      "zeroMs": 15.3,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.4,
+      "acceptMs": 24.1,
+      "lastInputMs": 24.1,
+      "zeroMs": 24.1,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.5,
+      "acceptMs": 9.7,
+      "lastInputMs": 9.7,
+      "zeroMs": 9.7,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    },
+    {
+      "gateMs": 0.6,
+      "acceptMs": 38.5,
+      "lastInputMs": 38.5,
+      "zeroMs": 38.5,
+      "cleanupState": "unknown",
+      "cancelledActions": 1,
+      "lastInputCancelled": "cancelled"
+    }
+  ]
+}

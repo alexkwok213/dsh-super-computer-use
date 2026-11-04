@@ -190,7 +190,9 @@ test("live CU service + isolated cu demo window roundtrip (background click + de
     const deadline = Date.now() + 4000;
     while (Date.now() < deadline) {
       const winList = await manager.exec(["windows"]);
-      demoWin = (winList.windows || []).find((w) => w.title === "cu demo window");
+      demoWin = (winList.windows || []).find(
+        (w) => w.title === "cu demo window" && w.pid === demoProc.pid,
+      );
       if (demoWin) break;
       await new Promise((r) => setTimeout(r, 150));
     }
@@ -312,7 +314,7 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
     },
   };
 
-  apply(mockCtx, { autoDockDsh: false });
+  apply(mockCtx, { autoDockDsh: false, previewBudgetMs: 2000 });
   assert.equal(registeredTools.size, 13);
   const skillNames = registeredSkills.map((s) => s.name).sort();
   assert.deepEqual(skillNames, ["super-computer-use"]);
@@ -334,7 +336,9 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
     const deadline = Date.now() + 4000;
     while (Date.now() < deadline) {
       const winOut = await registeredTools.get("cu_windows").execute({ app: "cu demo" }, mockExec);
-      demoWin = (winOut.windows || []).find((w) => w.title === "cu demo window");
+      demoWin = (winOut.windows || []).find(
+        (w) => w.title === "cu demo window" && w.pid === demoProc.pid,
+      );
       if (demoWin) break;
       await new Promise((r) => setTimeout(r, 150));
     }
@@ -384,13 +388,30 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
     assert.equal(clickVal.observation?.mode, "delta");
     assert.ok(clickVal.observation.changes.some((c) => c.includes("Demo Button 1")));
 
+    // The click's post-action observation replaced the current tree. Refs from
+    // the pre-click snapshot are deliberately stale now; take a fresh
+    // observation before addressing the same control again.
+    const snapAfter = await registeredTools
+      .get("cu_snapshot")
+      .execute({ pid: demoWin.pid, windowId: demoWin.windowId, full: true }, mockExec);
+    assert.equal(snapAfter.ok, true);
+    const btnLineAfter = snapAfter.lines.find((l) => l.includes("Demo Button 1"));
+    assert.ok(btnLineAfter);
+    // This snapshot came from the retained AX worker, which keeps its own tree;
+    // the native batch executor has not observed that tree and would rightly
+    // reject the ref as stale. Use the button's frame for a coordinate batch.
+    const frame = btnLineAfter.match(/@(\d+),(\d+) (\d+)×(\d+)/);
+    assert.ok(frame, btnLineAfter);
+    const cx = Number(frame[1]) + Number(frame[3]) / 2;
+    const cy = Number(frame[2]) + Number(frame[4]) / 2;
+
     // Fast batch execution (click + wait + key) in a single local invocation
     const batchVal = await registeredTools.get("cu_batch").execute(
       {
         pid: demoWin.pid,
         windowId: demoWin.windowId,
         steps: [
-          { action: "click", ref: btnRef, force: true },
+          { action: "click", x: cx, y: cy, force: true },
           { action: "wait", ms: 50 },
           { action: "key", name: "tab" },
         ],
