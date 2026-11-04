@@ -1,0 +1,210 @@
+{
+  "reviewDate": "2026-11-04",
+  "recordedAt": "2026-11-04T06:31:41.426117+00:00",
+  "baselineCommit": "4bfe1ca612f54e8f7633ef835a273fd8d6305573",
+  "branch": "codex-experience",
+  "scope": "Review only. No product fix, merge or reinstall performed.",
+  "concurrentWorkingTreeEdits": {
+    "files": [
+      "lib/core.mjs",
+      "lib/index.mjs"
+    ],
+    "description": "idleStopSeconds and turn/end cleanup-hook edits appeared and continued changing during review; preserved and not reviewed. Logic probes rerun on git archive 4bfe1ca."
+  },
+  "npmTest": {
+    "command": "npm test",
+    "exitCode": 0,
+    "summary": "✔ batch clicks keep their own labels instead of one repeated ref (0.300916ms)\nℹ tests 117\nℹ suites 0\nℹ pass 117\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 3836.549875",
+    "rawLogAtReview": "/private/tmp/scu-third-review-tests-native.log",
+    "note": "Initial sandbox-only run had local socket EPERM. Full rerun with localhost access passed. This does not cover newly reproduced defects."
+  },
+  "logicProbes": {
+    "baseline": "4bfe1ca",
+    "simulated": true,
+    "results": [
+      {
+        "name": "cross_target_token_click",
+        "reproduced": true,
+        "requested": {
+          "pid": 99,
+          "windowId": 9
+        },
+        "workerTarget": {
+          "pid": 42,
+          "windowId": 7
+        },
+        "calls": [
+          [
+            "token-for-A",
+            "AXPress"
+          ]
+        ]
+      },
+      {
+        "name": "token_click_loses_semantics",
+        "reproduced": true,
+        "requested": {
+          "button": "right",
+          "count": 2
+        },
+        "calls": [
+          [
+            "token-for-A",
+            "AXPress"
+          ]
+        ]
+      },
+      {
+        "name": "snapshot_token_observation_race",
+        "reproduced": true,
+        "displayed": [
+          "k0.3.2 AXButton \"Object A\" @10,20 30×20"
+        ],
+        "clickedToken": "token-for-B-now-at-same-path"
+      },
+      {
+        "name": "verify_error_still_types_by_path",
+        "reproduced": true,
+        "commands": [
+          [
+            "setvalue",
+            "--pid",
+            "42",
+            "--ref",
+            "k0.3.2",
+            "--text",
+            "probe",
+            "--window",
+            "7"
+          ]
+        ]
+      },
+      {
+        "name": "queued_exec_survives_stop",
+        "reproduced": true,
+        "sequence": [
+          "dispatch:first",
+          "stop-called",
+          "dispatch:second"
+        ],
+        "outcomes": [
+          {
+            "ok": false,
+            "error": "cancelled",
+            "outcomeUnknown": true,
+            "actionReplaySafe": false,
+            "message": "the action was cancelled; its outcome is unknown"
+          },
+          {
+            "ok": true
+          }
+        ],
+        "paused": false
+      },
+      {
+        "name": "inflight_fallback_blocks_next_action",
+        "reproduced": true,
+        "sequence": [
+          "click",
+          "shot",
+          "key"
+        ],
+        "nextActionMs": 128
+      },
+      {
+        "name": "nonclick_actions_have_no_unified_events",
+        "reproduced": true,
+        "eventCount": 0
+      },
+      {
+        "name": "late_worker_reply_misattributed",
+        "reproduced": true,
+        "requested": "second",
+        "received": {
+          "ok": true,
+          "forRequest": "first"
+        }
+      }
+    ]
+  },
+  "nativePreviewEOF": {
+    "binary": "/Users/johnkwok/Downloads/work/super-computer-use/engine/bin/cu",
+    "binarySHA256": "cbc33d77ffa823d7e6d970af90a6694393cd6bce8b91374f1c9bf0db2b9808c7",
+    "result": {
+      "parentExited": true,
+      "previewChildrenBeforeEOF": [
+        17766
+      ],
+      "previewChildrenSurvivingEOF": [
+        17766
+      ],
+      "orphanReproduced": true
+    },
+    "cleanup": "Exact owned PID was terminated in finally; subsequent ps -p 17766 returned no process. No global pkill."
+  },
+  "installedServiceReadDuringExpect": {
+    "serviceBuildId": "d0325ebc9a9e13c009cdb92939ca6c045e70fdf89f17c16b5513ded871b41500",
+    "binary": "/Users/johnkwok/Library/Application Support/cu/bin/cu",
+    "samples": [
+      {
+        "round": 1,
+        "idleStatusMs": 4,
+        "statusDuringExpectMs": 7,
+        "statusOk": true,
+        "expectResult": {
+          "error": "expect_failed",
+          "elapsedMs": 2483
+        }
+      },
+      {
+        "round": 2,
+        "idleStatusMs": 12,
+        "statusDuringExpectMs": 11,
+        "statusOk": true,
+        "expectResult": {
+          "error": "expect_failed",
+          "elapsedMs": 2541
+        }
+      },
+      {
+        "round": 3,
+        "idleStatusMs": 9,
+        "statusDuringExpectMs": 11,
+        "statusOk": true,
+        "expectResult": {
+          "error": "expect_failed",
+          "elapsedMs": 2546
+        }
+      }
+    ]
+  },
+  "artifactsAtReview": {
+    "repoBinary": "cbc33d77ffa823d7e6d970af90a6694393cd6bce8b91374f1c9bf0db2b9808c7",
+    "installedAppBinary": "d0325ebc9a9e13c009cdb92939ca6c045e70fdf89f17c16b5513ded871b41500",
+    "installedServiceBinary": "d0325ebc9a9e13c009cdb92939ca6c045e70fdf89f17c16b5513ded871b41500",
+    "binaryEquivalenceNote": "Different signatures can change hashes. Source-code equivalence is not established by these hashes alone."
+  },
+  "existingDemoEventLog": {
+    "path": "/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/codex-experience-events.jsonl",
+    "count": 56,
+    "sourceCounts": {
+      "adapter": 56
+    },
+    "kindCounts": {
+      "click": 56
+    },
+    "phaseCounts": {
+      "accepted": 14,
+      "targetReady": 14,
+      "dispatched": 14,
+      "verified": 14
+    }
+  },
+  "notVerified": [
+    "Model + DSH task completion",
+    "Actual first-visible latency",
+    "Multi-display hardware",
+    "30-minute resource stability",
+    "Production bug fixes"
+  ]
+}
