@@ -5762,6 +5762,9 @@ case "movewindow", "move-window":
     if result["ok"] as? Bool == true { markAction() }
     emit(result)
 
+case "preview-probe":
+    runPreviewProbe(windowId: args.int("window").map(CGWindowID.init), seconds: args.int("seconds") ?? 5)
+
 case "demo":
     // A window that belongs to us: used to verify window dragging and zooming
     // without touching anything the user is working in.
