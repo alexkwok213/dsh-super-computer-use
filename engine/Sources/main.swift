@@ -5762,6 +5762,11 @@ case "movewindow", "move-window":
     if result["ok"] as? Bool == true { markAction() }
     emit(result)
 
+case "ax-worker-probe":
+    guard let probePid = args.int("pid"), probePid > 0 else { fail("missing_pid", "pass --pid <pid>") }
+    guard let probeWin = args.int("window"), probeWin > 0 else { fail("missing_window", "pass --window <id>") }
+    runAXWorkerProbe(pid: pid_t(probePid), windowId: CGWindowID(probeWin))
+
 case "preview":
     runPreviewWindow(windowId: args.int("window").map(CGWindowID.init), seconds: args.int("seconds") ?? 8)
 
