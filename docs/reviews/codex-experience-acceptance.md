@@ -97,3 +97,12 @@ M0（可信基础：F1/F2/F3/F7/F8）与 M1 的可测试部分（F5/F6 + 统一�
 - 5 次 start/stop 后**遗留 `cu preview` 进程 = 0**；关闭 stdin 后 cursor-overlay **正常退出**（无孤儿 helper）。
 
 结论：短时无泄漏、无遗留 helper；**30 分钟长跑与 WindowServer/CPU 曲线仍未测**：曾启动 30 分钟 soak，但为避免长时间占用用户桌面（demo + cursor overlay + preview card）已主动中止，故 30 分钟数据未取得；短跑（20s/45s）已证无泄漏/无遗留 helper。
+
+
+## 9. 真实工具层端到端 + 录像（本机，已重装）
+
+重装后（安装 `buildId=d0325ebc…`，Accessibility/Screen Recording 均 true；安装包因换 `--identifier local.cu.app` 重签名，SHA 与仓库 `bin/cu` 不同属正常），通过**真实 `cu_*` 工具层**（非 mock、非模型）驱动真实 demo 应用：
+
+- `node engine/tests/e2e_real_task.mjs`：session start → snapshot → `cu_click(ref)` 带后置条件 → 计数 **0→1 且 verified**（203 ms）→ `cu_type` 唯一 token 且 **verified**（386 ms）→ stop。事件流 4 相 `accepted→targetReady→dispatched→verified`。
+- 录像（区域仅 demo 窗口，不录桌面其它内容）：`docs/reviews/codex-experience-demo.mov`，32 s、14 个动作循环；同一次运行的事件日志 `docs/reviews/codex-experience-events.jsonl`（56 条，14×4 相）**与录像同一构建同一次运行**。
+- 局限：这是**本地执行端到端（真实引擎+真实应用）**，不含大模型/DSH 宿主推理；模型端到端完成率不在本机范围内。
