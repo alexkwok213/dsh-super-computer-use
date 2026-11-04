@@ -57,3 +57,15 @@ M0（可信基础：F1/F2/F3/F7/F8）与 M1 的可测试部分（F5/F6 + 统一�
 | stop in-flight（受理/收尾） | 2/2 | 0 | 0 |
 
 说明：修了一个 bench 取窗缺陷——它曾把 `windowId 0` 的离屏/应用级条目当成 demo 窗口，导致多数任务 0/2；现要求 `windowId>0 && !offStage`。此为本地执行微基准，不含模型/宿主，不能当业务成功率或端到端模型对比。
+
+## 6. 构建身份核对（Task 9）
+
+| 产物 | SHA-256 | 说明 |
+|---|---|---|
+| `engine/bin/cu`（仓库构建） | `598b5923b67b45c599456603974a235bd8b537b3604f76bd877aed261e95d177` | 与本次隔离启动的 service 的 `buildId` **一致**，accessibility/screenRecording 均 true（开发目录路径一致） |
+| `/Applications/Computer Use.app/…/Computer Use` | `51986b7300f3b1512210bd322522c46016a80446d3cb47280e00859f4bf8ae5a` | **落后于仓库构建** |
+| `~/Library/Application Support/cu/bin/cu` | `51986b73…`（同上） | 安装/日常服务指向的旧构建 |
+
+签名：`Identifier=cu`、`TeamIdentifier=65JNWZ4UK4`。
+
+**结论**：仓库构建与「从仓库二进制启动的 service」一致，但**已安装 app / 日常服务仍是旧构建**。本轮所有新能力要在日常使用中生效，须由用户重新安装（`engine/install-app.sh` / `package-plugin.sh`）——这涉及签名身份与 TCC，按计划约束**不自动执行**，仅记录。开发目录验证与安装验证分别记录，不混为一谈。
