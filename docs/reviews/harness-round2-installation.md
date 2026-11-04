@@ -32,6 +32,15 @@
 | 运行 buildId（`/v1/status`） | `b950e361…df8d` | `9815adc1…2c1d73` |
 | 权限 | Accessibility / Screen Recording = true | 仍为 true |
 
+可重复核对（只读，不打印 token）：
+
+```bash
+python3 -B engine/tests/install_consistency.py
+# ok=true: sameUnsignedBuild=true, serviceEqualsPreview=true,
+#          signatures{app,service,preview}=true, buildIdMatchesService=true,
+#          accessibility=true, screenRecording=true, leftoverPreviewHelpers=0
+```
+
 签名：
 
 | 组件 | identifier | CDHash | 签名主体 |
