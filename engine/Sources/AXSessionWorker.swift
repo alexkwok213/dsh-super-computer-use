@@ -24,6 +24,7 @@ final class AXSessionWorker {
     private var retained: [String: AXUIElement] = [:]
     private var records: [String: AXRetainedRecord] = [:]
     private var tokenSeq = 0
+    private(set) var observationSeq = 0
 
     func beginSession(pid: pid_t, windowId: CGWindowID) {
         self.pid = pid
@@ -43,6 +44,7 @@ final class AXSessionWorker {
 
     /// One observation: retain each AX object and mint a stable per-session token.
     func observeAndRetain() -> [AXCandidate] {
+        observationSeq += 1
         let (_, nodes, _) = snapshotNodes(pid: pid, includeZeroSize: true, windowId: windowId)
         var candidates: [AXCandidate] = []
         for node in nodes {
@@ -59,7 +61,8 @@ final class AXSessionWorker {
             candidates.append(AXCandidate(path: node.ref, epoch: epoch, pid: Int(pid),
                                           windowId: Int(windowId), role: node.role, title: node.title,
                                           containerToken: container, elementToken: tokenId,
-                                          enabled: node.enabled, frameValid: node.frame != nil))
+                                          enabled: node.enabled, frameValid: node.frame != nil,
+                                          frame: node.frame))
         }
         return candidates
     }
@@ -84,6 +87,39 @@ final class AXSessionWorker {
         let enabled = (attribute(element, kAXEnabledAttribute) as? Bool) ?? true
         guard enabled else { return ["ok": false, "error": "identity_unproven", "message": "disabled"] }
         return ["ok": true, "verified": true, "token": tokenId]
+    }
+
+    /// R3: validate the retained object AND write its value in ONE command, so
+    /// "proven" and "acted on" are the same object with no path re-resolution.
+    func input(tokenId: String, text: String) -> [String: Any] {
+        guard let element = retained[tokenId], let record = records[tokenId] else {
+            return ["ok": false, "error": "identity_unproven", "message": "no retained object for token"]
+        }
+        guard record.epoch == epoch else { return ["ok": false, "error": "epoch_rebuilt"] }
+        var owner: pid_t = 0
+        AXUIElementGetPid(element, &owner)
+        guard owner == pid else { return ["ok": false, "error": "stale_target"] }
+        let enabled = (attribute(element, kAXEnabledAttribute) as? Bool) ?? true
+        guard enabled else { return ["ok": false, "error": "identity_unproven", "message": "disabled"] }
+        let status = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
+        if status == .success { return ["ok": true, "token": tokenId, "wrote": true] }
+        return ["ok": false, "error": "input_failed", "status": Int(status.rawValue)]
+    }
+
+    /// A request may carry the JS-side binding; refuse if its app/window/epoch
+    /// no longer match this worker's own bound target (R1 defense-in-depth).
+    func bindingMismatch(_ binding: [String: Any]?) -> [String: Any]? {
+        guard let binding else { return nil }
+        if let p = binding["pid"] as? Int, p != Int(pid) {
+            return ["ok": false, "error": "target_mismatch", "reason": "pid"]
+        }
+        if let bwin = binding["windowId"] as? Int, bwin != 0, bwin != Int(windowId) {
+            return ["ok": false, "error": "target_mismatch", "reason": "windowId"]
+        }
+        if let be = binding["epoch"] as? Int, be != epoch {
+            return ["ok": false, "error": "stale_observation", "reason": "epoch"]
+        }
+        return nil
     }
 
     /// Validate the retained object itself, then act. Never looks up by path.
@@ -147,41 +183,74 @@ func runAXWorkerProbe(pid: pid_t, windowId: CGWindowID) -> Never {
 func runAXWorker(pid: pid_t, windowId: CGWindowID) -> Never {
     let worker = AXSessionWorker()
     worker.beginSession(pid: pid, windowId: windowId)
-    emit(["ok": true, "axWorker": "ready", "epoch": worker.epoch])
+
+    func reply(_ obj: [String: Any], requestId: Any?) {
+        var out = obj
+        if let requestId { out["requestId"] = requestId }
+        writeJsonLine(out)
+    }
+
+    reply(["ok": true, "axWorker": "ready", "epoch": worker.epoch], requestId: nil)
+
     while let line = readLine(strippingNewline: true) {
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let cmd = obj["cmd"] as? String else { continue }
+        let requestId = obj["requestId"]
+        let binding = obj["binding"] as? [String: Any]
+
+        // Every command except the handshake is refused when the request's
+        // target binding disagrees with this worker's own bound target.
+        if let mismatch = worker.bindingMismatch(binding) {
+            var m = mismatch; m["cmd"] = cmd; reply(m, requestId: requestId); continue
+        }
+
         switch cmd {
         case "observe":
             let candidates = worker.observeAndRetain()
+            let nodes: [[String: Any]] = candidates.map { c in
+                var row: [String: Any] = ["ref": c.path, "role": c.role, "title": c.title,
+                                          "enabled": c.enabled, "elementToken": c.elementToken]
+                if let f = c.frame {
+                    row["x"] = Double(f.origin.x); row["y"] = Double(f.origin.y)
+                    row["w"] = Double(f.size.width); row["h"] = Double(f.size.height)
+                }
+                return row
+            }
             let rows: [[String: Any]] = candidates.map {
                 ["path": $0.path, "role": $0.role, "title": $0.title,
                  "elementToken": $0.elementToken, "enabled": $0.enabled]
             }
-            emit(["ok": true, "cmd": "observe", "epoch": worker.epoch, "candidates": rows])
+            reply(["ok": true, "cmd": "observe", "epoch": worker.epoch,
+                   "pid": Int(pid), "windowId": Int(windowId),
+                   "observationId": "w\(worker.epoch)-obs\(worker.observationSeq)",
+                   "nodes": nodes, "candidates": rows], requestId: requestId)
         case "click":
             guard let tokenId = obj["elementToken"] as? String else {
-                emit(["ok": false, "cmd": "click", "error": "missing_token"]); continue
+                reply(["ok": false, "cmd": "click", "error": "missing_token"], requestId: requestId); continue
             }
             let action = (obj["action"] as? String) ?? "AXPress"
-            let result = worker.resolveAndDispatch(tokenId: tokenId, action: action)
-            var reply = result
-            reply["cmd"] = "click"
-            emit(reply)
+            var result = worker.resolveAndDispatch(tokenId: tokenId, action: action)
+            result["cmd"] = "click"
+            reply(result, requestId: requestId)
         case "verify":
             guard let vt = obj["elementToken"] as? String else {
-                emit(["ok": false, "cmd": "verify", "error": "missing_token"]); continue
+                reply(["ok": false, "cmd": "verify", "error": "missing_token"], requestId: requestId); continue
             }
-            var vr = worker.verify(vt); vr["cmd"] = "verify"; emit(vr)
+            var vr = worker.verify(vt); vr["cmd"] = "verify"; reply(vr, requestId: requestId)
+        case "input":
+            guard let it = obj["elementToken"] as? String, let text = obj["text"] as? String else {
+                reply(["ok": false, "cmd": "input", "error": "missing_token_or_text"], requestId: requestId); continue
+            }
+            var ir = worker.input(tokenId: it, text: text); ir["cmd"] = "input"; reply(ir, requestId: requestId)
         case "invalidate":
             worker.invalidate()
-            emit(["ok": true, "cmd": "invalidate", "epoch": worker.epoch])
+            reply(["ok": true, "cmd": "invalidate", "epoch": worker.epoch], requestId: requestId)
         case "stop":
-            emit(["ok": true, "cmd": "stop"])
+            reply(["ok": true, "cmd": "stop"], requestId: requestId)
             exit(0)
         default:
-            emit(["ok": false, "error": "unknown_cmd", "cmd": cmd])
+            reply(["ok": false, "error": "unknown_cmd", "cmd": cmd], requestId: requestId)
         }
     }
     exit(0)

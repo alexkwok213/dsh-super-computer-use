@@ -279,7 +279,13 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
     try? stream.addStreamOutput(capture, type: .screen, sampleHandlerQueue: capture.queue)
 
     let start = Date()
-    Task { try? await stream.startCapture() }
+    if ProcessInfo.processInfo.environment["CU_PREVIEW_FORCE_NO_FIRST_FRAME"] == "1" {
+        // Deterministic test hook (not a product behaviour): simulate "target
+        // resolved but the stream never produces a first frame" so the bounded
+        // static fallback below can be exercised on any machine.
+    } else {
+        Task { try? await stream.startCapture() }
+    }
     emit(["ok": true, "preview": "starting"])
 
     var finished = false
@@ -292,6 +298,33 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
               "firstFrameMs": first ?? NSNull()])
         exit(capture.frames > 0 ? 0 : 1)
     }
+    // R7 / Spec §6.3: if the live stream produces no valid first frame within
+    // 1500 ms, cancel it and degrade to ONE static frame with an explicit status
+    // marker. No fake frame loop, no blank card, no silent hang.
+    var degradedToStatic = false
+    let firstFrameBudget = Timer(timeInterval: 1.5, repeats: false) { _ in
+        guard capture.frames == 0, !finished, !degradedToStatic else { return }
+        degradedToStatic = true
+        stream.stopCapture { _ in }
+        Task {
+            do {
+                let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                DispatchQueue.main.async {
+                    card.staticLayer.contents = image
+                    card.displayLayer.isHidden = true
+                    card.fadeIn()
+                }
+                emit(["ok": true, "preview": "degraded", "mode": "static-fallback",
+                      "reason": "first_frame_timeout", "budgetMs": 1500,
+                      "pixelWidth": image.width, "pixelHeight": image.height])
+            } catch {
+                emit(["ok": false, "preview": "degraded", "mode": "static-fallback",
+                      "reason": "first_frame_timeout", "budgetMs": 1500,
+                      "message": String(describing: error)])
+            }
+        }
+    }
+    RunLoop.main.add(firstFrameBudget, forMode: .common)
     let finish = Timer(timeInterval: Double(max(1, seconds)), repeats: false) { _ in finishOnce() }
     RunLoop.main.add(finish, forMode: .common)
 
@@ -325,6 +358,17 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
                 default:
                     break
                 }
+            }
+        }
+        // stdin EOF: when THIS preview was spawned by a cursor helper, its owner
+        // went away (crash / explicit stop / host reload) — end the capture and
+        // close the card so it never outlives the tool that created it (R8).
+        // A standalone `cu preview` CLI has no owner pipe and keeps running.
+        if ProcessInfo.processInfo.environment["CU_PREVIEW_OWNED_BY_HELPER"] == "1" {
+            DispatchQueue.main.async {
+                stream.stopCapture { _ in }
+                panel.orderOut(nil)
+                exit(0)
             }
         }
     }

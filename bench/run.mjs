@@ -49,12 +49,17 @@ function makeHarness() {
   const homeState = join(process.env.HOME ?? tmpdir(), ".cu");
   let serviceUrl;
   let token;
-  try {
-    const config = JSON.parse(readFileSync(join(homeState, "config.json"), "utf8"));
-    serviceUrl = `http://127.0.0.1:${config.port}`;
-    token = config.token;
-  } catch {
-    // Fall back to the manager's discovery.
+  if (process.env.CU_SERVICE_PORT) {
+    serviceUrl = `http://127.0.0.1:${process.env.CU_SERVICE_PORT}`;
+    token = process.env.CU_TOKEN || "";
+  } else {
+    try {
+      const config = JSON.parse(readFileSync(join(homeState, "config.json"), "utf8"));
+      serviceUrl = `http://127.0.0.1:${config.port}`;
+      token = config.token;
+    } catch {
+      // Fall back to the manager's discovery.
+    }
   }
   const stateDir = mkdtempSync(join(tmpdir(), "cu-bench-"));
   const manager = new CuSessionManager({ stateDir, serviceUrl, token });
@@ -74,13 +79,25 @@ function makeHarness() {
 async function startDemo(manager) {
   const demo = spawn(manager.resolveBinaryPath(), ["demo", "--seconds", "900"], { stdio: "ignore" });
   let window = null;
-  for (let i = 0; i < 40 && !window; i++) {
+  // A window-scoped snapshot needs the demo's AX window frame to agree with its
+  // CGWindow frame. A freshly shown window can lag a frame or two, which made the
+  // first snapshot fail with `window_scope_unavailable` (that is an engine
+  // readiness condition, not a benchmark result). Only accept the window once the
+  // engine can actually address THIS process's window, and never borrow a
+  // same-titled window from another instance.
+  for (let i = 0; i < 80; i++) {
     await sleep(150);
     const out = await manager.exec(["windows"]).catch(() => null);
-    window = (out?.windows ?? []).find((entry) => entry.title === "cu demo window"
-        && Number(entry.windowId) > 0 && entry.offStage !== true) ?? null;
+    const candidate = (out?.windows ?? []).find((entry) =>
+      entry.title === "cu demo window" && entry.pid === demo.pid
+      && Number(entry.windowId) > 0 && entry.offStage !== true);
+    if (!candidate) continue;
+    const probe = await manager.exec([
+      "snapshot", "--pid", String(candidate.pid), "--window", String(candidate.windowId),
+    ]).catch(() => null);
+    if (probe?.ok === true && Number(probe.count) > 0) { window = candidate; break; }
   }
-  if (!window) throw new Error("the demo window never appeared");
+  if (!window) throw new Error("the demo window never became addressable");
   return { demo, window };
 }
 
@@ -96,7 +113,8 @@ const TASKS = {
     async run({ call, demoWindow }) {
       const started = Date.now();
       const result = await call("cu_snapshot", { pid: demoWindow.pid, windowId: demoWindow.windowId, full: true });
-      return { ok: result?.ok === true, timings: { totalMs: Date.now() - started }, evidence: { nodes: result?.count ?? 0 } };
+      return { ok: result?.ok === true, timings: { totalMs: Date.now() - started },
+               evidence: { nodes: result?.count ?? 0, error: result?.error ?? null } };
     },
   },
   click_ref: {
@@ -104,7 +122,10 @@ const TASKS = {
     async run({ call, demoWindow, overlay, runIndex }) {
       const before = await call("cu_snapshot", { pid: demoWindow.pid, windowId: demoWindow.windowId, full: true });
       const line = (before.lines ?? []).find((entry) => entry.includes("Demo Button"));
-      if (!line) return { ok: false, timings: null, error: "no Demo Button in the tree" };
+      if (!line) {
+        return { ok: false, timings: null,
+                 error: `no Demo Button in the tree (snapshot ok=${before?.ok} count=${before?.count ?? 0} error=${before?.error ?? "-"})` };
+      }
       const ref = line.split(" ")[0];
       const counterBefore = demoCounter(before);
       const started = Date.now();

@@ -2213,8 +2213,161 @@ func runCursorOverlay() -> Never {
 
     // Preview control folded into this helper: `preview.start/visible/stop` drive
     // a child `cu preview` card, so one session channel owns cursor + preview.
-    var previewProcess: Process?
-    var previewStdin: Pipe?
+    // The child is owned here and torn down on explicit stop OR on this helper's
+    // own EOF/crash path (R8) so it can never be orphaned.
+    final class PreviewChild {
+        var proc: Process?
+        var pipe: Pipe?
+        var windowId: Int = 0
+        func start(windowId: Int) {
+            // A target switch must retire the old card first: the preview always
+            // shows the CURRENT target, never the first one (R7).
+            if proc?.isRunning == true {
+                if windowId == self.windowId { return }
+                stop()
+            }
+            self.windowId = windowId
+            let bin = CommandLine.arguments[0]
+            let p = Pipe()
+            let c = Process()
+            c.executableURL = URL(fileURLWithPath: bin)
+            c.arguments = ["preview", "--window", String(windowId), "--seconds", "900"]
+            c.standardInput = p
+            c.standardOutput = FileHandle.nullDevice
+            c.standardError = FileHandle.nullDevice
+            // Only a helper-owned preview treats stdin EOF as "my owner died".
+            // A standalone `cu preview` CLI must keep running without a pipe.
+            var env = ProcessInfo.processInfo.environment
+            env["CU_PREVIEW_OWNED_BY_HELPER"] = "1"
+            c.environment = env
+            try? c.run()
+            proc = c; pipe = p
+        }
+        func visible(_ on: Bool) {
+            pipe?.fileHandleForWriting.write(Data("{\"cmd\":\"visible\",\"visible\":\(on)}\n".utf8))
+        }
+        func stop() {
+            pipe?.fileHandleForWriting.write(Data("{\"cmd\":\"stop\"}\n".utf8))
+            proc?.terminate()
+            proc = nil; pipe = nil
+        }
+    }
+    let previewChild = PreviewChild()
+
+    // R11: one bounded mailbox in FRONT of the main thread. Cursor / label are
+    // coalesced to their latest value; other transient commands go into a bounded
+    // FIFO (<= visualQueueLimit) and the oldest are dropped under a stdin burst.
+    // A single drain per burst runs on the main thread and emits a RenderAck.
+    final class VisualMailbox {
+        private let lock = NSLock()
+        private var cursor: (x: Double, y: Double, glide: Bool, seq: Int)?
+        private var label: (text: String, x: Double, y: Double, seq: Int)?
+        private var pending: [[String: Any]] = []
+        private var scheduled = false
+        private var seq = 0
+        private(set) var dropped = 0
+        static let limit = 64
+
+        func nextSeq() -> Int { lock.lock(); defer { lock.unlock() }; seq += 1; return seq }
+
+        func enqueue(_ object: [String: Any]) {
+            lock.lock(); defer { lock.unlock() }
+            let command = object["cmd"] as? String ?? ""
+            let s = nextSeqLocked()
+            switch command {
+            case "cursor":
+                cursor = ((object["x"] as? NSNumber)?.doubleValue ?? 0,
+                          (object["y"] as? NSNumber)?.doubleValue ?? 0,
+                          object["glide"] as? Bool ?? true, s)
+            case "label":
+                label = (object["text"] as? String ?? "",
+                         (object["x"] as? NSNumber)?.doubleValue ?? 0,
+                         (object["y"] as? NSNumber)?.doubleValue ?? 0, s)
+            default:
+                var copy = object; copy["__seq"] = s
+                pending.append(copy)
+                if pending.count > VisualMailbox.limit {
+                    pending.removeFirst(pending.count - VisualMailbox.limit)
+                    dropped += 1
+                }
+            }
+        }
+        private func nextSeqLocked() -> Int { seq += 1; return seq }
+
+        func takeScheduled() -> Bool { lock.lock(); defer { lock.unlock() }; if scheduled { return false }; scheduled = true; return true }
+        func unschedule() { lock.lock(); scheduled = false; lock.unlock() }
+        func hasPending() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            return cursor != nil || label != nil || !pending.isEmpty
+        }
+
+        /// Returns cursor, label, the bounded batch, and counts; clears state.
+        func drain() -> (cursor: (Double, Double, Bool, Int)?, label: (String, Double, Double, Int)?, batch: [[String: Any]], maxSeq: Int, dropped: Int) {
+            lock.lock(); defer { lock.unlock() }
+            let c = cursor.map { ($0.x, $0.y, $0.glide, $0.seq) }
+            let l = label.map { ($0.text, $0.x, $0.y, $0.seq) }
+            let b = pending; pending = []
+            cursor = nil; label = nil
+            let maxSeq = max(c?.3 ?? 0, l?.3 ?? 0, b.compactMap { $0["__seq"] as? Int }.max() ?? 0)
+            let d = dropped; dropped = 0
+            return (c, l, b, maxSeq, d)
+        }
+    }
+    let mailbox = VisualMailbox()
+
+    func applyBatch(_ drained: (cursor: (Double, Double, Bool, Int)?, label: (String, Double, Double, Int)?, batch: [[String: Any]], maxSeq: Int, dropped: Int)) {
+        let receivedAtNs = DispatchTime.now().uptimeNanoseconds
+        func targetView(_ point: CGPoint) -> CursorLayerView {
+            if let index = screenIndex(forGlobal: point, screens: specs, mainTop: mainTop) {
+                return overlays[index].view
+            }
+            return overlays.first!.view
+        }
+        for overlay in overlays { overlay.view.noteActivity() }
+        if let c = drained.cursor {
+            let pt = CGPoint(x: c.0, y: c.1)
+            let view = targetView(pt); view.pulseAura(); view.scheduleCursor(at: pt, glide: c.2)
+        }
+        if let l = drained.label {
+            let pt = CGPoint(x: l.1, y: l.2)
+            let view = targetView(pt); view.pulseAura(); view.showLabel(l.0, at: pt)
+        }
+        var applied = 0
+        for object in drained.batch {
+            let cmd = object["cmd"] as? String ?? ""
+            switch cmd {
+            case "click":
+                let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
+                let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
+                let view = targetView(CGPoint(x: x, y: y)); view.pulseAura(); view.clickRipple(at: CGPoint(x: x, y: y))
+                applied += 1
+            case "aura":
+                for overlay in overlays { overlay.view.setAura(object["visible"] as? Bool ?? true) }
+                applied += 1
+            case "hide":
+                for overlay in overlays { overlay.view.hide() }
+                applied += 1
+            default:
+                break
+            }
+        }
+        // Layer transaction is committed for this batch. This is ack of receipt +
+        // commit, NOT a first-visible measurement (R11 / Spec §5.4).
+        let committedAtNs = DispatchTime.now().uptimeNanoseconds
+        writeJsonLine(["kind": "renderAck", "seq": drained.maxSeq, "applied": applied,
+                       "dropped": drained.dropped, "receivedAtNs": String(receivedAtNs),
+                       "committedAtNs": String(committedAtNs), "clockDomain": "native-monotonic"])
+    }
+
+    func scheduleDrain() {
+        if !mailbox.takeScheduled() { return }
+        DispatchQueue.main.async {
+            applyBatch(mailbox.drain())
+            mailbox.unschedule()
+            // Re-arm if more work arrived between drain() and unschedule().
+            if mailbox.hasPending() { scheduleDrain() }
+        }
+    }
 
     // Dedicated reader thread: blocking stdin reads must not stall the main run
     // loop that drives Core Animation.
@@ -2223,72 +2376,25 @@ func runCursorOverlay() -> Never {
             guard let data = line.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let cmd = object["cmd"] as? String else { continue }
-            DispatchQueue.main.async {
-                for overlay in overlays { overlay.view.noteActivity() }
-                func targetView(_ point: CGPoint) -> CursorLayerView {
-                    if let index = screenIndex(forGlobal: point, screens: specs, mainTop: mainTop) {
-                        return overlays[index].view
-                    }
-                    return overlays.first!.view
-                }
-                switch cmd {
-                case "cursor":
-                    let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
-                    let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
-                    let view = targetView(CGPoint(x: x, y: y))
-                    view.pulseAura()
-                    view.scheduleCursor(at: CGPoint(x: x, y: y),
-                                        glide: object["glide"] as? Bool ?? true)
-                case "click":
-                    let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
-                    let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
-                    let view = targetView(CGPoint(x: x, y: y))
-                    view.pulseAura()
-                    view.clickRipple(at: CGPoint(x: x, y: y))
-                case "label":
-                    let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
-                    let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
-                    let view = targetView(CGPoint(x: x, y: y))
-                    view.pulseAura()
-                    view.showLabel(object["text"] as? String ?? "", at: CGPoint(x: x, y: y))
-                case "aura":
-                    for overlay in overlays { overlay.view.setAura(object["visible"] as? Bool ?? true) }
-                case "hide":
-                    for overlay in overlays { overlay.view.hide() }
-                case "preview.start":
-                    let wid = (object["windowId"] as? NSNumber)?.intValue ?? 0
-                    if wid > 0, previewProcess?.isRunning != true {
-                        let pipe = Pipe()
-                        let proc = Process()
-                        proc.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
-                        proc.arguments = ["preview", "--window", String(wid), "--seconds", "900"]
-                        proc.standardInput = pipe
-                        proc.standardOutput = FileHandle.nullDevice
-                        proc.standardError = FileHandle.nullDevice
-                        try? proc.run()
-                        previewProcess = proc
-                        previewStdin = pipe
-                    }
-                case "preview.visible":
-                    let visible = object["visible"] as? Bool ?? true
-                    if let pipe = previewStdin {
-                        let line = "{\"cmd\":\"visible\",\"visible\":\(visible)}\n"
-                        pipe.fileHandleForWriting.write(Data(line.utf8))
-                    }
-                case "preview.stop":
-                    if let pipe = previewStdin {
-                        pipe.fileHandleForWriting.write(Data("{\"cmd\":\"stop\"}\n".utf8))
-                    }
-                    previewProcess?.terminate()
-                    previewProcess = nil
-                    previewStdin = nil
-                default:
-                    break
-                }
+            switch cmd {
+            case "cursor", "label", "click", "aura", "hide":
+                mailbox.enqueue(object)
+                scheduleDrain()
+            case "preview.start":
+                let wid = (object["windowId"] as? NSNumber)?.intValue ?? 0
+                DispatchQueue.main.async { if wid > 0 { previewChild.start(windowId: wid) } }
+            case "preview.visible":
+                let on = object["visible"] as? Bool ?? true
+                DispatchQueue.main.async { previewChild.visible(on) }
+            case "preview.stop":
+                DispatchQueue.main.async { previewChild.stop() }
+            default:
+                break
             }
         }
-        // stdin closed: the plugin went away, so exit and leave no orphan.
-        DispatchQueue.main.async { exit(0) }
+        // stdin closed: the plugin went away. Tear down the preview child we own
+        // (R8) and exit, so no preview/helper process outlives its owner.
+        DispatchQueue.main.async { previewChild.stop(); exit(0) }
     }
 
     // A session can end without a stop call (host reload, crashed client). Exit
@@ -3417,6 +3523,82 @@ func serviceUnregisterChild(_ pid: pid_t) {
     serviceStateLock.lock(); serviceRunningChildren.remove(pid); serviceStateLock.unlock()
 }
 
+func writeAllFD(_ fd: Int32, _ data: Data) {
+    data.withUnsafeBytes { raw in
+        var sent = 0
+        while sent < raw.count {
+            let n = write(fd, raw.baseAddress!.advanced(by: sent), raw.count - sent)
+            if n <= 0 { break }
+            sent += n
+        }
+    }
+}
+
+/// R9: run an engine command in `--events-v1` mode and forward its NDJSON lines
+/// to the HTTP client as they arrive, so native phases (targetReady /
+/// dispatched / verified) reach the adapter BEFORE the final result instead of
+/// being fabricated after the fact.
+func runEngineNDJSON(_ argv: [String], config: ServiceConfig?, noUserPause: Bool,
+                     fd: Int32, eventContext: [String: Any]) -> [String: Any] {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    // The command name must stay first; --events-v1 is a flag of it.
+    var childArgv = argv.isEmpty ? ["--events-v1"] : [argv[0], "--events-v1"] + Array(argv.dropFirst())
+    if let sid = eventContext["sessionId"] as? String, !sid.isEmpty { childArgv += ["--session-id", sid] }
+    if let aid = eventContext["actionId"] as? String, !aid.isEmpty { childArgv += ["--action-id", aid] }
+    process.arguments = childArgv
+    var environment = ProcessInfo.processInfo.environment
+    if noUserPause || config?.pauseOnUserActivity == false { environment["CU_NO_USER_PAUSE"] = "1" }
+    environment["CU_SHOT_CLI"] = "1"
+    process.environment = environment
+    let out = Pipe()
+    process.standardOutput = out
+    process.standardError = Pipe()
+    do { try process.run() } catch {
+        return ["ok": false, "error": "spawn_failed", "message": error.localizedDescription]
+    }
+    serviceRegisterChild(process.processIdentifier)
+    defer { serviceUnregisterChild(process.processIdentifier) }
+
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+    writeAllFD(fd, Data(head.utf8))
+    func sendChunk(_ line: Data) {
+        // The NDJSON newline belongs to the payload, not to the HTTP chunk
+        // framing (the chunk parser strips CRLF, so omitting it glued objects).
+        var content = line
+        content.append(0x0A)
+        var framed = Data("\(String(content.count, radix: 16))\r\n".utf8)
+        framed.append(content)
+        framed.append(Data("\r\n".utf8))
+        writeAllFD(fd, framed)
+    }
+    var buffer = Data()
+    var lastResult: [String: Any]?
+    let handle = out.fileHandleForReading
+    while true {
+        let chunk = handle.availableData
+        if chunk.isEmpty { break }
+        buffer.append(chunk)
+        while let newline = buffer.firstIndex(of: 0x0A) {
+            let lineData = buffer.subdata(in: buffer.startIndex..<newline)
+            buffer.removeSubrange(buffer.startIndex...newline)
+            if lineData.isEmpty { continue }
+            sendChunk(lineData)
+            if let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] {
+                if obj["kind"] as? String == "result", let r = obj["result"] as? [String: Any] {
+                    lastResult = r
+                } else if obj["kind"] == nil {
+                    lastResult = obj
+                }
+            }
+        }
+    }
+    if !buffer.isEmpty { sendChunk(buffer) }
+    writeAllFD(fd, Data("0\r\n\r\n".utf8))
+    process.waitUntilExit()
+    return lastResult ?? ["ok": false, "error": "stream_incomplete"]
+}
+
 func runEngine(_ argv: [String], config: ServiceConfig? = nil, noUserPause: Bool = false) -> [String: Any] {
     var direct: [String: Any]?
     if argv == ["frontmost"] { direct = frontmostPayload() }
@@ -3612,6 +3794,20 @@ func serve(_ config: ServiceConfig) -> Never {
                 }
                 let execStarted = DispatchTime.now().uptimeNanoseconds
                 let noUserPause = request.headers["x-cu-no-user-pause"] == "1"
+                let eventsVersion = object["eventsVersion"] as? Int ?? 0
+                let eventContext = object["eventContext"] as? [String: Any] ?? [:]
+                if eventsVersion == 1 {
+                    serviceBeginAction()
+                    let streamResult = runEngineNDJSON(argv, config: config, noUserPause: noUserPause,
+                                                       fd: clientFD, eventContext: eventContext)
+                    serviceEndAction()
+                    recordHTTPCall(peerPort: peerPort,
+                                   tool: argv.first ?? "exec",
+                                   ms: Int((DispatchTime.now().uptimeNanoseconds - execStarted) / 1_000_000),
+                                   ok: streamResult["ok"] as? Bool ?? false,
+                                   declared: declaredCaller(request.headers))
+                    return
+                }
                 serviceBeginAction()
                 let execResult = runEngine(argv, config: config, noUserPause: noUserPause)
                 serviceEndAction()
@@ -4989,12 +5185,15 @@ case "snapshot":
 
 case "setvalue", "set-value":
     guard let pid = args.int("pid") else { fail("missing_pid", "pass --pid <pid>") }
+    let svTarget = actionTargetDict(pid: pid_t(pid), windowId: args.int("window"))
+    emitActionEventLine("targetReady", kind: "type", target: svTarget)
     guard let ref = args["ref"] else { fail("missing_ref", "pass --ref e12") }
     guard let text = args["text"] else { fail("missing_text", "pass --text \"…\"") }
     let node = resolveNode(pid: pid_t(pid), ref: ref, role: args["role"], title: args["title"],
                            windowId: args.int("window").map(CGWindowID.init))
     let element = node.element
     let status = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFTypeRef)
+    if status == .success { emitActionEventLine("dispatched", kind: "type", target: svTarget) }
     guard status == .success else {
         fail("setvalue_failed", "AXUIElementSetAttributeValue returned \(status.rawValue)",
              ["ref": ref, "role": node.role])
@@ -5508,6 +5707,8 @@ case "move":
     emit(["ok": true, "action": "move", "x": x, "y": y])
 
 case "drag":
+    let dragTarget = args.int("pid").map { actionTargetDict(pid: pid_t($0), windowId: args.int("window")) }
+    if let dragTarget { emitActionEventLine("targetReady", kind: "drag", target: dragTarget) }
     guard let from = args["from"], let to = args["to"] else {
         fail("missing_points", "pass --from x,y --to x,y")
     }
@@ -5523,6 +5724,7 @@ case "drag":
         // without warping the system cursor.
         let pid = backgroundTarget(args, "drag")
         dragToPid(pid, from: dragFrom, to: dragTo, button: args["button"] ?? "left")
+        emitActionEventLine("dispatched", kind: "drag", target: dragTarget)
         markAction()
         emit(["ok": true, "action": "drag", "from": from, "to": to,
               "via": "pid-events", "pid": Int(pid), "frontmostAfter": frontmost().app])
@@ -5541,28 +5743,35 @@ case "drag":
         }
     }
     drag(from: dragFrom, to: dragTo)
+    emitActionEventLine("dispatched", kind: "drag", target: dragTarget)
     emit(["ok": true, "action": "drag", "from": from, "to": to])
 
 case "scroll":
     let dy = args.double("dy") ?? 0
     let dx = args.double("dx") ?? 0
     if dy == 0 && dx == 0 { fail("missing_delta", "pass --dy <n> (negative scrolls down)") }
+    let scrollTarget = args.int("pid").map { actionTargetDict(pid: pid_t($0), windowId: args.int("window")) }
+    if let scrollTarget { emitActionEventLine("targetReady", kind: "scroll", target: scrollTarget) }
     var point: CGPoint?
     if let x = args.double("x"), let y = args.double("y") { point = CGPoint(x: x, y: y) }
     if args.flag("background") {
         let pid = backgroundTarget(args, "scroll")
         scrollToPid(pid, dx: dx, dy: dy)
+        emitActionEventLine("dispatched", kind: "scroll", target: scrollTarget)
         markAction()
         emit(["ok": true, "action": "scroll", "dx": dx, "dy": dy, "via": "pid-events", "pid": Int(pid)])
         exit(0)
     }
     guardedFocus(args, action: "scroll", point: point)
     scroll(dx: dx, dy: dy, at: point)
+    emitActionEventLine("dispatched", kind: "scroll", target: scrollTarget)
     markAction()
     emit(["ok": true, "action": "scroll", "dx": dx, "dy": dy])
 
 case "type":
     guard let text = args["text"] else { fail("missing_text", "pass --text \"…\"") }
+    let typeTargetInfo = args.int("pid").map { actionTargetDict(pid: pid_t($0), windowId: args.int("window")) }
+    if let typeTargetInfo { emitActionEventLine("targetReady", kind: "type", target: typeTargetInfo) }
     if args.flag("background") {
         let tryOffStage = args.flag("try-offstage")
         let pid = backgroundTarget(args, "type", allowOffStage: tryOffStage)
@@ -5584,6 +5793,7 @@ case "type":
         }
         let before = read()
         typeToPid(pid, text)
+        emitActionEventLine("dispatched", kind: "type", target: typeTargetInfo)
         pump(0.08)
         var landed: Bool? = before == nil ? nil : read() != before
         var via = "pid-events"
@@ -5622,6 +5832,7 @@ case "type":
     // both TextEdit and Chromium, so it costs a round trip and usually falls back
     // anyway. Clipboard insertion is what the shipped engine prefers too.
     pasteText(text)
+    emitActionEventLine("dispatched", kind: "type", target: typeTargetInfo)
     var via = "paste"
     var landed: Bool?
     if let pid, let before {
@@ -5648,11 +5859,14 @@ case "type":
 
 case "key":
     guard let name = args["name"] else { fail("missing_key", "pass --name enter") }
+    let keyTargetInfo = args.int("pid").map { actionTargetDict(pid: pid_t($0), windowId: args.int("window")) }
+    if let keyTargetInfo { emitActionEventLine("targetReady", kind: "key", target: keyTargetInfo) }
     if args.flag("background") {
         let tryOffStage = args.flag("try-offstage")
         let pid = backgroundTarget(args, "key", allowOffStage: tryOffStage)
         let before = tryOffStage ? inputFingerprint(pid: pid) : ""
         pressToPid(pid, name: name, modifiers: flags(args["mods"] ?? ""))
+        emitActionEventLine("dispatched", kind: "key", target: keyTargetInfo)
         markAction()
         var payload: [String: Any] = ["ok": true, "action": "key", "name": name,
                                       "mods": args["mods"] ?? "", "via": "pid-events",
@@ -5676,6 +5890,7 @@ case "key":
     }
     guardedFocus(args, action: "key")
     press(name: name, modifiers: flags(args["mods"] ?? ""))
+    emitActionEventLine("dispatched", kind: "key", target: keyTargetInfo)
     markAction()
     emit(["ok": true, "action": "key", "name": name, "mods": args["mods"] ?? ""])
 

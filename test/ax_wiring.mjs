@@ -38,10 +38,11 @@ test('a real session attaches elementTokens to cu_snapshot', async () => {
   const { manager, call } = harness();
   manager._axWorkerAllowed = true;
   manager.startAXWorker = async () => null;
-  manager.axObserve = async () => {
-    manager.axTokens = new Map([['k0.3.2', 'tok-A']]);
-    return { ok: true, epoch: 1, candidates: [{ path: 'k0.3.2', elementToken: 'tok-A' }] };
-  };
+  manager.axObserve = async () => manager._recordAXObservation({
+    ok: true, epoch: 1, pid: 42, windowId: 7, observationId: 'obs-1',
+    nodes: SNAPSHOT.nodes,
+    candidates: [{ path: 'k0.3.2', elementToken: 'tok-A' }],
+  });
   const snap = await call('cu_snapshot', { pid: 42, windowId: 7, full: true });
   assert.equal(snap.ok, true);
   assert.deepEqual(snap.elementTokens, { 'k0.3.2': 'tok-A' });
@@ -81,14 +82,19 @@ test('outside a real session the old one-shot click path is used', async () => {
   assert.equal(calls.includes('click'), true);
 });
 
-test('cu_type verifies a retained token before typing', async () => {
+test('cu_type writes to the retained object in ONE native command (no path re-resolve)', async () => {
   const { manager, calls, call } = harness();
   manager._axWorkerAllowed = true;
+  manager.axWorkerTarget = { pid: 42, windowId: 7 };
   manager.axTokens = new Map([['k0.3.2', 'tok-A']]);
-  manager.axVerify = async (token) => (token === 'tok-A' ? { ok: true, verified: true } : { ok: false, error: 'identity_unproven' });
-  const res = await call('cu_type', { pid: 42, windowId: 7, ref: 'k0.3.2', text: 'hi', mode: 'type', observe: false });
+  const inputCalls = [];
+  manager.axInput = async (...args) => { inputCalls.push(args); return { ok: true, via: 'ax-worker-token' }; };
+  const res = await call('cu_type', { pid: 42, windowId: 7, ref: 'k0.3.2', text: 'hi', mode: 'setvalue', observe: false });
   assert.equal(res.ok, true);
-  assert.equal(calls.includes('type'), true, 'a verified identity proceeds to type via the engine');
+  assert.equal(inputCalls.length, 1);
+  assert.equal(inputCalls[0][0], 'tok-A');
+  assert.equal(calls.includes('type') || calls.includes('setvalue'), false,
+               'must not re-resolve the ref by path when a retained token is used');
 });
 
 test('cu_type does not type when the retained identity is rejected', async () => {

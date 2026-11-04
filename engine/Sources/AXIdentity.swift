@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 // Task 8 (F4): real control identity. A snapshot revision is only an
 // observation number; a path + role + title cannot tell two same-named controls
@@ -67,6 +68,9 @@ struct AXCandidate: Equatable {
     var elementToken: String
     var enabled: Bool
     var frameValid: Bool
+    // Geometry captured in the SAME observation as the token (R2): the display
+    // rows and the dispatched token describe one object, never two traversals.
+    var frame: CGRect? = nil
 }
 
 enum DispatchResolution: Equatable {

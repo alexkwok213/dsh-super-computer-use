@@ -89,6 +89,24 @@ def main() -> int:
         if not (result_of(lines2) or {}).get("ok"):
             raise Failure(f"expect result not ok: {result_of(lines2)}")
 
+        # --- type / key / scroll also emit native phases (R9) ---------------
+        for kind, argv in [
+            ("key", ["key", "--name", "tab", "--pid", str(pid), "--window", str(wid), "--background"]),
+            ("scroll", ["scroll", "--dy", "10", "--pid", str(pid), "--window", str(wid), "--background"]),
+            ("type", ["type", "--text", "probe", "--pid", str(pid), "--window", str(wid), "--background"]),
+        ]:
+            lines_k, raw_k = run_lines(argv + ["--events-v1", "--session-id", "s-test", "--action-id", f"a-{kind}"])
+            ev_k = events_of(lines_k)
+            phases_k = [e["phase"] for e in ev_k]
+            if "targetReady" not in phases_k or "dispatched" not in phases_k:
+                raise Failure(f"{kind} phases missing targetReady/dispatched: {phases_k} / raw={raw_k[-300:]!r}")
+            if {e["kind"] for e in ev_k} != {kind}:
+                raise Failure(f"{kind} emitted wrong kinds: {[e['kind'] for e in ev_k]}")
+            idx_d = next((i for i, l in enumerate(lines_k) if l.get("kind") == "event" and l["event"]["phase"] == "dispatched"), None)
+            idx_r = next((i for i, l in enumerate(lines_k) if l.get("kind") == "result"), None)
+            if idx_d is None or idx_r is None or idx_d >= idx_r:
+                raise Failure(f"{kind} dispatched was not emitted before the final result")
+
         # --- default CLI stays a single bare JSON ---------------------------
         lines3, raw3 = run_lines(["expect", "--pid", str(pid), "--window", str(wid), "--find", "Demo Button", "--timeout", "500"])
         if any(entry.get("kind") in ("event", "result") for entry in lines3):
