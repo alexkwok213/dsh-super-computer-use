@@ -1,5 +1,9 @@
 # Harness 内嵌 Computer Use — 验收报告（2026-11-04）
 
+> **历史报告（基线 `52b244f`）**：以下结果保留为当时的真实观测，不追改。Round-2 修复后的
+> 安装一致性、停止、背压和 idle 策略变化见 §14 与
+> [Round 2 安装与回滚报告](harness-round2-installation.md)。
+
 本报告只记录本轮在**真实安装的 DeepSeek Harness** 上实际观测到的结果。模拟测试、旧报告和独立 demo 不计入通过项。未测的项目明确写“未测”。
 
 ## 1. 结论
@@ -158,3 +162,32 @@ ui stop cleanup cleanup_unknown in 1ms cleanup=unknown
 6. **断线恢复**：没有实现事件重放；页面重新连接后靠下一次 250 ms 轮询拿全量快照，断线期间的状态变化不补发。
 7. **目标退出/最小化/无权限**：UI 有 `no_target`/`window_not_capturable`/`stale` 分支，但本轮没有在流中真实关闭目标窗口验证。
 8. **多显示器与 Retina**：只在本机单显示器 Retina 上验证；坐标/letterbox 规则来自既有 `PreviewController` 单测，未新增多屏实测。
+
+## 14. Round-2 更正（2026-11-04 晚，基线 `52b244f` 之后）
+
+本节只列被后续修复取代的历史描述；上面的原始结果保留不改。详细证据见
+[Round 2 安装与回滚报告](harness-round2-installation.md)与
+[Round 2 复核](2026-11-04-harness-design-review-round2.md)。
+
+| 历史描述 | 现状 |
+|---|---|
+| §2 / §13.5：`/Applications` 内 app 仍是旧引擎，只更新了 service | 已消除。2026-11-04 23:24 重装后 app/service/preview 来自同一未签名构建；app 旧 `9beef70…`、service `b950e36…` 的错位不再存在。运行 buildId `9815adc1…2c1d73`。 |
+| §6：慢读者“丢帧” | 改为**一帧 pending latest**：慢读者恢复时拿到最新帧，内存仍只保留一帧；旧实现保留队列头、丢新帧的描述不再成立。 |
+| §9：观看期间的 owner 轮询 re-arm idle timer | 已移除。观看不是输入活动，不能让只有观看的会话无限占 owner；idle 由 manager 自己的计时器决定，UI 跟随 manager 的结束通知。 |
+| §4：stale revision 返回 409 | STOP/TAKEOVER 不再受普通 revision 约束，只要求 hostSessionId + 当前 cuSessionId；旧 revision 的停止仍会关闸。 |
+| §7/§13.8：点击与 AXPress 双触发靠 250 ms 去抖 | 本轮未完成视觉收敛；该问题归 Task 7，不在本报告声称已修复。 |
+| §8：“+1.9% 是保守上限” | 仍只是 6 次 CLI median，不是 P95；正式 P95 在 Round-2 验收（Task 6）重测。 |
+| §8.1：22 分钟 | 仍是“未满 30 分钟”的部分证据，不延长成 30 分钟结论。 |
+
+### 已验证的安装事实（补充）
+
+- 更新前：app `9beef70a…bf52`、service/helper `b950e361…df8d`、dev `fb7ea83a…0988`；
+  `/v1/status` buildId `b950e361…`。
+- 更新后：app `3fa4c1e1…b9e771`（bundle 签名 `local.cu.app`，CDHash `55be9e43…`）、
+  service/helper `9815adc1…2c1d73`（identifier `cu`，CDHash `b58d9c70…`）；
+  `/v1/status` buildId `9815adc1…`；Accessibility/Screen Recording 均为 true。
+- 修复的真实缺陷：`cu-preview` 作为 app 可执行文件的字节副本时带 bundle 签名，离开 bundle
+  后被 amfid 以 invalid signature 杀掉（exit −9）。安装器改为复制 standalone 签名的
+  `engine/bin/cu`，并在安装时分别 `codesign --verify --strict`。
+- 回滚快照：`.rollback/round2-pre-20261104-2319/`（更新前）与
+  `.rollback/round2-verified-20261104-2329/`（已验证统一构建）。

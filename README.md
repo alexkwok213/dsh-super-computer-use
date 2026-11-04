@@ -81,6 +81,37 @@ security find-identity -v -p codesigning | awk -F'"' '/Apple Development/{print 
 # {"accessibility":true,"screenRecording":true,"ok":true,...}
 ```
 
+安装器现在会保证 app、后台 service 与预览 helper 来自同一份构建，并分别校验签名：
+
+```bash
+APP="/Applications/Computer Use.app"
+SVC="$HOME/Library/Application Support/cu/bin/cu"
+PRE="$HOME/Library/Application Support/cu/bin/cu-preview"
+codesign --verify --strict "$APP"
+codesign --verify --strict "$SVC"
+codesign --verify --strict "$PRE"
+shasum -a 256 "$SVC" "$PRE"      # 两者应相同
+```
+
+不要把 app bundle 内的可执行文件直接复制成 `cu-preview`：bundle 签名的副本离开 app 后会被
+amfid 判为 invalid signature 并杀掉。`install-app.sh` 复制的是 standalone 签名的
+`engine/bin/cu`。运行中的 buildId 应与 service 的 sha256 一致：
+
+```bash
+python3 - <<'PY'
+import json,urllib.request,os
+c=json.load(open(os.path.expanduser('~/.cu/config.json')))
+d=json.load(urllib.request.urlopen(urllib.request.Request(
+  f"http://127.0.0.1:{c['port']}/v1/status",
+  headers={'Authorization':'Bearer '+c['token']}),timeout=5))
+print({k:d.get(k) for k in ('buildId','accessibility','screenRecording')})
+PY
+```
+
+回滚步骤与已验证快照见
+[回滚说明](docs/reviews/2026-11-04-harness-integrated-cu-rollback.md)；本轮安装证据见
+[安装报告](docs/reviews/harness-round2-installation.md)。
+
 ### 2. 插件
 
 ```bash
@@ -215,7 +246,7 @@ DSL 里最容易踩的三条：`type: "object"` 必须显式写 `additionalPrope
 **启动台/应用程序里的 “Computer Use” 是什么？可以删吗？**
 
 它就是引擎本体：launchd 后台服务（`local.cu.service`）、菜单栏助手（`local.cu.menubar`）、
-**辅助功能/屏幕录制权限宿主**及控制台。DSH 插件通过 `127.0.0.1:47777` 和引擎协作；其他 AI 客户端可通过 MCP 使用。删除 app 会影响控制台及引用该路径的组件；后台服务还可能使用独立的硬链接，因此不要把删除应用当作完整卸载。
+**辅助功能/屏幕录制权限宿主**及控制台。DSH 插件通过 `127.0.0.1:47777` 和引擎协作；其他 AI 客户端可通过 MCP 使用。删除 app 会影响控制台及引用该路径的组件；后台服务和预览 helper 还使用 `~/Library/Application Support/cu/bin/` 下的独立副本，因此不要把删除应用当作完整卸载。
 
 它故意不占 Dock（`LSUIElement`），但启动台会列出 `/Applications` 下的应用，所以能看到它：
 

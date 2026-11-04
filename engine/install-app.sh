@@ -80,17 +80,29 @@ cp mcp/tools.json "$PROXY/tools.json"
 # The background service must NOT run the bundle binary directly: LaunchServices
 # registers any process living inside the bundle as "the app", so `open` then
 # tries to activate the service (which ignores UI events) and fails with -600.
-# A hard link keeps a single engine copy while giving the service a non-bundle
-# path; a plain copy is the fallback across filesystems.
+#
+# Copy the STANDALONE-signed build from bin/cu, never the app's main executable.
+# Signing the bundle re-signs its executable with a bundle-style signature that
+# amfid rejects when the same bytes are copied outside the bundle ("The
+# signature on the file is invalid", then SIGKILL). bin/cu keeps the standalone
+# signature from build.sh, so service and preview helper are both valid.
 SUPPORT="$HOME/Library/Application Support/cu"
 mkdir -p "$SUPPORT/bin"
 rm -f "$SUPPORT/bin/cu"
-ln "$DEST/$NAME.app/Contents/MacOS/$NAME" "$SUPPORT/bin/cu" 2>/dev/null || \
-    cp "$DEST/$NAME.app/Contents/MacOS/$NAME" "$SUPPORT/bin/cu"
+cp bin/cu "$SUPPORT/bin/cu"
 chmod 755 "$SUPPORT/bin/cu"
+if ! codesign --verify --strict "$SUPPORT/bin/cu" >/dev/null 2>&1; then
+    IDENTITY="${CU_SIGN_IDENTITY:-$(cat "$HERE/signing-identity" 2>/dev/null || true)}"
+    SIGN_ID="-"
+    if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY"; then
+        SIGN_ID="$IDENTITY"
+    fi
+    codesign --force --sign "$SIGN_ID" --identifier local.cu.engine "$SUPPORT/bin/cu" >/dev/null
+    codesign --verify --strict "$SUPPORT/bin/cu"
+fi
 
-# The login agents (service + menu bar) are owned by install-service.sh; both
-# run the engine from inside this bundle, so there is exactly one engine copy.
+# The login agents (service + menu bar) are owned by install-service.sh; the
+# service runs the standalone-signed copy above, the menu bar runs inside the app.
 ./install-service.sh >/dev/null 2>&1 || true
 sleep 1
 # install-service.sh has just (re)started both agents through launchd, which

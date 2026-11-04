@@ -26,10 +26,20 @@ fi
 # the launchd service already runs, so ship a byte-identical copy under its own
 # name; resolvePreviewBinary() prefers it.
 PREVIEW_BIN="$HOME/Library/Application Support/cu/bin/cu-preview"
-if [ ! -x "$PREVIEW_BIN" ] || ! /usr/bin/cmp -s "$SERVICE_BIN" "$PREVIEW_BIN"; then
+if [ ! -x "$PREVIEW_BIN" ] || ! /usr/bin/cmp -s "$SERVICE_BIN" "$PREVIEW_BIN" || \
+   ! codesign --verify --strict "$PREVIEW_BIN" >/dev/null 2>&1; then
     /bin/cp "$SERVICE_BIN" "$PREVIEW_BIN"
     /bin/chmod 755 "$PREVIEW_BIN"
 fi
+# A copy of a bundle-signed executable is reported by amfid as "The signature
+# on the file is invalid" and killed with SIGKILL before it can print anything.
+# Both standalone engine copies must verify on their own.
+for BIN in "$SERVICE_BIN" "$PREVIEW_BIN"; do
+    if ! codesign --verify --strict "$BIN" >/dev/null 2>&1; then
+        echo "error: $BIN has an invalid standalone signature" >&2
+        exit 1
+    fi
+done
 
 PLIST="$HOME/Library/LaunchAgents/local.cu.service.plist"
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.cu"
