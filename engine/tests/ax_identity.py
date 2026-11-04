@@ -43,7 +43,7 @@ var container = base(); container.containerToken = "c-other"
 expect(validateIdentity(token: t, current: container) == .identityUnproven, "container change -> unproven")
 
 var renamed = base(); renamed.title = "导出"
-expect(validateIdentity(token: t, current: renamed) == .identityUnproven, "title change -> unproven")
+expect(validateIdentity(token: t, current: renamed) == .matched, "rename of same object stays matched")
 
 // A snapshotRevision change alone does NOT invalidate identity (it is observation only).
 var reobs = base(); reobs.snapshotRevision = 99

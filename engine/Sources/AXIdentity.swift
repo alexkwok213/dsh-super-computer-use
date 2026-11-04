@@ -40,7 +40,9 @@ func validateIdentity(token: AXElementIdentity, current: AXElementIdentity) -> I
     if token.elementToken.isEmpty || current.elementToken.isEmpty { return .identityUnproven }
     if token.elementToken != current.elementToken { return .identityUnproven }
     if token.containerToken != current.containerToken { return .identityUnproven }
-    if token.role != current.role || token.title != current.title { return .identityUnproven }
+    // role/title are attributes of the retained object, not its identity: a
+    // rename/relabel of the SAME object still resolves. Same-named DIFFERENT
+    // objects are already rejected above by elementToken.
     return .matched
 }
 
@@ -83,7 +85,6 @@ func resolveDispatchTarget(token: AXElementIdentity, candidates: [AXCandidate]) 
     if candidate.epoch != token.epoch { return .reject(.epochRebuilt) }
     if candidate.pid != token.pid || candidate.windowId != token.windowId { return .reject(.staleTarget) }
     if candidate.containerToken != token.containerToken { return .reject(.identityUnproven) }
-    if candidate.role != token.role || candidate.title != token.title { return .reject(.identityUnproven) }
     if !candidate.enabled || !candidate.frameValid { return .reject(.identityUnproven) }
     return .dispatch(elementToken: candidate.elementToken)
 }

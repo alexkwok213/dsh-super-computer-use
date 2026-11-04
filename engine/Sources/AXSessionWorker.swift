@@ -81,11 +81,8 @@ final class AXSessionWorker {
         var owner: pid_t = 0
         AXUIElementGetPid(element, &owner)
         guard owner == pid else { return ["ok": false, "error": "stale_target"] }
-        let role = stringAttribute(element, kAXRoleAttribute)
-        let title = stringAttribute(element, kAXTitleAttribute)
-        guard role == record.role, title == record.title else {
-            return ["ok": false, "error": "identity_unproven", "message": "attributes changed"]
-        }
+        // Identity is the retained object (+ epoch/pid/container), NOT its label:
+        // a demo button whose title counts clicks must still resolve and press.
         let enabled = (attribute(element, kAXEnabledAttribute) as? Bool) ?? true
         guard enabled else { return ["ok": false, "error": "identity_unproven", "message": "disabled"] }
         let status = AXUIElementPerformAction(element, action as CFString)
@@ -113,9 +110,18 @@ func runAXWorkerProbe(pid: pid_t, windowId: CGWindowID) -> Never {
     let before = counter()
     let dispatch = worker.resolveAndDispatch(tokenId: button.elementToken, action: "AXPress")
     let after = counter()
+    // A fresh observation (the next snapshot) mints new tokens and re-retains the
+    // same AX objects; the ORIGINAL token must still dispatch to the ORIGINAL
+    // object rather than being invalidated or re-pointed by path.
+    _ = worker.observeAndRetain()
+    let redispatch = worker.resolveAndDispatch(tokenId: button.elementToken, action: "AXPress")
+    let afterReobserve = counter()
     worker.invalidate()
     let rejected = worker.resolveAndDispatch(tokenId: button.elementToken, action: "AXPress")
-    let ok = (dispatch["ok"] as? Bool) == true && after == before + 1 && (rejected["error"] as? String) == "identity_unproven"
-    emit(["ok": ok, "before": before, "after": after, "dispatch": dispatch, "afterInvalidate": rejected])
+    let ok = (dispatch["ok"] as? Bool) == true && after == before + 1
+        && (redispatch["ok"] as? Bool) == true && afterReobserve == after + 1
+        && (rejected["error"] as? String) == "identity_unproven"
+    emit(["ok": ok, "before": before, "after": after, "afterReobserve": afterReobserve,
+          "dispatch": dispatch, "redispatch": redispatch, "afterInvalidate": rejected])
     exit(ok ? 0 : 1)
 }
