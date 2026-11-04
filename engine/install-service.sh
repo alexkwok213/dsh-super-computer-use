@@ -21,6 +21,15 @@ if [ ! -x "$SERVICE_BIN" ]; then
     echo "error: $SERVICE_BIN not found — run ./install-app.sh first" >&2
     exit 1
 fi
+# The Harness live preview runs the same engine as a short-lived child. macOS
+# refuses ScreenCaptureKit window capture to a second process at the exact path
+# the launchd service already runs, so ship a byte-identical copy under its own
+# name; resolvePreviewBinary() prefers it.
+PREVIEW_BIN="$HOME/Library/Application Support/cu/bin/cu-preview"
+if [ ! -x "$PREVIEW_BIN" ] || ! /usr/bin/cmp -s "$SERVICE_BIN" "$PREVIEW_BIN"; then
+    /bin/cp "$SERVICE_BIN" "$PREVIEW_BIN"
+    /bin/chmod 755 "$PREVIEW_BIN"
+fi
 
 PLIST="$HOME/Library/LaunchAgents/local.cu.service.plist"
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.cu"

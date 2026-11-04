@@ -6025,6 +6025,19 @@ case "preview":
 case "preview-probe":
     runPreviewProbe(windowId: args.int("window").map(CGWindowID.init), seconds: args.int("seconds") ?? 5)
 
+case "preview-stream":
+    guard let streamWindow = args.int("window"), streamWindow > 0 else {
+        fail("missing_window", "pass --window <id>")
+    }
+    let streamSession = args["session"] ?? "no-session"
+    let streamGeneration = args.int("generation") ?? 0
+    let streamFps = args.double("fps") ?? 10
+    let streamMaxDim = args.int("max-dim") ?? 960
+    runPreviewStream(windowId: CGWindowID(streamWindow), sessionId: streamSession,
+                     generation: streamGeneration, seconds: args.int("seconds") ?? 900,
+                     fps: streamFps, maxDimension: streamMaxDim,
+                     watchParentStdin: args.flag("watch-parent"))
+
 case "demo":
     // A window that belongs to us: used to verify window dragging and zooming
     // without touching anything the user is working in.

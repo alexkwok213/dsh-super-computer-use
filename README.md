@@ -14,6 +14,7 @@ DSH  ──加载──▶  本仓库根目录（Cordis 插件，JS）
 | 路径 | 作用 |
 |---|---|
 | `lib/` | Cordis 插件：13 个 `cu_*` 工具、会话管理、附件预览 |
+| `client.js` | Harness 内嵌观看 UI：输入框上方卡片、全帧预览、状态、停止 |
 | `locale/` `skill/` | 插件文案与技能说明 |
 | `test/` | 插件测试（Node） |
 | `engine/Sources/` | 原生引擎源码（Swift） |
@@ -24,6 +25,22 @@ DSH  ──加载──▶  本仓库根目录（Cordis 插件，JS）
 | `engine/tests/` | 原生回归测试（光环/抓屏/窗口查询/控制台界面） |
 | `docs/` | 设计与验证记录；`docs/legacy/` 为合并前两个仓库的历史文档；`docs/demo/` 为演示素材 |
 | `docs/ui/` | 控制台界面的对照参考（`reference/`）与改造后截图（`console-after/`） |
+
+## Harness 内嵌观看
+
+插件同时提供 Host 半与 Client 半。Client 在**当前聊天**的输入框上方注册一张卡片；
+展开后使用 Harness 的 `shell.overlay` 显示实时窗口画面。画面来自已有的
+ScreenCaptureKit 常驻捕获路径，经本机认证的 `/api/scu/preview` 以有界 JPEG 帧流送到
+浏览器 canvas；它不是高频截图轮询，也不进入模型上下文。
+
+- `viewerMode: auto`（默认）：当前聊天有客户端连接时用内嵌观看，其他客户端仍走原生预览。
+- `viewerMode: native`：强制保留原来的悬浮预览窗口。
+- `viewerMode: embedded`：强制内嵌（本机验收用）。
+- 停止走同一条 `CuSessionManager` 停止闸门：先关输入闸门，再清理；`cleanupState` 未知时如实显示。
+- 一个桌面同时只有一个 owner；另一个聊天只能看到“忙”，不能停或接管。
+
+验收与回滚记录见 `docs/reviews/2026-11-04-harness-integrated-cu-acceptance.md`。
+
 
 ## 安装
 

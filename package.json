@@ -12,10 +12,12 @@
     "./core": {
       "default": "./lib/core.mjs"
     },
+    "./client": "./client.js",
     "./locale/*": "./locale/*",
     "./package.json": "./package.json"
   },
   "files": [
+    "client.js",
     "lib",
     "locale",
     "skill",
@@ -38,6 +40,14 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
     }
   },
   "engines": {
