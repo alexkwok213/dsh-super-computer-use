@@ -127,7 +127,10 @@ window.__ModuleLoader__.load({
     };
 
     function tFor(localeId, key, params) {
-      const dict = localeId === "zh" ? STRINGS.zh : STRINGS.en;
+      // Harness ships `zh`, but a shell may report a regional/script tag such
+      // as `zh-CN` or `zh-Hans`; every Chinese variant reads the same copy.
+      const isChinese = typeof localeId === "string" && localeId.toLowerCase().startsWith("zh");
+      const dict = isChinese ? STRINGS.zh : STRINGS.en;
       let text = dict[key] ?? STRINGS.en[key] ?? key;
       if (params) text = text.replace(/\{(\w+)\}/g, (m, name) => (name in params ? String(params[name]) : m));
       return text;

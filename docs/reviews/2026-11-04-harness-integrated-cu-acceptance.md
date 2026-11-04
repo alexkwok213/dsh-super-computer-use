@@ -79,8 +79,14 @@ ui stop cleanup cleanup_unknown in 1ms cleanup=unknown
 | 解码 | 客户端 diagnostics | 0.9–133 ms（窗口大小/内容相关） |
 | 停止闸门 | `registry.control` 计时 | 0 ms |
 | 停止清理 | 同上 | 1 ms |
-| 预览开关对点击延迟影响 | CLI 点击 6 次中位数，开/关预览 | 359.8 ms vs 353.2 ms = **+1.9%** |
-| 30 分钟资源 | 后台采样（60 s 间隔） | **进行中**，报告末尾另附；本轮未在交付时跑满 30 分钟则标“未完成” |
+| 预览开关对点击延迟影响 | CLI 点击 6 次中位数，开/关预览 | 359.8 ms vs 353.2 ms = **+1.9%**（含 CLI 进程启动，属保守上限） |
+| 长稳资源 | 后台采样（60 s 间隔，单 helper） | 采样进行中，见 §8.1；本轮结束时未满 30 分钟的部分标“未完成” |
+
+## 8.1 长稳采样（进行中，结束后回填）
+
+采样文件：`docs/reviews/evidence/soak-20261104.csv`。字段：host RSS/CPU（dsd host 进程）、helper RSS/CPU、helper 数、插件日志字节数。预览子进程每个 900 s 会由 Host/客户端重开；单 helper 约束由 Host 的 `byOwner` 去重保证。
+
+本轮实际等待时间有限，若结束时不足 30 分钟，则只报告实际覆盖时长，不补造数字。
 
 ## 9. 多聊天隔离、断线、目标退出、清理（部分）
 
@@ -92,6 +98,8 @@ ui stop cleanup cleanup_unknown in 1ms cleanup=unknown
 | 断线恢复 | **未测**（宿主重启会终止当前 turn，未做破坏性验证） |
 | 权限失败 | **未测**（本机 Accessibility/Screen Recording 均 true） |
 | 预览隐藏/卸载清理 | 通过：关闭/停止/插件卸载后 helper 归零；HMR 场景曾有 1 个残留，由 Host guard/手动清理，生产页面刷新走 abort |
+| 观看期间空闲自动停止 | 已修复：每次 owner 轮询 re-arm idle timer，观看时不因 60 s 无工具调用而中断；关闭观看后按 idle 回收 |
+| 中文/英文本地化 | 已修复并实测：`zh-CN`/`zh-Hans` 统一走中文；卡片显示“已完成，未验证 / 停止” |
 | 多显示器/Retina | 未系统覆盖；本机为单显示器 Retina，窗口捕获按 2x 正常 |
 
 ## 10. 演示录像
