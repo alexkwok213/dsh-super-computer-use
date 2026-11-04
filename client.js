@@ -247,6 +247,11 @@ window.__ModuleLoader__.load({
         this.lastAttemptAt = 0;
         this.opening = false;
         this.token = 0;
+        this.stream = null;
+        // A stream that produced no frame is not retried in a tight loop for
+        // the same session/target; a new identity (or an explicit close) clears
+        // this.
+        this.blockedIdentity = null;
       }
 
       attach(canvas) {
@@ -258,33 +263,74 @@ window.__ModuleLoader__.load({
         this.canvas = null;
       }
 
+      static sameIdentity(a, b) {
+        return Boolean(
+          a &&
+            b &&
+            a.cuSessionId === b.cuSessionId &&
+            a.targetGeneration === b.targetGeneration,
+        );
+      }
+
+      clearCanvas() {
+        const canvas = this.canvas;
+        if (!canvas) return;
+        try {
+          const ctx2d = canvas.getContext("2d", { alpha: false });
+          if (ctx2d?.clearRect) ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+        } catch {
+          // A detached canvas is not a reason to fail the stream.
+        }
+      }
+
+      resetStream() {
+        this.frames = 0;
+        this.dropped = 0;
+        this.fps = 0;
+        this.fpsWindow = [];
+        this.lastFrameAt = 0;
+        this.invalid = null;
+        this.decoding = false;
+      }
+
       async open() {
         const snapshot = this.store.getSnapshot();
+        if (!this.store.active) return;
         if (!snapshot?.cuSessionId || this.running || this.opening) return;
         if (this.store.expanded === false && this.store.previewWanted === false) return;
+        const identity = {
+          cuSessionId: snapshot.cuSessionId,
+          targetGeneration: snapshot.targetGeneration,
+        };
+        if (PreviewController.sameIdentity(this.blockedIdentity, identity)) return;
         // A failed attempt (409 before a target exists, child crash) must not
         // spawn one process per state poll. Retry at most once per second.
         const now = performance.now();
         if (now - this.lastAttemptAt < 1000) return;
         this.lastAttemptAt = now;
-        const generation = snapshot.targetGeneration;
+
+        const token = ++this.token;
+        const streamIdentity = { token, ...identity };
+        this.stream = streamIdentity;
+        this.blockedIdentity = null;
+        this.resetStream();
+        // A new stream must not show the previous target while its first frame
+        // is still being captured.
+        this.clearCanvas();
         this.running = true;
         this.opening = true;
-        const token = ++this.token;
-        this.invalid = null;
         this.abort = new AbortController();
-        this.startedAt = performance.now();
-        this.store.setPreview({ status: "connecting", fps: 0, frameAgeMs: null });
+        this.startedAt = now;
+        this.store.setPreview({ status: "connecting", fps: 0, frameAgeMs: null, reason: null });
         this.firstFrameTimer = setTimeout(() => {
-          if (this.frames === 0 && this.running) {
-            this.store.setPreview({ status: "stale", reason: "first_frame_timeout" });
-          }
+          if (token !== this.token || !this.running || this.frames > 0) return;
+          this.degradeNoFirstFrame(token, identity);
         }, 1500);
 
         const url =
           `${PREVIEW_PATH}?hostSessionId=${encodeURIComponent(this.store.hostSessionId)}` +
-          `&cuSessionId=${encodeURIComponent(snapshot.cuSessionId)}` +
-          `&generation=${encodeURIComponent(generation)}`;
+          `&cuSessionId=${encodeURIComponent(identity.cuSessionId)}` +
+          `&generation=${encodeURIComponent(identity.targetGeneration)}`;
 
         try {
           const response = await fetch(url, {
@@ -293,16 +339,18 @@ window.__ModuleLoader__.load({
             cache: "no-store",
           });
           if (!response.ok || !response.body) {
-            this.store.setPreview({ status: "unavailable", reason: `http_${response.status}` });
+            if (token === this.token && this.running) {
+              this.store.setPreview({ status: "unavailable", reason: `http_${response.status}` });
+            }
             return;
           }
-          if (token !== this.token) {
-            // A newer target/generation superseded this attempt while it was
+          if (token !== this.token || !this.running) {
+            // A newer target/session superseded this attempt while it was
             // connecting; drop it instead of running two capture clients.
             response.body?.cancel?.().catch?.(() => {});
             return;
           }
-          const parser = new FrameParser((meta, jpeg) => this.present(meta, jpeg, generation));
+          const parser = new FrameParser((meta, jpeg) => this.present(meta, jpeg, streamIdentity));
           this.reader = response.body.getReader();
           for (;;) {
             const { done, value } = await this.reader.read();
@@ -313,7 +361,7 @@ window.__ModuleLoader__.load({
               break;
             }
           }
-          if (this.running && !this.abort.signal.aborted) {
+          if (token === this.token && this.running && !this.abort.signal.aborted) {
             this.store.setPreview({ status: "stale", reason: this.invalid ?? "stream_ended" });
           }
         } catch (error) {
@@ -327,6 +375,7 @@ window.__ModuleLoader__.load({
             this.running = false;
             this.opening = false;
             clearTimeout(this.firstFrameTimer);
+            this.firstFrameTimer = null;
             try {
               this.reader?.releaseLock?.();
             } catch {
@@ -337,14 +386,64 @@ window.__ModuleLoader__.load({
         }
       }
 
-      present(meta, jpeg, expectedGeneration) {
+      /**
+       * No frame in 1500 ms is a failed stream, not an invitation to wait
+       * forever behind a "stale" label. Abort it, name the reason, and block
+       * this same identity from respawning until the target/session changes.
+       */
+      degradeNoFirstFrame(token, identity) {
+        if (token !== this.token) return;
+        this.running = false;
+        this.opening = false;
+        this.token += 1;
+        this.blockedIdentity = { ...identity };
+        this.stream = null;
+        clearTimeout(this.firstFrameTimer);
+        this.firstFrameTimer = null;
+        clearTimeout(this.staleTimer);
+        this.staleTimer = null;
+        try {
+          this.abort?.abort();
+        } catch {
+          // ignore
+        }
+        this.abort = null;
+        try {
+          this.reader?.cancel?.();
+        } catch {
+          // ignore
+        }
+        this.reader = null;
+        this.decoding = false;
+        this.store.setPreview({
+          status: "stale",
+          reason: "first_frame_timeout",
+          fps: 0,
+          frameAgeMs: null,
+        });
+      }
+
+      present(meta, jpeg, identity) {
+        // Every pending operation carries the stream it belongs to. A frame
+        // from a closed/replaced stream is discarded before it allocates a
+        // bitmap or touches decode state.
+        if (!identity || identity.token !== this.token) return;
         if (!this.running || !this.abort || this.abort.signal.aborted) return;
         if (!meta || meta.version !== 1) return;
-        if (meta.targetGeneration !== expectedGeneration) {
+        if (meta.targetGeneration !== identity.targetGeneration) {
           this.dropped += 1;
           return;
         }
-        if (meta.cuSessionId && meta.cuSessionId !== this.store.getSnapshot()?.cuSessionId) {
+        if (meta.cuSessionId && meta.cuSessionId !== identity.cuSessionId) {
+          this.dropped += 1;
+          return;
+        }
+        const current = this.store.getSnapshot();
+        if (
+          !current ||
+          current.cuSessionId !== identity.cuSessionId ||
+          current.targetGeneration !== identity.targetGeneration
+        ) {
           this.dropped += 1;
           return;
         }
@@ -353,12 +452,29 @@ window.__ModuleLoader__.load({
           return; // at most one frame waiting to present
         }
         this.decoding = true;
+        const token = identity.token;
         const startedDecode = performance.now();
         createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }))
           .then((bitmap) => {
-            this.decoding = false;
-            if (!this.running || this.abort?.signal.aborted) {
+            // A decode that resolves after the stream was replaced must not
+            // clear the NEW stream's decoding lock or publish its frame.
+            if (token !== this.token) {
               bitmap.close?.();
+              return;
+            }
+            this.decoding = false;
+            if (!this.running || this.abort?.signal.aborted || this.stream?.token !== token) {
+              bitmap.close?.();
+              return;
+            }
+            const latest = this.store.getSnapshot();
+            if (
+              !latest ||
+              latest.cuSessionId !== identity.cuSessionId ||
+              latest.targetGeneration !== identity.targetGeneration
+            ) {
+              bitmap.close?.();
+              this.dropped += 1;
               return;
             }
             const canvas = this.canvas;
@@ -384,18 +500,27 @@ window.__ModuleLoader__.load({
               frameId: meta.frameId ?? null,
               decodeMs: Math.round((now - startedDecode) * 10) / 10,
               dropped: this.dropped,
+              reason: null,
             });
             clearTimeout(this.firstFrameTimer);
+            this.firstFrameTimer = null;
             clearTimeout(this.staleTimer);
             this.staleTimer = setTimeout(() => {
-              if (this.running && this.lastFrameAt && performance.now() - this.lastFrameAt > 2000) {
+              if (
+                token === this.token &&
+                this.running &&
+                this.lastFrameAt &&
+                performance.now() - this.lastFrameAt > 2000
+              ) {
                 this.store.setPreview({ status: "stale", reason: "no_frames" });
               }
             }, 2000);
           })
           .catch(() => {
-            this.decoding = false;
-            this.dropped += 1;
+            if (token === this.token) {
+              this.decoding = false;
+              this.dropped += 1;
+            }
           });
       }
 
@@ -404,7 +529,9 @@ window.__ModuleLoader__.load({
         this.opening = false;
         this.token += 1;
         clearTimeout(this.firstFrameTimer);
+        this.firstFrameTimer = null;
         clearTimeout(this.staleTimer);
+        this.staleTimer = null;
         try {
           this.abort?.abort();
         } catch {
@@ -417,7 +544,16 @@ window.__ModuleLoader__.load({
           // ignore
         }
         this.reader = null;
-        if (this.frames > 0) this.store.setPreview({ status: "unavailable", fps: 0, frameAgeMs: null });
+        this.decoding = false;
+        this.stream = null;
+        // An explicit close (stop, unmount, target switch) is allowed to try
+        // the next identity immediately; the 1 s rate limit only governs
+        // automatic retries after a failure.
+        this.lastAttemptAt = 0;
+        this.blockedIdentity = null;
+        if (this.frames > 0) {
+          this.store.setPreview({ status: "unavailable", fps: 0, frameAgeMs: null, reason: "closed" });
+        }
       }
     }
 
@@ -451,12 +587,41 @@ window.__ModuleLoader__.load({
         this.timer = null;
         this.abort = null;
         this.inflight = false;
+        // Lifecycle identity: every start begins a new epoch and every pending
+        // operation (poll, control, preview) carries the epoch/token it began
+        // under. A settle after stop/remount belongs to history.
+        this.active = false;
+        this.lifecycleEpoch = 0;
+        this.inflightEpoch = 0;
+        this.stopping = false;
         this.stoppedAt = null;
         this.pollInterval = 1000;
         this.visibilityHandler = null;
+        this.view = null;
+        this.rebuildView();
       }
 
-      getSnapshot = () => this.snapshot;
+      /**
+       * One composite snapshot for React. notify() alone used to leave
+       * getSnapshot() returning the identical object, so previewInfo,
+       * connection and stopping changes were invisible until the next poll.
+       */
+      rebuildView() {
+        this.view = {
+          ...this.snapshot,
+          previewInfo: this.previewInfo,
+          connection: this.connection,
+          lastError: this.lastError,
+          stopping: this.stopping === true,
+          expanded: this.expanded,
+          previewWanted: this.previewWanted,
+          stoppedAt: this.stoppedAt,
+          probe: this.probe,
+        };
+        return this.view;
+      }
+
+      getSnapshot = () => this.view ?? this.rebuildView();
 
       subscribe = (listener) => {
         this.listeners.add(listener);
@@ -464,6 +629,7 @@ window.__ModuleLoader__.load({
       };
 
       notify() {
+        this.rebuildView();
         for (const listener of [...this.listeners]) {
           try {
             listener();
@@ -493,7 +659,13 @@ window.__ModuleLoader__.load({
       }
 
       start() {
-        if (this.timer) return;
+        if (this.active) return;
+        this.active = true;
+        this.lifecycleEpoch += 1;
+        this.inflight = false;
+        this.inflightEpoch = 0;
+        this.abort = null;
+        this.stopping = false;
         if (typeof document !== "undefined") {
           this.visibilityHandler = () => {
             if (document.visibilityState === "hidden") {
@@ -505,14 +677,23 @@ window.__ModuleLoader__.load({
           };
           document.addEventListener("visibilitychange", this.visibilityHandler);
         }
-        this.pollNow(true);
+        this.pollNow(true, this.lifecycleEpoch);
       }
 
       stop() {
+        this.active = false;
+        this.lifecycleEpoch += 1;
         clearTimeout(this.timer);
         this.timer = null;
-        this.abort?.abort();
+        const controller = this.abort;
         this.abort = null;
+        this.inflight = false;
+        this.inflightEpoch = 0;
+        try {
+          controller?.abort();
+        } catch {
+          // ignore
+        }
         this.preview.close();
         if (typeof document !== "undefined" && this.visibilityHandler) {
           document.removeEventListener("visibilitychange", this.visibilityHandler);
@@ -520,51 +701,73 @@ window.__ModuleLoader__.load({
         }
       }
 
-      schedule(delay) {
+      schedule(delay, epoch = this.lifecycleEpoch) {
+        if (!this.active || epoch !== this.lifecycleEpoch) return;
         clearTimeout(this.timer);
-        this.timer = setTimeout(() => this.pollNow(false), delay);
+        this.timer = setTimeout(() => {
+          this.timer = null;
+          if (!this.active || epoch !== this.lifecycleEpoch) return;
+          this.pollNow(false, epoch);
+        }, delay);
       }
 
-      async pollNow(immediate) {
-        if (this.inflight) return;
+      async pollNow(immediate, epoch = this.lifecycleEpoch) {
+        if (!this.active || epoch !== this.lifecycleEpoch) return;
+        if (this.inflight && this.inflightEpoch === epoch) return;
         if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-          this.schedule(800);
+          this.schedule(800, epoch);
           return;
         }
         this.inflight = true;
-        this.abort = new AbortController();
+        this.inflightEpoch = epoch;
+        const controller = new AbortController();
+        this.abort = controller;
         try {
           const data = await postJson(
             STATE_PATH,
             { hostSessionId: this.hostSessionId },
-            this.abort.signal,
+            controller.signal,
           );
+          if (!this.active || epoch !== this.lifecycleEpoch) return;
           this.applySnapshot(data.snapshot);
           this.setConnection("live");
           this.lastError = null;
         } catch (error) {
           if (error?.name === "AbortError") return;
+          if (!this.active || epoch !== this.lifecycleEpoch) return;
           const unauthorized = error?.status === 401 || error?.status === 403;
           this.setConnection(unauthorized ? "unauthorized" : "reconnecting");
           this.lastError = error?.message ?? String(error);
         } finally {
-          this.inflight = false;
-          const interval = ACTIVE_STATES.has(this.snapshot.state) ? 250 : this.pollInterval;
-          this.schedule(immediate ? 60 : interval);
+          if (this.inflightEpoch === epoch) {
+            this.inflight = false;
+            this.inflightEpoch = 0;
+          }
+          if (this.abort === controller) this.abort = null;
+          if (this.active && epoch === this.lifecycleEpoch) {
+            const interval = ACTIVE_STATES.has(this.snapshot.state) ? 250 : this.pollInterval;
+            this.schedule(immediate ? 60 : interval, epoch);
+          }
         }
       }
 
       applySnapshot(next) {
+        if (!this.active) return;
         if (!next || typeof next !== "object") return;
         if (!Number.isInteger(next.revision)) return;
         if (this.snapshot.revision > next.revision) return; // never regress
         const wasActive = ACTIVE_STATES.has(this.snapshot.state);
         const becameActive = ACTIVE_STATES.has(next.state);
         const previousGeneration = this.snapshot.targetGeneration;
+        const previousCuSessionId = this.snapshot.cuSessionId;
         this.snapshot = next;
-        if (previousGeneration !== next.targetGeneration) {
-          // A target switch retires the old stream before a new first frame;
-          // otherwise the old canvas keeps painting the previous window.
+        if (
+          previousGeneration !== next.targetGeneration ||
+          previousCuSessionId !== next.cuSessionId
+        ) {
+          // A target switch or a new CU session retires the old stream before a
+          // new first frame; otherwise the old canvas keeps painting a window
+          // that is no longer owned.
           this.preview.close();
         }
         if (FINAL_STATES.has(next.state)) {
@@ -621,6 +824,7 @@ window.__ModuleLoader__.load({
 
       async stopControl(command = "stop") {
         if (this.stopping) return;
+        const epoch = this.lifecycleEpoch;
         this.stopping = true;
         this.notify();
         try {
@@ -632,6 +836,7 @@ window.__ModuleLoader__.load({
             cuSessionId: this.snapshot.cuSessionId,
             command,
           });
+          if (!this.active || epoch !== this.lifecycleEpoch) return;
           // Prefer the host's authoritative snapshot. Never fabricate
           // revision+1: that poisons the monotonic revision gate and hides the
           // real state until the next poll.
@@ -648,16 +853,19 @@ window.__ModuleLoader__.load({
           this.lastError = null;
           this.stoppedAt = Date.now();
           this.preview.close();
-          this.pollNow(true);
+          this.pollNow(true, epoch);
         } catch (error) {
+          if (!this.active || epoch !== this.lifecycleEpoch) return;
           this.lastError = error?.message ?? String(error);
           this.notify();
           // A stale_session means a newer session already exists; this stop was
           // for the old one. Never replay the stop against the new session.
-          this.pollNow(true);
+          this.pollNow(true, epoch);
         } finally {
-          this.stopping = false;
-          this.notify();
+          if (epoch === this.lifecycleEpoch) {
+            this.stopping = false;
+            this.notify();
+          }
         }
       }
 
@@ -876,7 +1084,7 @@ window.__ModuleLoader__.load({
     }
 
     function StopButton({ store, snapshot, t }) {
-      const stopping = snapshot.state === "stopping" || store.stopping;
+      const stopping = snapshot.state === "stopping" || snapshot.stopping === true;
       return h(
         "button",
         {
@@ -954,7 +1162,7 @@ window.__ModuleLoader__.load({
       if (!ACTIVE_STATES.has(snapshot.state) && !FINAL_STATES.has(snapshot.state)) return null;
 
       const running = snapshot.state === "running" || snapshot.state === "claimed";
-      const info = store.previewInfo;
+      const info = snapshot.previewInfo ?? store.previewInfo;
       const hasFrame = store.preview.frames > 0;
       const age = info.frameAgeMs;
       const badge =
@@ -986,9 +1194,9 @@ window.__ModuleLoader__.load({
               {
                 type: "button",
                 className: "scu-icon",
-                "aria-expanded": store.expanded ? "true" : "false",
-                "aria-label": store.expanded ? t("card.collapse") : t("card.expand"),
-                title: store.expanded ? t("card.collapse") : t("card.expand"),
+                "aria-expanded": snapshot.expanded ? "true" : "false",
+                "aria-label": snapshot.expanded ? t("card.collapse") : t("card.expand"),
+                title: snapshot.expanded ? t("card.collapse") : t("card.expand"),
                 onPointerDown: (event) => {
                   event.preventDefault();
                   store.toggleExpanded();
@@ -999,7 +1207,7 @@ window.__ModuleLoader__.load({
                 "svg",
                 { width: 14, height: 14, viewBox: "0 0 16 16", fill: "none", "aria-hidden": true },
                 h("path", {
-                  d: store.expanded ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4",
+                  d: snapshot.expanded ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4",
                   stroke: "currentColor",
                   "stroke-width": 1.6,
                   "stroke-linecap": "round",
@@ -1033,8 +1241,8 @@ window.__ModuleLoader__.load({
             ),
             h(StopButton, { store, snapshot, t }),
           ),
-          store.lastError
-            ? h("div", { className: "scu-error", role: "status" }, store.lastError)
+          snapshot.lastError
+            ? h("div", { className: "scu-error", role: "status" }, snapshot.lastError)
             : null,
         ),
       );
@@ -1086,8 +1294,8 @@ window.__ModuleLoader__.load({
       if (!expandedSession || !store) return null;
       if (FINAL_STATES.has(snapshot.state) && store.stoppedAt && Date.now() - store.stoppedAt > 60000) return null;
 
-      const info = store.previewInfo;
-      const probe = store.probe;
+      const info = snapshot.previewInfo ?? store.previewInfo;
+      const probe = snapshot.probe;
       const target = targetName(snapshot, t);
       return h(
         "div",
@@ -1198,6 +1406,10 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ["slots", "locale"],
+      // The Harness module table only needs inject/apply. The test runner loads
+      // this same factory and drives the real classes; keeping the hook here is
+      // cheaper and more honest than a second copy of the lifecycle logic.
+      __test: { SessionStore, PreviewController, CuCard, Overlay, storeFor },
       apply(ctx) {
         CuCard.ctx = ctx;
         Overlay.ctx = ctx;
