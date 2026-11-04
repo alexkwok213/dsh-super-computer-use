@@ -69,3 +69,22 @@ M0（可信基础：F1/F2/F3/F7/F8）与 M1 的可测试部分（F5/F6 + 统一�
 签名：`Identifier=cu`、`TeamIdentifier=65JNWZ4UK4`。
 
 **结论**：仓库构建与「从仓库二进制启动的 service」一致，但**已安装 app / 日常服务仍是旧构建**。本轮所有新能力要在日常使用中生效，须由用户重新安装（`engine/install-app.sh` / `package-plugin.sh`）——这涉及签名身份与 TCC，按计划约束**不自动执行**，仅记录。开发目录验证与安装验证分别记录，不混为一谈。
+
+## 7. 复跑命令与续跑说明（handoff）
+
+**全绿复跑（本机，2026-11-04 最后一轮）**
+
+- `npm test` → 115/115
+- `bash engine/tests/run_all.sh --quick` → exit 0（各子集 0 failed）
+- `bash engine/build.sh`（仓库根）→ 通过
+- 原生批均 exit 0：`service_responsiveness` / `action_event_stream` / `preview_stream` / `preview_panel` / `preview_control` / `preview_static` / `visual_event_view` / `aura_view` / `ax_worker` / `ax_worker_resident` / `preview_geometry` / `preview_card_anim` / `ax_identity` / `ax_dispatch_resolution` / `helper_preview_control`
+
+**要看到本轮改动，需先重装**（当前安装产物是旧构建，见 §6）：`engine/install-app.sh` / `engine/package-plugin.sh`。重装涉及签名身份与 TCC，未自动执行。
+
+**仍未完成（需真机/宿主，环境无法在本机代跑）**
+
+1. Task 7 目标切换交叉淡化：当前架构是「每个目标一个独立 `cu preview` 进程」，跨进程无法交叉淡化；要做需改成单预览进程内切流，属架构改动，**未做**。30 分钟长跑资源：**未测**。
+2. Task 8 AXObserver 通知失效：正确性已由「派发前对 retained 对象即时校验」保证，AXObserver 只是提前失效的优化，**未测**。
+3. Task 9 真实 DSH 宿主 + 大模型端到端任务、30–60 s 演示录像、30 分钟资源曲线：**未测**。
+
+**推荐续跑顺序**：重装 → 真实会话里跑「开始→定位→点击→输入→等待→验证→停止」并录 30–60 s → 记录事件 JSONL 与耗时 → 按 §10 固定任务集填「通过/失败/未测」。
