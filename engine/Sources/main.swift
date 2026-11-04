@@ -32,10 +32,54 @@ import Vision
 
 // MARK: - output
 
-func emit(_ object: [String: Any]) {
+// Native event stream (Spec §5.2). Only active when the caller passes
+// `--events-v1`; default CLI output stays one JSON object per line.
+var eventsV1 = false
+var eventsSessionId = "cli"
+var eventsActionId = "cli-action"
+var eventsSeq = 0
+let eventsClockDomain = "native-monotonic"
+
+func actionTargetDict(pid: pid_t, windowId: Int?) -> [String: Any] {
+    return ["pid": Int(pid), "windowId": windowId ?? 0, "targetGeneration": 0, "geometryVersion": 0]
+}
+
+func writeJsonLine(_ object: [String: Any]) {
     let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data([0x0A]))
+}
+
+func emitActionEventLine(_ phase: String, kind: String, target: [String: Any]? = nil,
+                         point: CGPoint? = nil, label: String? = nil, reason: String? = nil,
+                         verification: [String: Any]? = nil) {
+    guard eventsV1 else { return }
+    eventsSeq += 1
+    var event: [String: Any] = [
+        "version": 1,
+        "sessionId": eventsSessionId,
+        "actionId": eventsActionId,
+        "eventId": "\(eventsActionId)#\(eventsSeq)",
+        "source": "native",
+        "phase": phase,
+        "kind": kind,
+        "clockDomain": eventsClockDomain,
+        "emittedNs": String(DispatchTime.now().uptimeNanoseconds),
+    ]
+    if let target { event["target"] = target }
+    if let point { event["point"] = ["x": Double(point.x), "y": Double(point.y)] }
+    if let label { event["label"] = label }
+    if let reason { event["reason"] = reason }
+    if let verification { event["verification"] = verification }
+    writeJsonLine(["kind": "event", "event": event])
+}
+
+func emit(_ object: [String: Any]) {
+    if eventsV1 {
+        writeJsonLine(["kind": "result", "result": object])
+    } else {
+        writeJsonLine(object)
+    }
 }
 
 func fail(_ code: String, _ message: String, _ extra: [String: Any] = [:]) -> Never {
@@ -4876,6 +4920,11 @@ func runMenuBar(openSettings: Bool, openMenu: Bool = false, openConsole: Bool = 
 
 let args = Args(Array(CommandLine.arguments.dropFirst()))
 
+// `--events-v1` opts this command into NDJSON phase events before its result.
+eventsV1 = args.flag("events-v1")
+if let sid = args["session-id"], !sid.isEmpty { eventsSessionId = sid }
+if let aid = args["action-id"], !aid.isEmpty { eventsActionId = aid } else { eventsActionId = "cli-\(args.command)" }
+
 // LaunchServices starts the bundle with no arguments; treat that as "open the app"
 // instead of printing an unknown-command error and exiting.
 switch args.command.isEmpty ? "app" : args.command {
@@ -5082,6 +5131,8 @@ case "expect":
     if !requireAccessibility() {
         fail("accessibility_denied", "grant Accessibility to this binary", ["pid": pid])
     }
+    let expectTarget = actionTargetDict(pid: pid_t(pid), windowId: args.int("window"))
+    emitActionEventLine("targetReady", kind: "expect", target: expectTarget)
     let wantRef = args["ref"]
     let wantQuery = args["find"]?.lowercased()
     if wantRef == nil && wantQuery == nil {
@@ -5127,6 +5178,8 @@ case "expect":
             problems.append("text does not contain \"\(wantContains)\"")
         }
         if problems.isEmpty {
+            emitActionEventLine("verified", kind: "expect", target: expectTarget,
+                                verification: ["matched": true, "evidenceRef": "expect"])
             emit(["ok": true, "action": "expect", "ref": node.ref, "role": node.role,
                   "title": node.title, "enabled": node.enabled,
                   "ms": Int(Date().timeIntervalSince(started) * 1000)])
@@ -5135,6 +5188,7 @@ case "expect":
         reason = problems.joined(separator: "; ")
         usleep(200_000)
     }
+    emitActionEventLine("unverified", kind: "expect", target: expectTarget, reason: reason)
     emit(["ok": false, "action": "expect", "error": "expect_failed", "message": reason,
           "pid": pid, "ms": Int(Date().timeIntervalSince(started) * 1000),
           "hint": "the app did not reach that state; the action had no visible effect"])
@@ -5608,6 +5662,10 @@ case "click":
             exit(1)
         }
     }
+    if let tp = targetPid, tp != 0 {
+        emitActionEventLine("targetReady", kind: "click",
+                            target: actionTargetDict(pid: tp, windowId: args.int("window")), point: point)
+    }
     if background {
         // No pid given: target whatever window is under the point, without
         // activating it or moving the system cursor.
@@ -5640,6 +5698,8 @@ case "click":
             let status = AXUIElementPerformAction(node.element, kAXPressAction as CFString)
             if status == .success {
                 markAction()
+                emitActionEventLine("dispatched", kind: "click",
+                                    target: actionTargetDict(pid: pid, windowId: args.int("window")), point: point)
                 emit(["ok": true, "action": "click", "via": "AXPress-background",
                       "ref": args["ref"] ?? "", "x": x, "y": y, "frontmostAfter": frontmost().app])
                 exit(0)
@@ -5662,6 +5722,8 @@ case "click":
         }
         clickToPid(pid, x: x, y: y, button: args["button"] ?? "left", count: args.int("count") ?? 1)
         markAction()
+        emitActionEventLine("dispatched", kind: "click",
+                            target: actionTargetDict(pid: pid, windowId: args.int("window")), point: point)
         emit(["ok": true, "action": "click", "via": "pid-events", "pid": Int(pid),
               "x": x, "y": y, "resolved": lastResolve, "frontmostAfter": frontmost().app])
         exit(0)
@@ -5705,6 +5767,10 @@ case "click":
                   "hint": "take a new snapshot, or use the element's AXPress"])
         }
         click(x: x, y: y, button: args["button"] ?? "left", count: args.int("count") ?? 1)
+    }
+    if let tp = targetPid, tp != 0 {
+        emitActionEventLine("dispatched", kind: "click",
+                            target: actionTargetDict(pid: tp, windowId: args.int("window")), point: point)
     }
     var payload: [String: Any] = [
         "ok": true, "action": "click", "x": x, "y": y, "via": via,
