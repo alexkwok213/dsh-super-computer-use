@@ -97,11 +97,43 @@
 
 ---
 
-## 5. 剩余限制及下一步建议
+## 5. 构建身份对应记录（安装后）
 
-1. **日常应用生效需用户显式重装**
-   本轮修改全在仓库源码内完成，并通过构建独立产物 `engine/bin/cu` 与独立端口服务进行全面验证。日常使用的 `/Applications/Computer Use.app` 与 `~/Library/Application Support/cu/bin/cu` 仍为旧构建 `d0325ebc…`。按安全与隔离规范未自动执行覆盖安装。后续用户若需在主程序中使用，执行 `./install-app.sh` 即可。
-2. **`cu_type` 语义细化**
+重签名会改变二进制 SHA-256，**hash 不同本身不能证明源码不等价**，因此按审查要求同时保存 source commit、构建参数、签名身份与产物 hash 的对应关系：
+
+| 产物 | 路径 | SHA-256 / buildId | 说明 |
+|---|---|---|---|
+| 源码 | `main` @ `2a0bdb7`（= `codex-experience` @ `92a16b5`） | — | 本轮修复已合入并推送 |
+| 仓库构建 | `engine/bin/cu` | `ec9859d42beaca0d66c3de55f35219a7d0623deb04d981e07e219eb492d41cd8` | `bash engine/build.sh` 产物；`engine/bin/` 被 `.gitignore` 忽略 |
+| 已安装 app | `/Applications/Computer Use.app/Contents/MacOS/Computer Use` | `9beef70ad45f458280752251c2096c548ab10caacbd0c00fda88f18ec792bf52` | 与该 app 的硬链接服务二进制**同 hash** |
+| 已安装服务 | `~/Library/Application Support/cu/bin/cu` | `9beef70ad45f458280752251c2096c548ab10caacbd0c00fda88f18ec792bf52` | launchd `local.cu.service`，运行中 |
+| 签名身份 | `local.cu.app` | `Apple Development: g690322603@outlook.com (8UL3844UU8)`，TeamIdentifier `65JNWZ4UK4` | 与旧构建使用**同一身份**，故 TCC 授权沿用 |
+
+`engine/bin/cu` 与已安装产物 hash 不同的原因：`install-app.sh` 在 bundle 内重新 `codesign --identifier local.cu.app`（Apple Development 证书），签名会改变 Mach-O 的哈希。两者由同一次 `build.sh` 源码构建。
+
+## 6. 日常应用已更新，并通过真实 `cu_*` 入口验证
+
+日常应用/服务已由旧构建 `d0325ebc…` 更新为新构建 `9beef70a…`（执行 `./install.sh`）。安装后状态：`accessibility: true`、`screenRecording: true`（**TCC 授权未丢失**），`local.cu.service` 与 `local.cu.menubar` 均在跑。
+
+安装后通过**真实 `cu_*` 工具入口**（非直接跑独立组件）对自有 demo 窗口完成：
+
+| 调用 | 结果 |
+|---|---|
+| `cu_status` | `buildId: 9beef70a…`，权限均 true，`activeSession: null` |
+| `cu_snapshot(pid, windowId, full)` | `ok: true`，34 个节点（含深层分支与 `深层按钮 甲`） |
+| `cu_click(ref=k0.1, expect="Demo Button 1")` | `ok: true`，`verified: true`，计数器 **0→1**，`via: AXPress-background` |
+| `cu_type(ref=k0.0, mode=setvalue, text=entry-check-2026, expect=同文本)` | `ok: true`，`verified: true`，读回值一致 |
+| `cu_key(name=tab, expect="Demo Button 1")` | `ok: true`，`verified: true` |
+| `cu_session stop` | 返回 `inputGateClosed: true`、`cleanupState: "unknown"`、`nativePreviewStopped: true`、`cancelledActions: 0`；停止后**无残留** `cursor-overlay` / `preview` 子进程（R8 在已安装构建上通过） |
+| `POST /v1/exec` + `eventsVersion:1` | 返回 `Content-Type: application/x-ndjson`，`Transfer-Encoding: chunked`（R9 在新安装服务上生效） |
+
+`cu_session stop` 的返回字段（`inputGateClosed` / `cleanupState` / `nativePreviewStopped`）证明 DSH 进程已加载本轮新插件代码，即上表验证同时覆盖**新 JS 适配层 + 新原生服务**。
+
+## 7. 剩余限制及下一步建议
+
+1. **`cu_type` 语义细化**
    对于传入 `ref` 且命中 retained token 的输入，现采用原子 AXValue 设值以根治路径竞态；如果未来必须支持富文本逐字敲击并触发特定前端按键事件，可进一步扩展 `ax-worker` 原生输入模式。
-3. **多目标平滑交叉淡化**
+2. **多目标平滑交叉淡化**
    当前切换目标采用停用老预览子进程、拉起新预览子进程（`preview_target_switch.py` 证实单进程干净切换）；若需实现像素级两帧渐变交叉淡化，未来可重构为单个常驻 controller 内切换捕获源。
+3. **仍需真机/长跑的项**
+   §4.3 的未测项（`firstVisibleMs`、多物理显示器、30 分钟浸泡、隔离服务 bench 基准）**不因安装而改变**，依然是未测。真实大模型 + DSH 开放式业务任务也未在本机跑过。
