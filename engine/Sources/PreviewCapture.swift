@@ -14,6 +14,9 @@ final class PreviewCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     let queue = DispatchQueue(label: "cu.preview.capture")
     /// When set, each frame is presented in this layer (visible preview card).
     var displayLayer: AVSampleBufferDisplayLayer?
+    /// Called (on main) exactly once, when the first frame arrives — used to fade
+    /// the card in over 120 ms instead of popping.
+    var onFirstFrame: (() -> Void)?
     private(set) var frames = 0
     private(set) var firstFrameAt: Date?
     private var lastFrameAt: Date?
@@ -27,8 +30,12 @@ final class PreviewCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             maxGapMs = max(maxGapMs, Int(now.timeIntervalSince(last) * 1000))
         }
         lastFrameAt = now
+        let isFirst = firstFrameAt == nil
         frames += 1
-        if firstFrameAt == nil { firstFrameAt = now }
+        if isFirst {
+            firstFrameAt = now
+            if let hook = onFirstFrame { DispatchQueue.main.async(execute: hook) }
+        }
         if let layer = displayLayer {
             DispatchQueue.main.async {
                 if layer.status == .failed { layer.flush() }
@@ -143,6 +150,19 @@ final class PreviewCardView: NSView {
         layer?.addSublayer(border)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// 120 ms fade-in when the first frame appears (Spec §6.1 card fade).
+    func fadeIn(duration: CFTimeInterval = 0.12) {
+        layer?.removeAnimation(forKey: "fadeIn")
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.0
+        fade.toValue = 1.0
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer?.add(fade, forKey: "fadeIn")
+    }
+    func hasFadeInAnimationForTesting() -> Bool { layer?.animation(forKey: "fadeIn") != nil }
+
     override func layout() {
         super.layout()
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -243,6 +263,7 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
 
     let capture = PreviewCapture()
     capture.displayLayer = card.displayLayer
+    capture.onFirstFrame = { [weak card] in card?.fadeIn() }
     let filter = windowId != nil ? SCContentFilter(desktopIndependentWindow: scWindow!)
                                  : SCContentFilter(display: scDisplay!, excludingWindows: [])
     let rect = windowId != nil ? scWindow!.frame : CGRect(x: 0, y: 0, width: scDisplay!.width, height: scDisplay!.height)
