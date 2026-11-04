@@ -5762,6 +5762,9 @@ case "movewindow", "move-window":
     if result["ok"] as? Bool == true { markAction() }
     emit(result)
 
+case "preview":
+    runPreviewWindow(windowId: args.int("window").map(CGWindowID.init), seconds: args.int("seconds") ?? 8)
+
 case "preview-probe":
     runPreviewProbe(windowId: args.int("window").map(CGWindowID.init), seconds: args.int("seconds") ?? 5)
 

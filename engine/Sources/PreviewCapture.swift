@@ -1,5 +1,7 @@
 import Foundation
 import AppKit
+import AVFoundation
+import QuartzCore
 import CoreMedia
 import ScreenCaptureKit
 
@@ -10,6 +12,8 @@ import ScreenCaptureKit
 
 final class PreviewCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     let queue = DispatchQueue(label: "cu.preview.capture")
+    /// When set, each frame is presented in this layer (visible preview card).
+    var displayLayer: AVSampleBufferDisplayLayer?
     private(set) var frames = 0
     private(set) var firstFrameAt: Date?
     private var lastFrameAt: Date?
@@ -25,6 +29,12 @@ final class PreviewCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         lastFrameAt = now
         frames += 1
         if firstFrameAt == nil { firstFrameAt = now }
+        if let layer = displayLayer {
+            DispatchQueue.main.async {
+                if layer.status == .failed { layer.flush() }
+                layer.enqueue(sampleBuffer)
+            }
+        }
     }
 }
 
@@ -108,4 +118,108 @@ func runPreviewProbe(windowId: CGWindowID?, seconds: Int) -> Never {
     }
     emit(result)
     exit((result["ok"] as? Bool) == true ? 0 : 1)
+}
+
+
+// MARK: - visible preview card (Task 7)
+
+/// A card that shows live frames in an AVSampleBufferDisplayLayer, with a bright
+/// border so the panel is unmistakably on screen (and easy to locate in a capture).
+final class PreviewCardView: NSView {
+    let displayLayer = AVSampleBufferDisplayLayer()
+    private let border = CALayer()
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        displayLayer.videoGravity = .resizeAspect
+        displayLayer.backgroundColor = NSColor.black.cgColor
+        layer?.addSublayer(displayLayer)
+        border.borderColor = NSColor(srgbRed: 1, green: 0.1, blue: 0.8, alpha: 1).cgColor
+        border.borderWidth = 3
+        border.backgroundColor = NSColor.clear.cgColor
+        layer?.addSublayer(border)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        displayLayer.frame = bounds
+        border.frame = bounds
+        CATransaction.commit()
+    }
+}
+
+/// Show a floating preview card for `windowId` (or the main display) for
+/// `seconds`, presenting live SCStream frames. Emits an early ack, then a final
+/// `{ok, preview:"shown", frames, firstFrameMs}`. A non-capturable window exits
+/// immediately with `window_not_capturable` (no empty card).
+func runPreviewWindow(windowId: CGWindowID?, seconds: Int) -> Never {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+
+    var scWindow: SCWindow?
+    var scDisplay: SCDisplay?
+    var resolveError: String?
+    let resolved = DispatchSemaphore(value: 0)
+    Task {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            if let windowId {
+                if let win = content.windows.first(where: { $0.windowID == windowId }) { scWindow = win }
+                else { resolveError = "window_not_capturable" }
+            } else if let display = content.displays.first { scDisplay = display }
+            else { resolveError = "no_target" }
+        } catch { resolveError = "scshareable_failed" }
+        resolved.signal()
+    }
+    _ = resolved.wait(timeout: .now() + 5)
+    if let resolveError { emit(["ok": false, "error": resolveError]); exit(1) }
+
+    let card = PreviewCardView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+    let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+                        styleMask: [.titled, .nonactivatingPanel],
+                        backing: .buffered, defer: false)
+    panel.title = "cu preview"
+    // Normal level (layer 0) so it is an ordinary on-screen window that window
+    // inspection/`cu windows` can see; still ordered front for the watcher.
+    panel.level = .normal
+    panel.hidesOnDeactivate = false
+    panel.isMovableByWindowBackground = true
+    panel.contentView = card
+    if let screen = NSScreen.main {
+        let v = screen.visibleFrame
+        panel.setFrameOrigin(NSPoint(x: v.maxX - 320 - 24, y: v.maxY - 200 - 24))
+    }
+    panel.orderFrontRegardless()
+
+    let capture = PreviewCapture()
+    capture.displayLayer = card.displayLayer
+    let filter = windowId != nil ? SCContentFilter(desktopIndependentWindow: scWindow!)
+                                 : SCContentFilter(display: scDisplay!, excludingWindows: [])
+    let rect = windowId != nil ? scWindow!.frame : CGRect(x: 0, y: 0, width: scDisplay!.width, height: scDisplay!.height)
+    let config = SCStreamConfiguration()
+    let longest = max(rect.width, rect.height, 1)
+    let shrink = min(1.0, 1280.0 / longest)
+    config.width = Int(rect.width * shrink)
+    config.height = Int(rect.height * shrink)
+    config.minimumFrameInterval = CMTime(value: 1, timescale: 15)
+    config.queueDepth = 3
+    config.showsCursor = false
+    let stream = SCStream(filter: filter, configuration: config, delegate: capture)
+    try? stream.addStreamOutput(capture, type: .screen, sampleHandlerQueue: capture.queue)
+
+    let start = Date()
+    Task { try? await stream.startCapture() }
+    emit(["ok": true, "preview": "starting"])
+
+    let finish = Timer(timeInterval: Double(max(1, seconds)), repeats: false) { _ in
+        stream.stopCapture { _ in }
+        let first = capture.firstFrameAt.map { Int($0.timeIntervalSince(start) * 1000) }
+        emit(["ok": capture.frames > 0, "preview": "shown", "frames": capture.frames,
+              "firstFrameMs": first ?? NSNull()])
+        exit(capture.frames > 0 ? 0 : 1)
+    }
+    RunLoop.main.add(finish, forMode: .common)
+    app.run()
+    exit(0)
 }
