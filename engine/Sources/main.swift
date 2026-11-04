@@ -2018,6 +2018,11 @@ final class CursorLayerView: NSView {
     var reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         || ProcessInfo.processInfo.environment["CU_REDUCE_MOTION"] == "1"
 
+    /// Persistent rim state (F6). The edge rim is a demo aid and is OFF by
+    /// default in daily use. `setAura(false)` must stick: later cursor/click/label
+    /// events may not re-light it. `setAura(true)` (demo mode) re-arms it.
+    var rimEnabled = false
+
     func refreshMotionPreference() {
         reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             || ProcessInfo.processInfo.environment["CU_REDUCE_MOTION"] == "1"
@@ -2093,6 +2098,9 @@ final class CursorLayerView: NSView {
     /// own, so the desktop is never permanently tinted.
     func pulseAura() {
         lastActivityAt = Date()
+        // F6: a disabled rim must stay disabled. Every cursor/click/label used to
+        // call pulseAura unconditionally, re-lighting a rim the user turned off.
+        guard rimEnabled else { return }
         auraHideWork?.cancel()
         if auraContainer.opacity < 0.99 {
             CATransaction.begin()
@@ -2127,9 +2135,10 @@ final class CursorLayerView: NSView {
         CATransaction.commit()
     }
 
-    /// Session start only *arms* the feedback; the rim appears on the first action
-    /// and never stays on while the agent is idle.
+    /// Session start arms or disables the rim. A disabled rim is a persistent
+    /// renderer state, not a one-off fade (F6).
     func setAura(_ visible: Bool) {
+        rimEnabled = visible
         if !visible { fadeAura() }
     }
 
