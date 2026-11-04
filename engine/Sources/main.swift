@@ -1832,6 +1832,15 @@ final class CursorLayerView: NSView {
     private let labelBubble = CAShapeLayer()
     private let labelText = CATextLayer()
     private var lastPoint: CGPoint?
+    // Bounded, latest-wins visual scheduling (Task 5): rapid cursor moves
+    // coalesce to the newest target; the backlog can never grow past the cap.
+    private var pendingCursorTarget: CGPoint?
+    private var pendingCursorGlide = true
+    private var coalesceScheduled = false
+    private(set) var appliedCursorCount = 0
+    private(set) var droppedCursorCount = 0
+    static let visualQueueLimit = 64
+    private var hasShownCursor = false
     private let accent = NSColor(srgbRed: 0.28, green: 0.72, blue: 1, alpha: 1).cgColor
 
     override init(frame: NSRect) {
@@ -1988,10 +1997,14 @@ final class CursorLayerView: NSView {
 
     func showCursor(at point: CGPoint, glide: Bool) {
         let target = viewPoint(point)
+        let first = !hasShownCursor
+        hasShownCursor = true
         arrow.opacity = 1
         arrowGlow.opacity = 1
         let next = arrowPath(at: target)
-        if glide && !reduceMotion {
+        // The first appearance lands directly on the target (no fly-in from the
+        // origin); later moves may glide.
+        if glide && !first && !reduceMotion {
             let anim = CABasicAnimation(keyPath: "path")
             // Continue from what is on screen. Animating from the model value
             // makes a fast batch look like it jumps backwards on every step.
@@ -2006,6 +2019,49 @@ final class CursorLayerView: NSView {
         arrow.path = next
         arrowGlow.path = next
         CATransaction.commit()
+    }
+
+    /// Coalesce rapid cursor moves: only the newest target is applied, so ten
+    /// quick targets leave the cursor at the last one (Task 5).
+    func scheduleCursor(at point: CGPoint, glide: Bool = true) {
+        pendingCursorTarget = point
+        pendingCursorGlide = glide
+        if coalesceScheduled {
+            droppedCursorCount = min(Self.visualQueueLimit, droppedCursorCount + 1)
+            return
+        }
+        coalesceScheduled = true
+        DispatchQueue.main.async { [weak self] in self?.flushScheduledCursor() }
+    }
+
+    func flushScheduledCursor() {
+        coalesceScheduled = false
+        guard let target = pendingCursorTarget else { return }
+        pendingCursorTarget = nil
+        showCursor(at: target, glide: pendingCursorGlide)
+        appliedCursorCount += 1
+    }
+
+    /// Runtime Reduce-Motion: turning it on drops every running animation so a
+    /// glide/breath/ripple already in flight does not keep moving (Task 5).
+    func setReduceMotion(_ on: Bool) {
+        reduceMotion = on
+        guard on else { return }
+        for shape in [arrow, arrowGlow, ripple, labelBubble, labelText, auraBreath] {
+            shape.removeAllAnimations()
+        }
+    }
+
+    func animationKeyCountForTesting() -> Int {
+        (arrow.animationKeys()?.count ?? 0)
+            + (auraBreath.animationKeys()?.count ?? 0)
+            + (ripple.animationKeys()?.count ?? 0)
+    }
+
+    /// Grapheme-safe truncation: `prefix` counts Characters (user-perceived
+    /// grapheme clusters), so an emoji or combining sequence is never split.
+    static func clampLabel(_ text: String, max: Int = 28) -> String {
+        String(text.prefix(max))
     }
 
     /// Timings measured against the previous 280 ms glide / 500 ms ripple: a
@@ -2037,8 +2093,9 @@ final class CursorLayerView: NSView {
             return
         }
         let p = viewPoint(point)
+        let display = Self.clampLabel(text)
         let font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        let width = (text as NSString).size(withAttributes: [.font: font]).width + 16
+        let width = (display as NSString).size(withAttributes: [.font: font]).width + 16
         let height: CGFloat = 20
         // Cursor tip is at p; place the chip below-right so it never covers it.
         // Keep the chip on screen even for a control near an edge, and clear of
@@ -2050,7 +2107,7 @@ final class CursorLayerView: NSView {
         CATransaction.setDisableActions(true)
         let oldPath = labelBubble.path
         labelBubble.path = CGPath(roundedRect: rect, cornerWidth: 6, cornerHeight: 6, transform: nil)
-        labelText.string = text
+        labelText.string = display
         labelText.frame = CGRect(x: rect.minX, y: rect.minY + 4, width: rect.width, height: 14)
         labelBubble.opacity = 1
         labelText.opacity = 1
@@ -2559,8 +2616,8 @@ func runCursorOverlay() -> Never {
                 case "cursor":
                     let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
                     let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
-                    view.showCursor(at: CGPoint(x: x, y: y),
-                                    glide: object["glide"] as? Bool ?? true)
+                    view.scheduleCursor(at: CGPoint(x: x, y: y),
+                                        glide: object["glide"] as? Bool ?? true)
                 case "click":
                     let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
                     let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
