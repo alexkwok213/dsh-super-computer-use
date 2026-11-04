@@ -586,13 +586,34 @@ func focusedElement(pid: pid_t) -> AXUIElement? {
     return axElement(attribute(root, kAXFocusedUIElementAttribute))
 }
 
+/// Resolve an explicit --pid/--window pair as ONE target (Spec §7.1, F1).
+/// A window decides its own owner, but a window must never silently override a
+/// *different* explicit pid: that is how an action aimed at app B landed on app
+/// A's window. A mismatch is refused as target_mismatch before any input.
+func resolveTargetPair(pid explicitPid: Int?, window explicitWindow: Int?,
+                       action: String) -> (pid: pid_t?, windowId: CGWindowID?) {
+    guard let windowId = explicitWindow else {
+        if let explicitPid, explicitPid != 0 { return (pid_t(explicitPid), nil) }
+        return (nil, nil)
+    }
+    let wid = CGWindowID(windowId)
+    guard let window = onScreenWindows().first(where: { $0.id == wid }) else {
+        fail("window_gone", "window \(windowId) is not on screen",
+             ["action": action, "windowId": windowId])
+    }
+    if let explicitPid, explicitPid != 0, pid_t(explicitPid) != window.pid {
+        fail("target_mismatch",
+             "pid \(explicitPid) does not own window \(windowId)",
+             ["action": action, "pid": explicitPid, "windowId": windowId,
+              "ownerPid": Int(window.pid)])
+    }
+    return (window.pid, wid)
+}
+
 /// Background target: never activates anything, still runs the safety layer.
 func backgroundTarget(_ args: Args, _ action: String, allowOffStage: Bool = false) -> pid_t {
-    var pid: pid_t? = args.int("pid").map(pid_t.init)
-    if let windowId = args.int("window") {
-        pid = onScreenWindows().first(where: { $0.id == CGWindowID(windowId) })?.pid
-    }
-    guard let resolved = pid, resolved != 0 else {
+    let pair = resolveTargetPair(pid: args.int("pid"), window: args.int("window"), action: action)
+    guard let resolved = pair.pid, resolved != 0 else {
         fail("missing_pid", "\(action) in the background needs --pid or --window")
     }
     let windows = onScreenWindows()
@@ -1152,14 +1173,8 @@ func refuse(_ payload: [String: Any]) -> Never {
 @discardableResult
 func guardedFocus(_ args: Args, action: String, point: CGPoint? = nil,
                   secure: Bool = false) -> pid_t? {
-    var pid: pid_t? = args.int("pid").map(pid_t.init)
-    if let windowId = args.int("window") {
-        guard let window = onScreenWindows().first(where: { $0.id == CGWindowID(windowId) }) else {
-            refuse(["ok": false, "error": "window_gone",
-                    "message": "window \(windowId) is not on screen", "action": action])
-        }
-        pid = window.pid
-    }
+    let pair = resolveTargetPair(pid: args.int("pid"), window: args.int("window"), action: action)
+    var pid: pid_t? = pair.pid
     let skip = args.flag("force") || args.flag("no-preflight")
     if let pid, !skip {
         _ = activate(pid: pid)
@@ -4977,7 +4992,8 @@ case "expect":
     // Assert what actually happened, so a caller never has to trust an "ok".
     // Polls the accessibility tree (no screenshot) until the control matches,
     // the timeout runs out, or the control disappears.
-    guard let pid = args.int("pid") else { fail("missing_pid", "pass --pid <pid>") }
+    let expectPair = resolveTargetPair(pid: args.int("pid"), window: args.int("window"), action: "expect")
+    guard let pid = expectPair.pid.map({ Int($0) }) else { fail("missing_pid", "pass --pid <pid>") }
     if !requireAccessibility() {
         fail("accessibility_denied", "grant Accessibility to this binary", ["pid": pid])
     }
@@ -5047,7 +5063,8 @@ case "launch":
     launchApp(spec)
 
 case "snapshot":
-    guard let pid = args.int("pid") else { fail("missing_pid", "pass --pid <pid>") }
+    let snapshotPair = resolveTargetPair(pid: args.int("pid"), window: args.int("window"), action: "snapshot")
+    guard let pid = snapshotPair.pid.map({ Int($0) }) else { fail("missing_pid", "pass --pid <pid>") }
     if !requireAccessibility() {
         fail("accessibility_denied", "grant Accessibility to this binary", ["pid": pid])
     }
@@ -5467,13 +5484,8 @@ case "click":
     // same rule a person follows when they click at a spot on screen. (It used
     // to ignore --pid entirely here and fall through to the window under the
     // point, which is how a click meant for 剪映 landed in Chrome.)
-    var targetPid: pid_t? = refPid != 0 ? refPid : args.int("pid").map(pid_t.init)
-    if let windowId = args.int("window") {
-        guard let window = onScreenWindows().first(where: { $0.id == CGWindowID(windowId) }) else {
-            fail("window_gone", "window \(windowId) is not on screen")
-        }
-        targetPid = window.pid
-    }
+    var targetPid: pid_t? = resolveTargetPair(pid: refPid != 0 ? Int(refPid) : args.int("pid"),
+                                             window: args.int("window"), action: "click").pid
     if targetPid == nil, !background {
         targetPid = windowAt(point)?.pid
     }
