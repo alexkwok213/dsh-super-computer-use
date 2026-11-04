@@ -221,3 +221,28 @@ test('timings attribute the batch budget to settle, work and overhead', async ()
   assert.ok(res.timings.steps >= 25, JSON.stringify(res.timings));
   assert.ok(res.timings.overheadMs < 120, JSON.stringify(res.timings));
 });
+
+test('a same-target continuation never clears a user-triggered pause', async () => {
+  const m = new CuSessionManager();
+  const calls = [];
+  m.exec = async (argv) => {
+    calls.push(argv[0]);
+    return { ok: true };
+  };
+  m.spawnIndicator = () => null;
+  m.writeActivity = () => {};
+  m.stopVisualIndicatorsOnly = async () => {};
+  m.startScreenIndicator = () => {};
+  m.startCursorOverlay = () => null;
+  m.setAgentAura = () => {};
+  m.warmCaptureDaemon = () => {};
+  m.activeSession = { windowId: 7, pid: 5 };
+  m.pauseLatched = true; // the user pressed Stop earlier
+
+  // Re-arming the same session (e.g. a continued turn) must not silently resume
+  // computer use behind the user's back (Spec §7.5).
+  await m.startVisualSession({ windowId: 7, pid: 5 });
+
+  assert.equal(m.pauseLatched, true, 'the user pause must survive a same-target continuation');
+  assert.equal(calls.filter((c) => c === 'resume').length, 0, 'must not resume the engine');
+});

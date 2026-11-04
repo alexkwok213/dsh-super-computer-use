@@ -1,0 +1,74 @@
+{
+  "generatedAt": "2026-11-04T01:16:28.359Z",
+  "macos": "darwin",
+  "node": "v26.0.0",
+  "runs": 20,
+  "results": [
+    {
+      "task": "snapshot",
+      "label": "AX snapshot of a native window",
+      "runs": 20,
+      "success": "20/20",
+      "totalP50": 59,
+      "totalP95": 83,
+      "firstFeedbackP50": null,
+      "firstFeedbackP95": null,
+      "notes": []
+    },
+    {
+      "task": "click_ref",
+      "label": "click by snapshot ref + observation",
+      "runs": 20,
+      "success": "20/20",
+      "totalP50": 224,
+      "totalP95": 245,
+      "firstFeedbackP50": 0,
+      "firstFeedbackP95": 0,
+      "notes": []
+    },
+    {
+      "task": "type_expect",
+      "label": "type + explicit post-condition",
+      "runs": 20,
+      "success": "20/20",
+      "totalP50": 381,
+      "totalP95": 421,
+      "firstFeedbackP50": null,
+      "firstFeedbackP95": null,
+      "notes": []
+    },
+    {
+      "task": "batch_flow",
+      "label": "batch: click → wait → key (one roundtrip)",
+      "runs": 20,
+      "success": "20/20",
+      "totalP50": 342,
+      "totalP95": 378,
+      "firstFeedbackP50": null,
+      "firstFeedbackP95": null,
+      "notes": []
+    },
+    {
+      "task": "preview",
+      "label": "screenshot preview of the target window",
+      "runs": 20,
+      "success": "20/20",
+      "totalP50": 263,
+      "totalP95": 307,
+      "firstFeedbackP50": null,
+      "firstFeedbackP95": null,
+      "notes": []
+    },
+    {
+      "task": "stop",
+      "label": "stop a session and restore the desktop",
+      "runs": 20,
+      "success": "20/20",
+      "totalP50": 0,
+      "totalP95": 1,
+      "firstFeedbackP50": null,
+      "firstFeedbackP95": null,
+      "notes": []
+    }
+  ]
+}

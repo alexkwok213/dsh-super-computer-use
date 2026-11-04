@@ -1,0 +1,33 @@
+{
+  "buildId": "0078f89bd85f22c9f0788584d1e573bc01a746d8964c4500c0ca220bb06f6216",
+  "binary": "/Users/johnkwok/Downloads/work/super-computer-use/engine/bin/cu",
+  "video": "docs/reviews/fourth-round-demo.mov",
+  "videoBytes": 6833475,
+  "seconds": 35,
+  "cycles": 24,
+  "eventCount": 512,
+  "sourceCounts": {
+    "adapter": 406,
+    "native": 106
+  },
+  "kindCounts": {
+    "click": 128,
+    "type": 96,
+    "key": 144,
+    "scroll": 144
+  },
+  "failurePaths": {
+    "crossTargetRefused": 2,
+    "unsupportedSemantics": 2,
+    "queuedCancelled": 1
+  },
+  "stop": {
+    "inputGateClosed": true,
+    "cleanupState": "unknown"
+  },
+  "presentation": {
+    "commandWrittenMs": null,
+    "renderCommittedMs": null,
+    "firstVisibleMs": null
+  }
+}

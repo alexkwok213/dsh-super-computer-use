@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 mkdir -p bin
 swiftc -O -swift-version 5 \
   -target arm64-apple-macos14.0 \
-  -framework AppKit -framework ApplicationServices -framework ScreenCaptureKit -framework Vision \
+  -framework AppKit -framework ApplicationServices -framework ScreenCaptureKit -framework Vision -framework AVFoundation \
   -o bin/cu Sources/*.swift
 # Toolchain defaults to minos 28 (newer than this machine's 27); LaunchServices
 # then refuses the binary as an app main executable with -10825 even though
@@ -17,7 +17,10 @@ swiftc -O -swift-version 5 \
 #   1. $CU_SIGN_IDENTITY
 #   2. ./signing-identity  (gitignored; one line, the codesign identity string)
 #   3. ad-hoc "-"          (works, but TCC re-prompts after every rebuild)
-HERE="$(cd "$(dirname "$0")" && pwd)"
+# Already inside the script directory (line 5 cd'd there), so use pwd rather than
+# re-resolving $0 — `bash engine/build.sh` from the repo root would otherwise run
+# `cd engine` a second time and abort under `set -e`.
+HERE="$(pwd)"
 IDENTITY="${CU_SIGN_IDENTITY:-$(cat "$HERE/signing-identity" 2>/dev/null || true)}"
 if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY"; then
   codesign --force --sign "$IDENTITY" bin/cu

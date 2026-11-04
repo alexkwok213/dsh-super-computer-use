@@ -15,10 +15,9 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-source = (root / 'Sources/main.swift').read_text()
+source = (root / 'Sources/VisualFeedback.swift').read_text()
 start = source.index('final class CursorLayerView: NSView {')
-end = source.index('// MARK: - capture daemon')
-views = source[start:end]
+views = source[start:]
 
 checks = r'''
 let width: CGFloat = 1728

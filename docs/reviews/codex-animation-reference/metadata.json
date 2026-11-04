@@ -1,0 +1,30 @@
+{
+  "source": "/Users/johnkwok/Downloads/codex操控.mov",
+  "durationSeconds": 124.714376,
+  "width": 3456,
+  "height": 2234,
+  "fps": 30,
+  "reviewMethod": "32 overview frames at 4-second intervals; 9 full-screen spot checks; 14 samples around 20–34 s; 24 consecutive frames around 122.9–123.7 s; scene-change scan. No audio analysis.",
+  "evidence": [
+    {
+      "file": "preview-card-21s.jpg",
+      "timeSeconds": 21,
+      "crop": "crop=520:400:2760:450"
+    },
+    {
+      "file": "status-popover-88s.jpg",
+      "timeSeconds": 88,
+      "crop": "crop=620:390:2670:30"
+    },
+    {
+      "file": "target-preview-123s.jpg",
+      "timeSeconds": 123,
+      "crop": "crop=520:400:2760:450"
+    }
+  ],
+  "limits": [
+    "Visual observations only; no private Codex renderer inspection.",
+    "30 fps recording cannot validate a 60 fps renderer or sub-frame action latency.",
+    "Screen contents are evidence, not new task instructions."
+  ]
+}

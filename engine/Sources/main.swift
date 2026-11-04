@@ -32,10 +32,54 @@ import Vision
 
 // MARK: - output
 
-func emit(_ object: [String: Any]) {
+// Native event stream (Spec §5.2). Only active when the caller passes
+// `--events-v1`; default CLI output stays one JSON object per line.
+var eventsV1 = false
+var eventsSessionId = "cli"
+var eventsActionId = "cli-action"
+var eventsSeq = 0
+let eventsClockDomain = "native-monotonic"
+
+func actionTargetDict(pid: pid_t, windowId: Int?) -> [String: Any] {
+    return ["pid": Int(pid), "windowId": windowId ?? 0, "targetGeneration": 0, "geometryVersion": 0]
+}
+
+func writeJsonLine(_ object: [String: Any]) {
     let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data([0x0A]))
+}
+
+func emitActionEventLine(_ phase: String, kind: String, target: [String: Any]? = nil,
+                         point: CGPoint? = nil, label: String? = nil, reason: String? = nil,
+                         verification: [String: Any]? = nil) {
+    guard eventsV1 else { return }
+    eventsSeq += 1
+    var event: [String: Any] = [
+        "version": 1,
+        "sessionId": eventsSessionId,
+        "actionId": eventsActionId,
+        "eventId": "\(eventsActionId)#\(eventsSeq)",
+        "source": "native",
+        "phase": phase,
+        "kind": kind,
+        "clockDomain": eventsClockDomain,
+        "emittedNs": String(DispatchTime.now().uptimeNanoseconds),
+    ]
+    if let target { event["target"] = target }
+    if let point { event["point"] = ["x": Double(point.x), "y": Double(point.y)] }
+    if let label { event["label"] = label }
+    if let reason { event["reason"] = reason }
+    if let verification { event["verification"] = verification }
+    writeJsonLine(["kind": "event", "event": event])
+}
+
+func emit(_ object: [String: Any]) {
+    if eventsV1 {
+        writeJsonLine(["kind": "result", "result": object])
+    } else {
+        writeJsonLine(object)
+    }
 }
 
 func fail(_ code: String, _ message: String, _ extra: [String: Any] = [:]) -> Never {
@@ -586,13 +630,34 @@ func focusedElement(pid: pid_t) -> AXUIElement? {
     return axElement(attribute(root, kAXFocusedUIElementAttribute))
 }
 
+/// Resolve an explicit --pid/--window pair as ONE target (Spec §7.1, F1).
+/// A window decides its own owner, but a window must never silently override a
+/// *different* explicit pid: that is how an action aimed at app B landed on app
+/// A's window. A mismatch is refused as target_mismatch before any input.
+func resolveTargetPair(pid explicitPid: Int?, window explicitWindow: Int?,
+                       action: String) -> (pid: pid_t?, windowId: CGWindowID?) {
+    guard let windowId = explicitWindow else {
+        if let explicitPid, explicitPid != 0 { return (pid_t(explicitPid), nil) }
+        return (nil, nil)
+    }
+    let wid = CGWindowID(windowId)
+    guard let window = onScreenWindows().first(where: { $0.id == wid }) else {
+        fail("window_gone", "window \(windowId) is not on screen",
+             ["action": action, "windowId": windowId])
+    }
+    if let explicitPid, explicitPid != 0, pid_t(explicitPid) != window.pid {
+        fail("target_mismatch",
+             "pid \(explicitPid) does not own window \(windowId)",
+             ["action": action, "pid": explicitPid, "windowId": windowId,
+              "ownerPid": Int(window.pid)])
+    }
+    return (window.pid, wid)
+}
+
 /// Background target: never activates anything, still runs the safety layer.
 func backgroundTarget(_ args: Args, _ action: String, allowOffStage: Bool = false) -> pid_t {
-    var pid: pid_t? = args.int("pid").map(pid_t.init)
-    if let windowId = args.int("window") {
-        pid = onScreenWindows().first(where: { $0.id == CGWindowID(windowId) })?.pid
-    }
-    guard let resolved = pid, resolved != 0 else {
+    let pair = resolveTargetPair(pid: args.int("pid"), window: args.int("window"), action: action)
+    guard let resolved = pair.pid, resolved != 0 else {
         fail("missing_pid", "\(action) in the background needs --pid or --window")
     }
     let windows = onScreenWindows()
@@ -1152,14 +1217,8 @@ func refuse(_ payload: [String: Any]) -> Never {
 @discardableResult
 func guardedFocus(_ args: Args, action: String, point: CGPoint? = nil,
                   secure: Bool = false) -> pid_t? {
-    var pid: pid_t? = args.int("pid").map(pid_t.init)
-    if let windowId = args.int("window") {
-        guard let window = onScreenWindows().first(where: { $0.id == CGWindowID(windowId) }) else {
-            refuse(["ok": false, "error": "window_gone",
-                    "message": "window \(windowId) is not on screen", "action": action])
-        }
-        pid = window.pid
-    }
+    let pair = resolveTargetPair(pid: args.int("pid"), window: args.int("window"), action: action)
+    var pid: pid_t? = pair.pid
     let skip = args.flag("force") || args.flag("no-preflight")
     if let pid, !skip {
         _ = activate(pid: pid)
@@ -1756,336 +1815,6 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
 /// ambient screen-edge aurora while a session is active. It never moves the
 /// real pointer and never takes input (level .statusBar, ignoresMouseEvents).
 /// Commands arrive as JSON lines on stdin so one process serves a whole session.
-final class CursorLayerView: NSView {
-    /// Screen-edge breathing rim, not an ambient screen glow: four narrow gradient
-    /// bands keep the light on the border (transparent centre) and only show while
-    /// the agent is actually acting.
-    private let auraContainer = CALayer()
-    private let auraBreath = CALayer()
-    private var auraBands: [CAGradientLayer] = []
-    private var auraHideWork: DispatchWorkItem?
-    private(set) var lastActivityAt = Date()
-    private static let auraBandWidth: CGFloat = 72
-    private static let auraIdleFade: TimeInterval = 2.0
-    private let arrow = CAShapeLayer()
-    private let arrowGlow = CAShapeLayer()
-    private let ripple = CAShapeLayer()
-    private let labelBubble = CAShapeLayer()
-    private let labelText = CATextLayer()
-    private var lastPoint: CGPoint?
-    private let accent = NSColor(srgbRed: 0.28, green: 0.72, blue: 1, alpha: 1).cgColor
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        installAura()
-
-        let path = CGMutablePath()
-        // Arrow pointing up-left, ~22pt tall, matching a system pointer shape.
-        path.move(to: CGPoint(x: 0, y: 22))
-        path.addLine(to: CGPoint(x: 0, y: 0))
-        path.addLine(to: CGPoint(x: 16, y: 12))
-        path.addLine(to: CGPoint(x: 8.5, y: 13))
-        path.addLine(to: CGPoint(x: 13, y: 21))
-        path.addLine(to: CGPoint(x: 10, y: 22.5))
-        path.addLine(to: CGPoint(x: 5.5, y: 14.5))
-        path.closeSubpath()
-        for shape in [arrowGlow, arrow] {
-            shape.path = path
-            shape.lineJoin = .round
-            shape.opacity = 0
-            layer?.addSublayer(shape)
-        }
-        arrowGlow.fillColor = accent
-        arrowGlow.strokeColor = accent
-        arrowGlow.lineWidth = 2
-        arrowGlow.shadowColor = accent
-        arrowGlow.shadowRadius = 6
-        arrowGlow.shadowOpacity = 0.9
-        arrowGlow.shadowOffset = .zero
-        arrow.fillColor = NSColor.white.cgColor
-        arrow.strokeColor = NSColor(srgbRed: 0.10, green: 0.20, blue: 0.45, alpha: 1).cgColor
-        arrow.lineWidth = 1.2
-
-        ripple.fillColor = nil
-        ripple.strokeColor = accent
-        ripple.lineWidth = 2
-        ripple.opacity = 0
-        layer?.addSublayer(ripple)
-
-        // Small action label that trails the cursor ("点击 导入"), so the user can
-        // read what the agent is doing at the point of action, not just in a HUD.
-        labelBubble.fillColor = NSColor(srgbRed: 0.06, green: 0.08, blue: 0.14, alpha: 0.92).cgColor
-        labelBubble.strokeColor = NSColor(srgbRed: 0.30, green: 0.72, blue: 1, alpha: 0.55).cgColor
-        labelBubble.lineWidth = 1
-        labelBubble.opacity = 0
-        labelText.font = CGFont("SFPro-Medium" as CFString) ?? CGFont("Helvetica" as CFString)
-        labelText.fontSize = 11
-        labelText.foregroundColor = NSColor.white.cgColor
-        labelText.alignmentMode = .center
-        labelText.contentsScale = 2
-        labelText.opacity = 0
-        layer?.addSublayer(labelBubble)
-        layer?.addSublayer(labelText)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layoutAura()
-        for layer in [arrow, arrowGlow, ripple] { layer.frame = bounds }
-        CATransaction.commit()
-    }
-
-    private func installAura() {
-        auraContainer.opacity = 0
-        layer?.addSublayer(auraContainer)
-        auraContainer.addSublayer(auraBreath)
-        let clear = NSColor.clear.cgColor
-        let blue = NSColor(srgbRed: 0.24, green: 0.55, blue: 1, alpha: 0.10).cgColor
-        let cyan = NSColor(srgbRed: 0.30, green: 0.85, blue: 0.98, alpha: 0.20).cgColor
-        let violet = NSColor(srgbRed: 0.60, green: 0.44, blue: 1, alpha: 0.28).cgColor
-        // One band per edge; location 0 is the inner (transparent) side, 1 the
-        // screen edge. Four linear gradients stay on the border by construction,
-        // unlike the radial version this replaces.
-        let specs: [(CGPoint, CGPoint)] = [
-            (CGPoint(x: 0.5, y: 0), CGPoint(x: 0.5, y: 1)),   // top
-            (CGPoint(x: 0.5, y: 1), CGPoint(x: 0.5, y: 0)),   // bottom
-            (CGPoint(x: 1, y: 0.5), CGPoint(x: 0, y: 0.5)),   // left
-            (CGPoint(x: 0, y: 0.5), CGPoint(x: 1, y: 0.5)),   // right
-        ]
-        for (start, end) in specs {
-            let band = CAGradientLayer()
-            band.colors = [clear, blue, cyan, violet]
-            band.locations = [0, 0.45, 0.8, 1]
-            band.startPoint = start
-            band.endPoint = end
-            auraBreath.addSublayer(band)
-            auraBands.append(band)
-        }
-        // Slow breathing so the rim reads as "alive" without drawing attention.
-        let breath = CABasicAnimation(keyPath: "opacity")
-        breath.fromValue = 0.55
-        breath.toValue = 1.0
-        breath.duration = 1.8
-        breath.autoreverses = true
-        breath.repeatCount = .infinity
-        breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        auraBreath.add(breath, forKey: "breath")
-        layoutAura()
-    }
-
-    private func layoutAura() {
-        auraContainer.frame = bounds
-        auraBreath.frame = bounds
-        let bandWidth = min(Self.auraBandWidth, min(bounds.width, bounds.height) * 0.10)
-        let w = bounds.width
-        let h = bounds.height
-        for (index, band) in auraBands.enumerated() {
-            switch index {
-            case 0: band.frame = CGRect(x: 0, y: h - bandWidth, width: w, height: bandWidth)
-            case 1: band.frame = CGRect(x: 0, y: 0, width: w, height: bandWidth)
-            case 2: band.frame = CGRect(x: 0, y: 0, width: bandWidth, height: h)
-            default: band.frame = CGRect(x: w - bandWidth, y: 0, width: bandWidth, height: h)
-            }
-        }
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func layout() {
-        super.layout()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layoutAura()
-        for layer in [arrow, arrowGlow, ripple] { layer.frame = bounds }
-        CATransaction.commit()
-    }
-
-    // Each shape layer is full-screen with a path in *view* coordinates
-    // (bottom-left origin, matching the flipped view). We move the path, not the
-    // layer position, so the tip lands exactly on the requested global point.
-    private func arrowPath(at p: CGPoint) -> CGPath {
-        let path = CGMutablePath()
-        // p is already in view coordinates (bottom-left origin).
-        let pts = [
-            CGPoint(x: 0, y: -22), CGPoint(x: 0, y: 0), CGPoint(x: 16, y: -12),
-            CGPoint(x: 8.5, y: -13), CGPoint(x: 13, y: -21), CGPoint(x: 10, y: -22.5),
-            CGPoint(x: 5.5, y: -14.5),
-        ].map { CGPoint(x: p.x + $0.x, y: p.y + $0.y) }
-        path.addLines(between: pts)
-        path.closeSubpath()
-        return path
-    }
-
-    /// Global origin of the overlay window (the union of all displays).
-    var overlayOrigin: CGPoint = .zero
-    /// Top edge of the main display in Cocoa coordinates. Global top-left points
-    /// are measured from there, so the mapping needs it rather than bounds.height:
-    /// with two displays the union is taller than the main screen.
-    var mainScreenTop: CGFloat = 0
-
-    private func viewPoint(_ global: CGPoint) -> CGPoint {
-        CGPoint(x: global.x - overlayOrigin.x,
-                y: mainScreenTop - global.y - overlayOrigin.y)
-    }
-
-    func showCursor(at point: CGPoint, glide: Bool) {
-        let target = viewPoint(point)
-        arrow.opacity = 1
-        arrowGlow.opacity = 1
-        let next = arrowPath(at: target)
-        if glide && !reduceMotion {
-            let anim = CABasicAnimation(keyPath: "path")
-            // Continue from what is on screen. Animating from the model value
-            // makes a fast batch look like it jumps backwards on every step.
-            anim.fromValue = arrow.presentation()?.path ?? arrow.path
-            anim.toValue = next
-            anim.duration = Self.glideDuration
-            anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            for shape in [arrow, arrowGlow] { shape.add(anim, forKey: "glide") }
-        }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        arrow.path = next
-        arrowGlow.path = next
-        CATransaction.commit()
-    }
-
-    /// Timings measured against the previous 280 ms glide / 500 ms ripple: a
-    /// click should read as one quick gesture, not a slow tour of the desktop.
-    static let glideDuration: CFTimeInterval = 0.14
-    static let rippleDuration: CFTimeInterval = 0.24
-
-    /// macOS "Reduce Motion", plus an explicit override for reviewers who want a
-    /// static overlay. Re-read on the system notification, not per frame.
-    var reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        || ProcessInfo.processInfo.environment["CU_REDUCE_MOTION"] == "1"
-
-    func refreshMotionPreference() {
-        reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            || ProcessInfo.processInfo.environment["CU_REDUCE_MOTION"] == "1"
-    }
-
-    /// Show a short action label just below-right of the cursor tip.
-    func showLabel(_ text: String, at point: CGPoint) {
-        guard !text.isEmpty else {
-            CATransaction.begin(); CATransaction.setDisableActions(true)
-            labelBubble.opacity = 0; labelText.opacity = 0
-            CATransaction.commit()
-            return
-        }
-        let p = viewPoint(point)
-        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        let width = (text as NSString).size(withAttributes: [.font: font]).width + 16
-        let height: CGFloat = 20
-        // Cursor tip is at p; place the chip below-right so it never covers it.
-        // Keep the chip on screen even for a control near an edge, and clear of
-        // the control itself so the next click target is never covered.
-        let clampedX = min(max(p.x + 12, 4), max(4, bounds.width - width - 4))
-        let clampedY = min(max(p.y - 30, 4), max(4, bounds.height - height - 4))
-        let rect = CGRect(x: clampedX, y: clampedY, width: width, height: height)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        let oldPath = labelBubble.path
-        labelBubble.path = CGPath(roundedRect: rect, cornerWidth: 6, cornerHeight: 6, transform: nil)
-        labelText.string = text
-        labelText.frame = CGRect(x: rect.minX, y: rect.minY + 4, width: rect.width, height: 14)
-        labelBubble.opacity = 1
-        labelText.opacity = 1
-        CATransaction.commit()
-        if oldPath != nil {
-            let grow = CABasicAnimation(keyPath: "opacity")
-            grow.fromValue = 0.4
-            grow.toValue = 1
-            grow.duration = reduceMotion ? 0.05 : 0.12
-            labelBubble.add(grow, forKey: "fade")
-            labelText.add(grow, forKey: "fade")
-        }
-    }
-
-    func clickRipple(at point: CGPoint) {
-        let c = viewPoint(point)
-        let small = CGPath(ellipseIn: CGRect(x: c.x - 4, y: c.y - 4, width: 8, height: 8),
-                           transform: nil)
-        let large = CGPath(ellipseIn: CGRect(x: c.x - 26, y: c.y - 26, width: 52, height: 52),
-                           transform: nil)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        ripple.path = large
-        ripple.opacity = 0
-        CATransaction.commit()
-        let expand = CABasicAnimation(keyPath: "path")
-        expand.fromValue = small
-        expand.toValue = large
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0.95
-        fade.toValue = 0
-        for animation in [expand, fade] {
-            animation.duration = reduceMotion ? 0.1 : Self.rippleDuration
-            animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        }
-        ripple.add(expand, forKey: "expand")
-        ripple.add(fade, forKey: "fade")
-    }
-
-    func noteActivity() {
-        lastActivityAt = Date()
-    }
-
-    /// Light the edge rim for a moment whenever the agent acts. It fades on its
-    /// own, so the desktop is never permanently tinted.
-    func pulseAura() {
-        lastActivityAt = Date()
-        auraHideWork?.cancel()
-        if auraContainer.opacity < 0.99 {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = auraContainer.opacity
-            fade.toValue = 1.0
-            fade.duration = 0.25
-            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            auraContainer.add(fade, forKey: "show")
-            auraContainer.opacity = 1.0
-            CATransaction.commit()
-        }
-        let work = DispatchWorkItem { [weak self] in self?.fadeAura() }
-        auraHideWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.auraIdleFade, execute: work)
-    }
-
-    func fadeAura() {
-        auraHideWork?.cancel()
-        auraHideWork = nil
-        guard auraContainer.opacity > 0 else { return }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = auraContainer.opacity
-        fade.toValue = 0
-        fade.duration = 0.5
-        fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        auraContainer.add(fade, forKey: "hide")
-        auraContainer.opacity = 0
-        CATransaction.commit()
-    }
-
-    /// Session start only *arms* the feedback; the rim appears on the first action
-    /// and never stays on while the agent is idle.
-    func setAura(_ visible: Bool) {
-        if !visible { fadeAura() }
-    }
-
-    func hide() {
-        for layer in [arrow, arrowGlow] {
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = layer.opacity
-            fade.toValue = 0
-            fade.duration = 0.2
-            layer.add(fade, forKey: "hide")
-            layer.opacity = 0
-        }
-    }
-}
-
 // MARK: - capture daemon
 
 /// Persistent capture process. Holding one warm `SCShareableContent` keeps the
@@ -2444,38 +2173,201 @@ func runCursorOverlay() -> Never {
     let previous = frontmostBeforeLaunch()
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
-    // Cover every display, not just the built-in one: the agent may be driving a
-    // window on a second monitor, whose origin can be negative. The view maps
-    // global top-left points into this union frame below.
+    // One transparent panel PER DISPLAY (Task 5). Each panel maps the global
+    // top-left point space into its own Cocoa frame, so screen gaps, negative
+    // origins and mixed scales never collide the way one union overlay did.
     let screens = NSScreen.screens
-    let union = screens.dropFirst().reduce(screens.first?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)) {
-        $0.union($1.frame)
+    let specs = screens.map {
+        ScreenSpec(originX: $0.frame.origin.x, originY: $0.frame.origin.y,
+                   width: $0.frame.width, height: $0.frame.height)
     }
-    let mainTop = screens.first?.frame.maxY ?? union.maxY
-    let panel = HaloPanel(contentRect: union, styleMask: [.borderless, .nonactivatingPanel],
-                          backing: .buffered, defer: false)
-    panel.isOpaque = false
-    panel.backgroundColor = .clear
-    panel.hasShadow = false
-    panel.level = .statusBar
-    panel.ignoresMouseEvents = true
-    panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications,
-                                .fullScreenAuxiliary, .stationary]
-    let view = CursorLayerView(frame: NSRect(origin: .zero, size: union.size))
-    view.overlayOrigin = union.origin
-    view.mainScreenTop = mainTop
-    // Follow the system accessibility setting live: a user can turn Reduce
-    // Motion on during a session.
+    let mainTop = screens.first?.frame.maxY ?? (specs.first.map { $0.originY + $0.height } ?? 900)
+    var overlays: [(panel: HaloPanel, view: CursorLayerView)] = []
+    for screen in screens {
+        let panel = HaloPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
+                              backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .statusBar
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications,
+                                    .fullScreenAuxiliary, .stationary]
+        let view = CursorLayerView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        view.overlayOrigin = screen.frame.origin
+        view.mainScreenTop = mainTop
+        panel.contentView = view
+        panel.orderFrontRegardless()
+        overlays.append((panel, view))
+    }
+    // Follow the system accessibility setting live on every panel's view.
+    let motionViews = overlays.map { $0.view }
     var motionObserver: NSObjectProtocol?
     motionObserver = NSWorkspace.shared.notificationCenter.addObserver(
         forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
-        object: nil, queue: .main) { [weak view] _ in
-        view?.refreshMotionPreference()
+        object: nil, queue: .main) { _ in
+        for view in motionViews { view.refreshMotionPreference() }
     }
     _ = motionObserver
-    panel.contentView = view
-    panel.orderFrontRegardless()
     stayInBackground(previous)
+
+    // Preview control folded into this helper: `preview.start/visible/stop` drive
+    // a child `cu preview` card, so one session channel owns cursor + preview.
+    // The child is owned here and torn down on explicit stop OR on this helper's
+    // own EOF/crash path (R8) so it can never be orphaned.
+    final class PreviewChild {
+        var proc: Process?
+        var pipe: Pipe?
+        var windowId: Int = 0
+        func start(windowId: Int) {
+            // A target switch must retire the old card first: the preview always
+            // shows the CURRENT target, never the first one (R7).
+            if proc?.isRunning == true {
+                if windowId == self.windowId { return }
+                stop()
+            }
+            self.windowId = windowId
+            let bin = CommandLine.arguments[0]
+            let p = Pipe()
+            let c = Process()
+            c.executableURL = URL(fileURLWithPath: bin)
+            c.arguments = ["preview", "--window", String(windowId), "--seconds", "900"]
+            c.standardInput = p
+            c.standardOutput = FileHandle.nullDevice
+            c.standardError = FileHandle.nullDevice
+            // Only a helper-owned preview treats stdin EOF as "my owner died".
+            // A standalone `cu preview` CLI must keep running without a pipe.
+            var env = ProcessInfo.processInfo.environment
+            env["CU_PREVIEW_OWNED_BY_HELPER"] = "1"
+            c.environment = env
+            try? c.run()
+            proc = c; pipe = p
+        }
+        func visible(_ on: Bool) {
+            pipe?.fileHandleForWriting.write(Data("{\"cmd\":\"visible\",\"visible\":\(on)}\n".utf8))
+        }
+        func stop() {
+            pipe?.fileHandleForWriting.write(Data("{\"cmd\":\"stop\"}\n".utf8))
+            proc?.terminate()
+            proc = nil; pipe = nil
+        }
+    }
+    let previewChild = PreviewChild()
+
+    // R11: one bounded mailbox in FRONT of the main thread. Cursor / label are
+    // coalesced to their latest value; other transient commands go into a bounded
+    // FIFO (<= visualQueueLimit) and the oldest are dropped under a stdin burst.
+    // A single drain per burst runs on the main thread and emits a RenderAck.
+    final class VisualMailbox {
+        private let lock = NSLock()
+        private var cursor: (x: Double, y: Double, glide: Bool, seq: Int)?
+        private var label: (text: String, x: Double, y: Double, seq: Int)?
+        private var pending: [[String: Any]] = []
+        private var scheduled = false
+        private var seq = 0
+        private(set) var dropped = 0
+        static let limit = 64
+
+        func nextSeq() -> Int { lock.lock(); defer { lock.unlock() }; seq += 1; return seq }
+
+        func enqueue(_ object: [String: Any]) {
+            lock.lock(); defer { lock.unlock() }
+            let command = object["cmd"] as? String ?? ""
+            let s = nextSeqLocked()
+            switch command {
+            case "cursor":
+                cursor = ((object["x"] as? NSNumber)?.doubleValue ?? 0,
+                          (object["y"] as? NSNumber)?.doubleValue ?? 0,
+                          object["glide"] as? Bool ?? true, s)
+            case "label":
+                label = (object["text"] as? String ?? "",
+                         (object["x"] as? NSNumber)?.doubleValue ?? 0,
+                         (object["y"] as? NSNumber)?.doubleValue ?? 0, s)
+            default:
+                var copy = object; copy["__seq"] = s
+                pending.append(copy)
+                if pending.count > VisualMailbox.limit {
+                    pending.removeFirst(pending.count - VisualMailbox.limit)
+                    dropped += 1
+                }
+            }
+        }
+        private func nextSeqLocked() -> Int { seq += 1; return seq }
+
+        func takeScheduled() -> Bool { lock.lock(); defer { lock.unlock() }; if scheduled { return false }; scheduled = true; return true }
+        func unschedule() { lock.lock(); scheduled = false; lock.unlock() }
+        func hasPending() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            return cursor != nil || label != nil || !pending.isEmpty
+        }
+
+        /// Returns cursor, label, the bounded batch, and counts; clears state.
+        func drain() -> (cursor: (Double, Double, Bool, Int)?, label: (String, Double, Double, Int)?, batch: [[String: Any]], maxSeq: Int, dropped: Int) {
+            lock.lock(); defer { lock.unlock() }
+            let c = cursor.map { ($0.x, $0.y, $0.glide, $0.seq) }
+            let l = label.map { ($0.text, $0.x, $0.y, $0.seq) }
+            let b = pending; pending = []
+            cursor = nil; label = nil
+            let maxSeq = max(c?.3 ?? 0, l?.3 ?? 0, b.compactMap { $0["__seq"] as? Int }.max() ?? 0)
+            let d = dropped; dropped = 0
+            return (c, l, b, maxSeq, d)
+        }
+    }
+    let mailbox = VisualMailbox()
+
+    func applyBatch(_ drained: (cursor: (Double, Double, Bool, Int)?, label: (String, Double, Double, Int)?, batch: [[String: Any]], maxSeq: Int, dropped: Int)) {
+        let receivedAtNs = DispatchTime.now().uptimeNanoseconds
+        func targetView(_ point: CGPoint) -> CursorLayerView {
+            if let index = screenIndex(forGlobal: point, screens: specs, mainTop: mainTop) {
+                return overlays[index].view
+            }
+            return overlays.first!.view
+        }
+        for overlay in overlays { overlay.view.noteActivity() }
+        if let c = drained.cursor {
+            let pt = CGPoint(x: c.0, y: c.1)
+            let view = targetView(pt); view.pulseAura(); view.scheduleCursor(at: pt, glide: c.2)
+        }
+        if let l = drained.label {
+            let pt = CGPoint(x: l.1, y: l.2)
+            let view = targetView(pt); view.pulseAura(); view.showLabel(l.0, at: pt)
+        }
+        var applied = 0
+        for object in drained.batch {
+            let cmd = object["cmd"] as? String ?? ""
+            switch cmd {
+            case "click":
+                let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
+                let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
+                let view = targetView(CGPoint(x: x, y: y)); view.pulseAura(); view.clickRipple(at: CGPoint(x: x, y: y))
+                applied += 1
+            case "aura":
+                for overlay in overlays { overlay.view.setAura(object["visible"] as? Bool ?? true) }
+                applied += 1
+            case "hide":
+                for overlay in overlays { overlay.view.hide() }
+                applied += 1
+            default:
+                break
+            }
+        }
+        // Layer transaction is committed for this batch. This is ack of receipt +
+        // commit, NOT a first-visible measurement (R11 / Spec §5.4).
+        let committedAtNs = DispatchTime.now().uptimeNanoseconds
+        writeJsonLine(["kind": "renderAck", "seq": drained.maxSeq, "applied": applied,
+                       "dropped": drained.dropped, "receivedAtNs": String(receivedAtNs),
+                       "committedAtNs": String(committedAtNs), "clockDomain": "native-monotonic"])
+    }
+
+    func scheduleDrain() {
+        if !mailbox.takeScheduled() { return }
+        DispatchQueue.main.async {
+            applyBatch(mailbox.drain())
+            mailbox.unschedule()
+            // Re-arm if more work arrived between drain() and unschedule().
+            if mailbox.hasPending() { scheduleDrain() }
+        }
+    }
 
     // Dedicated reader thread: blocking stdin reads must not stall the main run
     // loop that drives Core Animation.
@@ -2484,41 +2376,32 @@ func runCursorOverlay() -> Never {
             guard let data = line.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let cmd = object["cmd"] as? String else { continue }
-            DispatchQueue.main.async {
-                view.noteActivity()
-                if cmd == "cursor" || cmd == "click" || cmd == "label" { view.pulseAura() }
-                switch cmd {
-                case "cursor":
-                    let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
-                    let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
-                    view.showCursor(at: CGPoint(x: x, y: y),
-                                    glide: object["glide"] as? Bool ?? true)
-                case "click":
-                    let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
-                    let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
-                    view.clickRipple(at: CGPoint(x: x, y: y))
-                case "label":
-                    let x = (object["x"] as? NSNumber)?.doubleValue ?? 0
-                    let y = (object["y"] as? NSNumber)?.doubleValue ?? 0
-                    view.showLabel(object["text"] as? String ?? "", at: CGPoint(x: x, y: y))
-                case "aura":
-                    view.setAura(object["visible"] as? Bool ?? true)
-                case "hide":
-                    view.hide()
-                default:
-                    break
-                }
+            switch cmd {
+            case "cursor", "label", "click", "aura", "hide":
+                mailbox.enqueue(object)
+                scheduleDrain()
+            case "preview.start":
+                let wid = (object["windowId"] as? NSNumber)?.intValue ?? 0
+                DispatchQueue.main.async { if wid > 0 { previewChild.start(windowId: wid) } }
+            case "preview.visible":
+                let on = object["visible"] as? Bool ?? true
+                DispatchQueue.main.async { previewChild.visible(on) }
+            case "preview.stop":
+                DispatchQueue.main.async { previewChild.stop() }
+            default:
+                break
             }
         }
-        // stdin closed: the plugin went away, so exit and leave no orphan.
-        DispatchQueue.main.async { exit(0) }
+        // stdin closed: the plugin went away. Tear down the preview child we own
+        // (R8) and exit, so no preview/helper process outlives its owner.
+        DispatchQueue.main.async { previewChild.stop(); exit(0) }
     }
 
     // A session can end without a stop call (host reload, crashed client). Exit
     // after 2 idle hours so the overlay process never lives forever, without
     // pulling the cursor visuals out from under a long-but-alive session.
     let idleTimer = Timer(timeInterval: 30, repeats: true) { _ in
-        if Date().timeIntervalSince(view.lastActivityAt) > 120 * 60 { exit(0) }
+        let lastActivity = overlays.map { $0.view.lastActivityAt }.max() ?? Date(); if Date().timeIntervalSince(lastActivity) > 120 * 60 { exit(0) }
     }
     RunLoop.main.add(idleTimer, forMode: .common)
     emit(["ok": true, "cursor": "ready"])
@@ -3604,6 +3487,118 @@ func screensPayload() -> [String: Any] {
     return ["ok": true, "count": screens.count, "screens": screens]
 }
 
+// --- service control state (F2): input gate, in-flight actions, cleanup -----
+// One process, several queues -> guard shared state with a lock. The pause gate
+// closes BEFORE cleanup is attempted; a status/pause answer never claims cleanup
+// finished while an action is still in flight.
+let serviceStateLock = NSLock()
+var serviceInputGateClosed = false
+var serviceActionsInFlight = 0
+var serviceCleanupState = "complete"   // complete | pending | unknown
+var serviceRunningChildren: Set<pid_t> = []
+
+func serviceStateSnapshot() -> (gate: Bool, inFlight: Int, cleanup: String) {
+    serviceStateLock.lock(); defer { serviceStateLock.unlock() }
+    return (serviceInputGateClosed, serviceActionsInFlight, serviceCleanupState)
+}
+func serviceBeginAction() {
+    serviceStateLock.lock()
+    serviceActionsInFlight += 1
+    serviceStateLock.unlock()
+}
+func serviceEndAction() {
+    serviceStateLock.lock()
+    serviceActionsInFlight = max(0, serviceActionsInFlight - 1)
+    // After a pause-cancel we can confirm the direct child exited, but not that
+    // every descendant / held input was released — never claim "complete" then.
+    if serviceActionsInFlight == 0 && serviceCleanupState == "pending" {
+        serviceCleanupState = "unknown"
+    }
+    serviceStateLock.unlock()
+}
+func serviceRegisterChild(_ pid: pid_t) {
+    serviceStateLock.lock(); serviceRunningChildren.insert(pid); serviceStateLock.unlock()
+}
+func serviceUnregisterChild(_ pid: pid_t) {
+    serviceStateLock.lock(); serviceRunningChildren.remove(pid); serviceStateLock.unlock()
+}
+
+func writeAllFD(_ fd: Int32, _ data: Data) {
+    data.withUnsafeBytes { raw in
+        var sent = 0
+        while sent < raw.count {
+            let n = write(fd, raw.baseAddress!.advanced(by: sent), raw.count - sent)
+            if n <= 0 { break }
+            sent += n
+        }
+    }
+}
+
+/// R9: run an engine command in `--events-v1` mode and forward its NDJSON lines
+/// to the HTTP client as they arrive, so native phases (targetReady /
+/// dispatched / verified) reach the adapter BEFORE the final result instead of
+/// being fabricated after the fact.
+func runEngineNDJSON(_ argv: [String], config: ServiceConfig?, noUserPause: Bool,
+                     fd: Int32, eventContext: [String: Any]) -> [String: Any] {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    // The command name must stay first; --events-v1 is a flag of it.
+    var childArgv = argv.isEmpty ? ["--events-v1"] : [argv[0], "--events-v1"] + Array(argv.dropFirst())
+    if let sid = eventContext["sessionId"] as? String, !sid.isEmpty { childArgv += ["--session-id", sid] }
+    if let aid = eventContext["actionId"] as? String, !aid.isEmpty { childArgv += ["--action-id", aid] }
+    process.arguments = childArgv
+    var environment = ProcessInfo.processInfo.environment
+    if noUserPause || config?.pauseOnUserActivity == false { environment["CU_NO_USER_PAUSE"] = "1" }
+    environment["CU_SHOT_CLI"] = "1"
+    process.environment = environment
+    let out = Pipe()
+    process.standardOutput = out
+    process.standardError = Pipe()
+    do { try process.run() } catch {
+        return ["ok": false, "error": "spawn_failed", "message": error.localizedDescription]
+    }
+    serviceRegisterChild(process.processIdentifier)
+    defer { serviceUnregisterChild(process.processIdentifier) }
+
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+    writeAllFD(fd, Data(head.utf8))
+    func sendChunk(_ line: Data) {
+        // The NDJSON newline belongs to the payload, not to the HTTP chunk
+        // framing (the chunk parser strips CRLF, so omitting it glued objects).
+        var content = line
+        content.append(0x0A)
+        var framed = Data("\(String(content.count, radix: 16))\r\n".utf8)
+        framed.append(content)
+        framed.append(Data("\r\n".utf8))
+        writeAllFD(fd, framed)
+    }
+    var buffer = Data()
+    var lastResult: [String: Any]?
+    let handle = out.fileHandleForReading
+    while true {
+        let chunk = handle.availableData
+        if chunk.isEmpty { break }
+        buffer.append(chunk)
+        while let newline = buffer.firstIndex(of: 0x0A) {
+            let lineData = buffer.subdata(in: buffer.startIndex..<newline)
+            buffer.removeSubrange(buffer.startIndex...newline)
+            if lineData.isEmpty { continue }
+            sendChunk(lineData)
+            if let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] {
+                if obj["kind"] as? String == "result", let r = obj["result"] as? [String: Any] {
+                    lastResult = r
+                } else if obj["kind"] == nil {
+                    lastResult = obj
+                }
+            }
+        }
+    }
+    if !buffer.isEmpty { sendChunk(buffer) }
+    writeAllFD(fd, Data("0\r\n\r\n".utf8))
+    process.waitUntilExit()
+    return lastResult ?? ["ok": false, "error": "stream_incomplete"]
+}
+
 func runEngine(_ argv: [String], config: ServiceConfig? = nil, noUserPause: Bool = false) -> [String: Any] {
     var direct: [String: Any]?
     if argv == ["frontmost"] { direct = frontmostPayload() }
@@ -3631,6 +3626,8 @@ func runEngine(_ argv: [String], config: ServiceConfig? = nil, noUserPause: Bool
     do { try process.run() } catch {
         return ["ok": false, "error": "spawn_failed", "message": error.localizedDescription]
     }
+    serviceRegisterChild(process.processIdentifier)
+    defer { serviceUnregisterChild(process.processIdentifier) }
     // Drain the pipe while the child runs. Reading only after exit deadlocks as
     // soon as the payload passes the 64 KB pipe buffer — a 400-node snapshot is
     // bigger than that — and the call then burned the full 20 s timeout.
@@ -3670,6 +3667,7 @@ let engineBuildID: String = {
 
 func serviceStatus(_ config: ServiceConfig) -> [String: Any] {
     let front = frontmost()
+    let state = serviceStateSnapshot()
     var payload: [String: Any] = [
         "ok": true,
         "service": "cu",
@@ -3682,6 +3680,10 @@ func serviceStatus(_ config: ServiceConfig) -> [String: Any] {
         "accessibility": AXIsProcessTrusted(),
         "screenRecording": CGPreflightScreenCaptureAccess(),
         "paused": pauseActive(),
+        // Gate + cleanup progress are separate from `paused`: paused:true with a
+        // still-pending cleanup is NOT "everything stopped".
+        "inputGateClosed": state.gate,
+        "cleanupState": state.cleanup,
         "secureInput": secureInputPID() != nil,
         "occluder": fullScreenOverlayExists(),
         "frontmost": ["pid": Int(front.pid), "app": front.app],
@@ -3729,8 +3731,15 @@ func serve(_ config: ServiceConfig) -> Never {
     }
     emit(["ok": true, "service": "listening", "port": config.port,
           "base": "http://127.0.0.1:\(config.port)", "config": serviceConfigPath])
-    let queue = DispatchQueue(label: "cu.service")
+    // F2: reading and classifying a request must NOT happen on the action
+    // queue. A 2.4 s expect used to block the read of the next status query,
+    // which then queued behind the whole action.
+    let actionQueue = DispatchQueue(label: "cu.service.action")                            // serial: input work only
+    let controlQueue = DispatchQueue(label: "cu.service.control", attributes: .concurrent)  // status/pause/resume
     let readQueue = DispatchQueue(label: "cu.service.read", attributes: .concurrent)
+    // Bound how many requests may be mid-read; the slot is released the moment a
+    // request is classified, before it joins the action queue.
+    let readGate = DispatchSemaphore(value: 8)
     while true {
         var client = sockaddr_in()
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
@@ -3745,12 +3754,16 @@ func serve(_ config: ServiceConfig) -> Never {
         var timeout = timeval(tv_sec: 2, tv_usec: 0)
         setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout,
                    socklen_t(MemoryLayout<timeval>.size))
-        queue.async {
+        readQueue.async {
+            readGate.wait()
             guard let request = readHTTP(clientFD) else {
                 writeHTTP(clientFD, status: 400, body: jsonData(["ok": false, "error": "bad_request"]))
                 close(clientFD)
+                readGate.signal()
                 return
             }
+            // Classification only needs method + path; the body is already read.
+            readGate.signal()
             let handle: () -> Void = {
             defer { close(clientFD) }
             let authorized = request.headers["authorization"] == "Bearer \(config.token)"
@@ -3781,7 +3794,23 @@ func serve(_ config: ServiceConfig) -> Never {
                 }
                 let execStarted = DispatchTime.now().uptimeNanoseconds
                 let noUserPause = request.headers["x-cu-no-user-pause"] == "1"
+                let eventsVersion = object["eventsVersion"] as? Int ?? 0
+                let eventContext = object["eventContext"] as? [String: Any] ?? [:]
+                if eventsVersion == 1 {
+                    serviceBeginAction()
+                    let streamResult = runEngineNDJSON(argv, config: config, noUserPause: noUserPause,
+                                                       fd: clientFD, eventContext: eventContext)
+                    serviceEndAction()
+                    recordHTTPCall(peerPort: peerPort,
+                                   tool: argv.first ?? "exec",
+                                   ms: Int((DispatchTime.now().uptimeNanoseconds - execStarted) / 1_000_000),
+                                   ok: streamResult["ok"] as? Bool ?? false,
+                                   declared: declaredCaller(request.headers))
+                    return
+                }
+                serviceBeginAction()
                 let execResult = runEngine(argv, config: config, noUserPause: noUserPause)
+                serviceEndAction()
                 recordHTTPCall(peerPort: peerPort,
                                tool: argv.first ?? "exec",
                                ms: Int((DispatchTime.now().uptimeNanoseconds - execStarted) / 1_000_000),
@@ -3810,6 +3839,7 @@ func serve(_ config: ServiceConfig) -> Never {
                     var results: [[String: Any]] = []
                     let stopOnError = arguments["stopOnError"] as? Bool ?? true
                     var failed = false
+                    serviceBeginAction()
                     for step in steps {
                         let result: [String: Any]
                         if let name = step["tool"] as? String,
@@ -3825,6 +3855,7 @@ func serve(_ config: ServiceConfig) -> Never {
                             if stopOnError { break }
                         }
                     }
+                    serviceEndAction()
                     writeHTTP(clientFD, status: 200, body: jsonData(["ok": !failed, "results": results,
                               "completed": results.count, "requested": steps.count]))
                     return
@@ -3834,7 +3865,9 @@ func serve(_ config: ServiceConfig) -> Never {
                     return
                 }
                 let callStarted = DispatchTime.now().uptimeNanoseconds
+                serviceBeginAction()
                 let callResult = runEngine(argv, config: config)
+                serviceEndAction()
                 recordHTTPCall(peerPort: peerPort, tool: tool,
                                ms: Int((DispatchTime.now().uptimeNanoseconds - callStarted) / 1_000_000),
                                ok: callResult["ok"] as? Bool ?? false,
@@ -3851,37 +3884,62 @@ func serve(_ config: ServiceConfig) -> Never {
                     writeHTTP(clientFD, status: 400, body: jsonData(["ok": false, "error": "bad_image"]))
                     return
                 }
+                serviceBeginAction()
                 let payload = ocrPayload(png: png,
                                          find: object["find"] as? String,
                                          exact: object["exact"] as? Bool ?? false,
                                          level: object["level"] as? String)
+                serviceEndAction()
                 writeHTTP(clientFD, status: 200, body: jsonData(payload))
             case ("POST", "/v1/pause"):
                 guard authorized else {
                     writeHTTP(clientFD, status: 401, body: jsonData(["ok": false, "error": "unauthorized"]))
                     return
                 }
+                // Close the gate first, then cancel in-flight work this service
+                // owns. Report cleanup honestly: pending while an action is still
+                // running, complete only when nothing is in flight.
+                serviceStateLock.lock()
+                serviceInputGateClosed = true
+                let pauseInFlight = serviceActionsInFlight
+                serviceCleanupState = pauseInFlight > 0 ? "pending" : "complete"
+                let cancelChildren = Array(serviceRunningChildren)
+                serviceStateLock.unlock()
                 markPause()
-                writeHTTP(clientFD, status: 200, body: jsonData(["ok": true, "paused": true]))
+                for childPid in cancelChildren { kill(childPid, SIGTERM) }
+                writeHTTP(clientFD, status: 200, body: jsonData([
+                    "ok": true, "paused": true,
+                    "inputGateClosed": true,
+                    "cleanupState": pauseInFlight > 0 ? "pending" : "complete",
+                    "cancelled": cancelChildren.count,
+                ]))
             case ("POST", "/v1/resume"):
                 guard authorized else {
                     writeHTTP(clientFD, status: 401, body: jsonData(["ok": false, "error": "unauthorized"]))
                     return
                 }
                 clearPause()
-                writeHTTP(clientFD, status: 200, body: jsonData(["ok": true, "paused": false]))
+                serviceStateLock.lock()
+                serviceInputGateClosed = false
+                serviceCleanupState = "complete"
+                serviceStateLock.unlock()
+                writeHTTP(clientFD, status: 200, body: jsonData([
+                    "ok": true, "paused": false, "inputGateClosed": false, "cleanupState": "complete",
+                ]))
             default:
                 writeHTTP(clientFD, status: 404, body: jsonData(["ok": false, "error": "not_found"]))
             }
             }
             // Health and catalogue reads answer on their own concurrent queue: a
-            // 20 s action must not make the console look frozen, and a status
-            // query must not queue behind a slow screenshot. Writes stay on the
-            // serial queue, so action order is unchanged.
-            if request.method == "GET" {
-                readQueue.async(execute: handle)
+            // Only input work is serialised. Status / pause / resume and
+            // catalogue reads run on the concurrent control queue so they never
+            // wait behind a slow action (F2).
+            let isWork = request.method == "POST" &&
+                ["/v1/exec", "/v1/call", "/v1/ocr", "/v1/agents/connect"].contains(request.path)
+            if isWork {
+                actionQueue.async(execute: handle)
             } else {
-                handle()
+                controlQueue.async(execute: handle)
             }
         }
     }
@@ -4776,6 +4834,11 @@ func runMenuBar(openSettings: Bool, openMenu: Bool = false, openConsole: Bool = 
 
 let args = Args(Array(CommandLine.arguments.dropFirst()))
 
+// `--events-v1` opts this command into NDJSON phase events before its result.
+eventsV1 = args.flag("events-v1")
+if let sid = args["session-id"], !sid.isEmpty { eventsSessionId = sid }
+if let aid = args["action-id"], !aid.isEmpty { eventsActionId = aid } else { eventsActionId = "cli-\(args.command)" }
+
 // LaunchServices starts the bundle with no arguments; treat that as "open the app"
 // instead of printing an unknown-command error and exiting.
 switch args.command.isEmpty ? "app" : args.command {
@@ -4977,10 +5040,13 @@ case "expect":
     // Assert what actually happened, so a caller never has to trust an "ok".
     // Polls the accessibility tree (no screenshot) until the control matches,
     // the timeout runs out, or the control disappears.
-    guard let pid = args.int("pid") else { fail("missing_pid", "pass --pid <pid>") }
+    let expectPair = resolveTargetPair(pid: args.int("pid"), window: args.int("window"), action: "expect")
+    guard let pid = expectPair.pid.map({ Int($0) }) else { fail("missing_pid", "pass --pid <pid>") }
     if !requireAccessibility() {
         fail("accessibility_denied", "grant Accessibility to this binary", ["pid": pid])
     }
+    let expectTarget = actionTargetDict(pid: pid_t(pid), windowId: args.int("window"))
+    emitActionEventLine("targetReady", kind: "expect", target: expectTarget)
     let wantRef = args["ref"]
     let wantQuery = args["find"]?.lowercased()
     if wantRef == nil && wantQuery == nil {
@@ -5026,6 +5092,8 @@ case "expect":
             problems.append("text does not contain \"\(wantContains)\"")
         }
         if problems.isEmpty {
+            emitActionEventLine("verified", kind: "expect", target: expectTarget,
+                                verification: ["matched": true, "evidenceRef": "expect"])
             emit(["ok": true, "action": "expect", "ref": node.ref, "role": node.role,
                   "title": node.title, "enabled": node.enabled,
                   "ms": Int(Date().timeIntervalSince(started) * 1000)])
@@ -5034,6 +5102,7 @@ case "expect":
         reason = problems.joined(separator: "; ")
         usleep(200_000)
     }
+    emitActionEventLine("unverified", kind: "expect", target: expectTarget, reason: reason)
     emit(["ok": false, "action": "expect", "error": "expect_failed", "message": reason,
           "pid": pid, "ms": Int(Date().timeIntervalSince(started) * 1000),
           "hint": "the app did not reach that state; the action had no visible effect"])
@@ -5047,7 +5116,8 @@ case "launch":
     launchApp(spec)
 
 case "snapshot":
-    guard let pid = args.int("pid") else { fail("missing_pid", "pass --pid <pid>") }
+    let snapshotPair = resolveTargetPair(pid: args.int("pid"), window: args.int("window"), action: "snapshot")
+    guard let pid = snapshotPair.pid.map({ Int($0) }) else { fail("missing_pid", "pass --pid <pid>") }
     if !requireAccessibility() {
         fail("accessibility_denied", "grant Accessibility to this binary", ["pid": pid])
     }
@@ -5115,12 +5185,15 @@ case "snapshot":
 
 case "setvalue", "set-value":
     guard let pid = args.int("pid") else { fail("missing_pid", "pass --pid <pid>") }
+    let svTarget = actionTargetDict(pid: pid_t(pid), windowId: args.int("window"))
+    emitActionEventLine("targetReady", kind: "type", target: svTarget)
     guard let ref = args["ref"] else { fail("missing_ref", "pass --ref e12") }
     guard let text = args["text"] else { fail("missing_text", "pass --text \"…\"") }
     let node = resolveNode(pid: pid_t(pid), ref: ref, role: args["role"], title: args["title"],
                            windowId: args.int("window").map(CGWindowID.init))
     let element = node.element
     let status = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFTypeRef)
+    if status == .success { emitActionEventLine("dispatched", kind: "type", target: svTarget) }
     guard status == .success else {
         fail("setvalue_failed", "AXUIElementSetAttributeValue returned \(status.rawValue)",
              ["ref": ref, "role": node.role])
@@ -5467,13 +5540,8 @@ case "click":
     // same rule a person follows when they click at a spot on screen. (It used
     // to ignore --pid entirely here and fall through to the window under the
     // point, which is how a click meant for 剪映 landed in Chrome.)
-    var targetPid: pid_t? = refPid != 0 ? refPid : args.int("pid").map(pid_t.init)
-    if let windowId = args.int("window") {
-        guard let window = onScreenWindows().first(where: { $0.id == CGWindowID(windowId) }) else {
-            fail("window_gone", "window \(windowId) is not on screen")
-        }
-        targetPid = window.pid
-    }
+    var targetPid: pid_t? = resolveTargetPair(pid: refPid != 0 ? Int(refPid) : args.int("pid"),
+                                             window: args.int("window"), action: "click").pid
     if targetPid == nil, !background {
         targetPid = windowAt(point)?.pid
     }
@@ -5511,6 +5579,10 @@ case "click":
             exit(1)
         }
     }
+    if let tp = targetPid, tp != 0 {
+        emitActionEventLine("targetReady", kind: "click",
+                            target: actionTargetDict(pid: tp, windowId: args.int("window")), point: point)
+    }
     if background {
         // No pid given: target whatever window is under the point, without
         // activating it or moving the system cursor.
@@ -5543,6 +5615,8 @@ case "click":
             let status = AXUIElementPerformAction(node.element, kAXPressAction as CFString)
             if status == .success {
                 markAction()
+                emitActionEventLine("dispatched", kind: "click",
+                                    target: actionTargetDict(pid: pid, windowId: args.int("window")), point: point)
                 emit(["ok": true, "action": "click", "via": "AXPress-background",
                       "ref": args["ref"] ?? "", "x": x, "y": y, "frontmostAfter": frontmost().app])
                 exit(0)
@@ -5565,6 +5639,8 @@ case "click":
         }
         clickToPid(pid, x: x, y: y, button: args["button"] ?? "left", count: args.int("count") ?? 1)
         markAction()
+        emitActionEventLine("dispatched", kind: "click",
+                            target: actionTargetDict(pid: pid, windowId: args.int("window")), point: point)
         emit(["ok": true, "action": "click", "via": "pid-events", "pid": Int(pid),
               "x": x, "y": y, "resolved": lastResolve, "frontmostAfter": frontmost().app])
         exit(0)
@@ -5609,6 +5685,10 @@ case "click":
         }
         click(x: x, y: y, button: args["button"] ?? "left", count: args.int("count") ?? 1)
     }
+    if let tp = targetPid, tp != 0 {
+        emitActionEventLine("dispatched", kind: "click",
+                            target: actionTargetDict(pid: tp, windowId: args.int("window")), point: point)
+    }
     var payload: [String: Any] = [
         "ok": true, "action": "click", "x": x, "y": y, "via": via,
         "button": args["button"] ?? "left", "count": args.int("count") ?? 1,
@@ -5627,6 +5707,8 @@ case "move":
     emit(["ok": true, "action": "move", "x": x, "y": y])
 
 case "drag":
+    let dragTarget = args.int("pid").map { actionTargetDict(pid: pid_t($0), windowId: args.int("window")) }
+    if let dragTarget { emitActionEventLine("targetReady", kind: "drag", target: dragTarget) }
     guard let from = args["from"], let to = args["to"] else {
         fail("missing_points", "pass --from x,y --to x,y")
     }
@@ -5642,6 +5724,7 @@ case "drag":
         // without warping the system cursor.
         let pid = backgroundTarget(args, "drag")
         dragToPid(pid, from: dragFrom, to: dragTo, button: args["button"] ?? "left")
+        emitActionEventLine("dispatched", kind: "drag", target: dragTarget)
         markAction()
         emit(["ok": true, "action": "drag", "from": from, "to": to,
               "via": "pid-events", "pid": Int(pid), "frontmostAfter": frontmost().app])
@@ -5660,28 +5743,35 @@ case "drag":
         }
     }
     drag(from: dragFrom, to: dragTo)
+    emitActionEventLine("dispatched", kind: "drag", target: dragTarget)
     emit(["ok": true, "action": "drag", "from": from, "to": to])
 
 case "scroll":
     let dy = args.double("dy") ?? 0
     let dx = args.double("dx") ?? 0
     if dy == 0 && dx == 0 { fail("missing_delta", "pass --dy <n> (negative scrolls down)") }
+    let scrollTarget = args.int("pid").map { actionTargetDict(pid: pid_t($0), windowId: args.int("window")) }
+    if let scrollTarget { emitActionEventLine("targetReady", kind: "scroll", target: scrollTarget) }
     var point: CGPoint?
     if let x = args.double("x"), let y = args.double("y") { point = CGPoint(x: x, y: y) }
     if args.flag("background") {
         let pid = backgroundTarget(args, "scroll")
         scrollToPid(pid, dx: dx, dy: dy)
+        emitActionEventLine("dispatched", kind: "scroll", target: scrollTarget)
         markAction()
         emit(["ok": true, "action": "scroll", "dx": dx, "dy": dy, "via": "pid-events", "pid": Int(pid)])
         exit(0)
     }
     guardedFocus(args, action: "scroll", point: point)
     scroll(dx: dx, dy: dy, at: point)
+    emitActionEventLine("dispatched", kind: "scroll", target: scrollTarget)
     markAction()
     emit(["ok": true, "action": "scroll", "dx": dx, "dy": dy])
 
 case "type":
     guard let text = args["text"] else { fail("missing_text", "pass --text \"…\"") }
+    let typeTargetInfo = args.int("pid").map { actionTargetDict(pid: pid_t($0), windowId: args.int("window")) }
+    if let typeTargetInfo { emitActionEventLine("targetReady", kind: "type", target: typeTargetInfo) }
     if args.flag("background") {
         let tryOffStage = args.flag("try-offstage")
         let pid = backgroundTarget(args, "type", allowOffStage: tryOffStage)
@@ -5703,6 +5793,7 @@ case "type":
         }
         let before = read()
         typeToPid(pid, text)
+        emitActionEventLine("dispatched", kind: "type", target: typeTargetInfo)
         pump(0.08)
         var landed: Bool? = before == nil ? nil : read() != before
         var via = "pid-events"
@@ -5741,6 +5832,7 @@ case "type":
     // both TextEdit and Chromium, so it costs a round trip and usually falls back
     // anyway. Clipboard insertion is what the shipped engine prefers too.
     pasteText(text)
+    emitActionEventLine("dispatched", kind: "type", target: typeTargetInfo)
     var via = "paste"
     var landed: Bool?
     if let pid, let before {
@@ -5767,11 +5859,14 @@ case "type":
 
 case "key":
     guard let name = args["name"] else { fail("missing_key", "pass --name enter") }
+    let keyTargetInfo = args.int("pid").map { actionTargetDict(pid: pid_t($0), windowId: args.int("window")) }
+    if let keyTargetInfo { emitActionEventLine("targetReady", kind: "key", target: keyTargetInfo) }
     if args.flag("background") {
         let tryOffStage = args.flag("try-offstage")
         let pid = backgroundTarget(args, "key", allowOffStage: tryOffStage)
         let before = tryOffStage ? inputFingerprint(pid: pid) : ""
         pressToPid(pid, name: name, modifiers: flags(args["mods"] ?? ""))
+        emitActionEventLine("dispatched", kind: "key", target: keyTargetInfo)
         markAction()
         var payload: [String: Any] = ["ok": true, "action": "key", "name": name,
                                       "mods": args["mods"] ?? "", "via": "pid-events",
@@ -5795,6 +5890,7 @@ case "key":
     }
     guardedFocus(args, action: "key")
     press(name: name, modifiers: flags(args["mods"] ?? ""))
+    emitActionEventLine("dispatched", kind: "key", target: keyTargetInfo)
     markAction()
     emit(["ok": true, "action": "key", "name": name, "mods": args["mods"] ?? ""])
 
@@ -5912,6 +6008,22 @@ case "movewindow", "move-window":
                             width: args.double("w"), height: args.double("h"))
     if result["ok"] as? Bool == true { markAction() }
     emit(result)
+
+case "ax-worker":
+    guard let axPid = args.int("pid"), axPid > 0 else { fail("missing_pid", "pass --pid <pid>") }
+    guard let axWin = args.int("window"), axWin > 0 else { fail("missing_window", "pass --window <id>") }
+    runAXWorker(pid: pid_t(axPid), windowId: CGWindowID(axWin))
+
+case "ax-worker-probe":
+    guard let probePid = args.int("pid"), probePid > 0 else { fail("missing_pid", "pass --pid <pid>") }
+    guard let probeWin = args.int("window"), probeWin > 0 else { fail("missing_window", "pass --window <id>") }
+    runAXWorkerProbe(pid: pid_t(probePid), windowId: CGWindowID(probeWin))
+
+case "preview":
+    runPreviewWindow(windowId: args.int("window").map(CGWindowID.init), seconds: args.int("seconds") ?? 8, staticOnly: args.flag("static"))
+
+case "preview-probe":
+    runPreviewProbe(windowId: args.int("window").map(CGWindowID.init), seconds: args.int("seconds") ?? 5)
 
 case "demo":
     // A window that belongs to us: used to verify window dragging and zooming
