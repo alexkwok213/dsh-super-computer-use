@@ -137,3 +137,14 @@ ui stop cleanup cleanup_unknown in 1ms cleanup=unknown
 2. 用 `.rollback/profile-package.json.bak`、`.rollback/profile-cordis.patch.yml.bak` 覆盖 profile（如果还做过其他手工改动）。
 3. 用 `.rollback/cu-installed-20261104-215341` 覆盖 `~/Library/Application Support/cu/bin/cu`，删除 `cu-preview`，`launchctl kickstart -k gui/$(id -u)/local.cu.service`。
 4. 若要完全移除 UI：禁用/移除 `dsh-super-computer-use` bundle；未删除任何会话。
+
+## 13. 已知限制与后续
+
+1. **不是 Codex 同等实现**。Codex 的预览是其私有链路；本方案复用 SCK + 自建认证帧代理，实测 8–10 fps，未做自适应码率/硬件解码调优。
+2. **预览只读**。没有点击穿透、缩放映射或浏览器扩展，符合本轮范围。
+3. **首次安装需要重启桌面 App**：`dsh.client` 的包元数据在启动时缓存。本轮为了不打断会话，使用了 `uiRefreshClient` 一次性迁移（清空 per-specifier manifest 缓存并增量 reconcile）；交付配置已置回 `false`。正常安装路径仍是“安装后重启一次”。
+4. **`cu-preview` 副本**：同一路径下已有 launchd 服务在跑时，第二个进程用同一路径做 SCK 窗口捕获会被 macOS 拒绝；安装器因此保留一个字节相同的 `cu-preview` 专门给预览 helper。它是产品安装的一部分，不是调试脚本。
+5. **`/Applications/Computer Use.app` 内引擎仍是旧构建**：只更新了服务/预览使用的 `~/Library/Application Support/cu/bin/cu`，避免重签 app bundle。要完全一致需重跑 `install-app.sh` 并重新授权。
+6. **断线恢复**：没有实现事件重放；页面重新连接后靠下一次 250 ms 轮询拿全量快照，断线期间的状态变化不补发。
+7. **目标退出/最小化/无权限**：UI 有 `no_target`/`window_not_capturable`/`stale` 分支，但本轮没有在流中真实关闭目标窗口验证。
+8. **多显示器与 Retina**：只在本机单显示器 Retina 上验证；坐标/letterbox 规则来自既有 `PreviewController` 单测，未新增多屏实测。
