@@ -15,6 +15,7 @@
 | `python3 -B engine/tests/visual_event_view.py` | 通过（rim 持久、10→1 调度、Reduce-Motion 4→0 动画、字素 28、单屏几何负坐标/空隙） |
 | `python3 -B engine/tests/aura_view.py` | 通过（边缘光 ≤65pt 四边、中心透明、淡出） |
 | `bash engine/build.sh`（**仓库根目录**执行） | 通过（已修复 `$0` 二次 `cd` 的旧问题） |
+| `bash engine/tests/run_all.sh --quick` | 通过（connection / batch / expect / observe / import / server / execution / state_adapter / import_flow / indicator 各子集均 0 failed） |
 
 ## 2. 按任务验收
 
