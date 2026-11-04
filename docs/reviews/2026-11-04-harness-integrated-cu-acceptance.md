@@ -80,13 +80,23 @@ ui stop cleanup cleanup_unknown in 1ms cleanup=unknown
 | 停止闸门 | `registry.control` 计时 | 0 ms |
 | 停止清理 | 同上 | 1 ms |
 | 预览开关对点击延迟影响 | CLI 点击 6 次中位数，开/关预览 | 359.8 ms vs 353.2 ms = **+1.9%**（含 CLI 进程启动，属保守上限） |
-| 长稳资源 | 后台采样（60 s 间隔，单 helper） | 采样进行中，见 §8.1；本轮结束时未满 30 分钟的部分标“未完成” |
+| 长稳资源 | 后台采样（60 s 间隔，单 helper） | **22.0 分钟**：host RSS 937.7→856.4 MB（无增长），helper 49.9→50.0 MB，CPU 中位 0.8%/1.0%，单 helper 全程；**30 分钟未跑满** |
 
-## 8.1 长稳采样（进行中，结束后回填）
+## 8.1 长稳采样（实际 22.0 分钟，未满 30）
 
-采样文件：`docs/reviews/evidence/soak-20261104.csv`。字段：host RSS/CPU（dsd host 进程）、helper RSS/CPU、helper 数、插件日志字节数。预览子进程每个 900 s 会由 Host/客户端重开；单 helper 约束由 Host 的 `byOwner` 去重保证。
+采样文件：`docs/reviews/evidence/soak-20261104.csv`（23 个样本，60 s 间隔，1322 s）。字段：host RSS/CPU（DSH host 进程 84711）、helper RSS/CPU、helper 数、插件日志字节数。
 
-本轮实际等待时间有限，若结束时不足 30 分钟，则只报告实际覆盖时长，不补造数字。
+| 指标 | 首 | 末 | 最小 | 最大 | 中位 |
+|---|---|---|---|---|---|
+| Host RSS | 937.7 MB | 856.4 MB | 848.9 MB | 937.7 MB | — |
+| Helper RSS | 49.9 MB | 50.0 MB | 49.8 MB | 50.2 MB | — |
+| Host CPU | — | — | — | 2.7% | 0.8% |
+| Helper CPU | — | — | — | 1.7% | 1.0% |
+| Helper 数 | 1 | 1 | 1 | 1 | 1 |
+
+- 22 分钟内 Host RSS 下降 81 MB（GC/缓存回落），没有持续增长；helper RSS 基本恒定。
+- 期间发生一次 helper 换代：旧 helper 3053 帧 / 353 s（≈8.65 fps）后退出，3 ms 内重开，首帧 410 ms；换代空窗约 0.4 s。
+- 22 分钟结束是主动停止，**不足计划中的 30 分钟**；按“未测满”处理，不把 22 分钟当 30 分钟结论。
 
 ## 9. 多聊天隔离、断线、目标退出、清理（部分）
 
