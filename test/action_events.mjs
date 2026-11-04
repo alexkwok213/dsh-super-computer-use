@@ -202,3 +202,20 @@ test('a refused click publishes failed and never dispatched', async () => {
   assert.ok(phases.includes('failed'));
   assert.ok(!phases.includes('dispatched'), `refused click must not dispatch: ${phases}`);
 });
+
+test('invalid version/phase/kind/source/clockDomain are rejected', () => {
+  assert.equal(normalizeActionEvent(baseEvent({ version: 2 })).ok, false);
+  assert.equal(normalizeActionEvent(baseEvent({ phase: 'nope' })).ok, false);
+  assert.equal(normalizeActionEvent(baseEvent({ kind: 'nope' })).ok, false);
+  assert.equal(normalizeActionEvent(baseEvent({ source: 'nope' })).ok, false);
+  assert.equal(normalizeActionEvent(baseEvent({ clockDomain: '' })).ok, false);
+});
+
+test('the parser flags malformed lines but still returns a later valid result', () => {
+  const parser = createEventStreamParser();
+  parser.push('this is not json\n');
+  parser.push(JSON.stringify({ kind: 'result', result: { ok: true } }) + '\n');
+  const final = parser.end();
+  assert.equal(final.ok, true);
+  assert.equal(final.malformed, true);
+});
