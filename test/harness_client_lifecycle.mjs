@@ -81,12 +81,32 @@ function loadClient(fetchImpl) {
   if (module.__test.CuCard) {
     module.__test.CuCard.ctx = { get: () => undefined };
   }
+  if (module.__test.Overlay) {
+    module.__test.Overlay.ctx = { get: () => undefined };
+  }
+  const expandVNodes = (node, out = []) => {
+    if (node === null || node === undefined || node === false) return out;
+    if (Array.isArray(node)) {
+      for (const child of node) expandVNodes(child, out);
+      return out;
+    }
+    if (typeof node.type === "function") {
+      return expandVNodes(node.type({ ...node.props, children: node.children }), out);
+    }
+    out.push(node);
+    expandVNodes(node.children ?? [], out);
+    if (node.props?.children !== undefined) expandVNodes(node.props.children, out);
+    return out;
+  };
   return {
     SessionStore: module.__test.SessionStore,
     PreviewController: module.__test.PreviewController,
     CuCard: module.__test.CuCard,
+    Overlay: module.__test.Overlay,
     storeFor: module.__test.storeFor,
+    expansion: module.__test.expansion,
     render: (node) => renderNode(node),
+    findVNodes: (node, predicate) => expandVNodes(node).filter(predicate),
     timers,
     images,
     advance(ms) {
@@ -214,6 +234,13 @@ function meta(overrides = {}) {
   };
 }
 
+function watch(store) {
+  store.watching = true;
+  store.previewWanted = true;
+  store.notify();
+  store.preview.open();
+}
+
 function canvas() {
   const state = { draws: 0, width: 2, height: 2 };
   state.getContext = () => ({
@@ -305,6 +332,7 @@ test("R2: a decode for target A cannot paint after target B opened", async () =>
   store.previewWanted = true;
   store.active = true;
   store.applySnapshot(snapshot({ cuSessionId: "cu-a", targetGeneration: 1, revision: 1 }));
+  watch(store);
   await h.flush();
 
   streams[0].enqueue(frame(meta({ frameId: "A" })));
@@ -354,6 +382,7 @@ test("R2: a cuSessionId change with the same generation also retires the old dec
   store.previewWanted = true;
   store.active = true;
   store.applySnapshot(snapshot({ cuSessionId: "cu-a", targetGeneration: 1, revision: 1 }));
+  watch(store);
   await h.flush();
   streams[0].enqueue(frame(meta({ cuSessionId: "cu-a", targetGeneration: 1 })));
   await h.flush();
@@ -385,6 +414,7 @@ test("R2: a stream with no first frame is aborted and explicitly degraded", asyn
   store.previewWanted = true;
   store.active = true;
   store.applySnapshot(snapshot({ cuSessionId: "cu-a", targetGeneration: 1 }));
+  watch(store);
   await h.flush();
   assert.equal(store.preview.running, true);
 
@@ -450,6 +480,8 @@ test("the real card renders preview, stopping and error state from the latest sn
   const store = h.storeFor("chat-a");
   store.active = true;
   store.applySnapshot(snapshot({ state: "running" }));
+  store.watching = true;
+  store.previewWanted = true;
   store.setPreview({ status: "live", fps: 9 });
   store.stopping = true;
   store.notify();
@@ -465,4 +497,69 @@ test("the real card renders preview, stopping and error state from the latest sn
   const second = h.render({ type: h.CuCard, props: { sessionId: "chat-a" }, children: [] });
   assert.match(second, /Last frame/);
   assert.match(second, /stop_failed/);
+});
+
+test("the default card is a compact strip; Watch is the user action that starts video", async () => {
+  const network = abortablePending();
+  const h = loadClient(network.fetch);
+  const store = h.storeFor("chat-a");
+  store.active = true;
+  store.applySnapshot(snapshot({ state: "running" }));
+  const strip = h.render({ type: h.CuCard, props: { sessionId: "chat-a" }, children: [] });
+  assert.match(strip, /Watch/);
+  assert.doesNotMatch(strip, /No preview/);
+  assert.doesNotMatch(strip, /Hide preview/);
+  assert.equal(store.preview.running, false, "no preview may be started before the user asks");
+
+  store.toggleWatch();
+  assert.equal(store.watching, true);
+  const card = h.render({ type: h.CuCard, props: { sessionId: "chat-a" }, children: [] });
+  assert.match(card, /Hide preview/);
+  assert.equal(store.preview.running, true, "Watch opens the real stream");
+  store.stop();
+});
+
+test("mounting never sends the diagnostic probe request", async () => {
+  const network = abortablePending();
+  const h = loadClient(network.fetch);
+  const store = new h.SessionStore("chat-a");
+  store.mount();
+  assert.equal(network.pending.some((entry) => entry.url.includes("/api/scu/probe")), false);
+  store.stop();
+});
+
+test("stop and expand have exactly one activation handler", () => {
+  const h = loadClient(abortablePending().fetch);
+  const store = h.storeFor("chat-a");
+  store.active = true;
+  store.applySnapshot(snapshot({ state: "running" }));
+  const tree = { type: h.CuCard, props: { sessionId: "chat-a" }, children: [] };
+  const stop = h.findVNodes(tree, (node) => node.props?.className === "scu-stop");
+  assert.equal(stop.length, 1);
+  assert.equal(typeof stop[0].props.onClick, "function");
+  assert.equal(stop[0].props.onPointerDown, undefined, "one semantic trigger, not pointerdown+click");
+
+  store.toggleWatch();
+  const expand = h.findVNodes(tree, (node) => node.props?.className === "scu-icon");
+  assert.ok(expand.length >= 1);
+  assert.equal(expand[0].props.onPointerDown, undefined);
+  assert.equal(typeof expand[0].props.onClick, "function");
+  store.stop();
+});
+
+test("overlay diagnostics are collapsed by default", () => {
+  const h = loadClient(abortablePending().fetch);
+  const store = h.storeFor("chat-a");
+  store.active = true;
+  store.applySnapshot(snapshot({ state: "running" }));
+  h.expansion.set("chat-a");
+  const tree = { type: h.Overlay, props: {}, children: [] };
+  const details = h.findVNodes(tree, (node) => node.props?.className === "scu-diag");
+  assert.equal(details.length, 1);
+  assert.equal(details[0].type, "details");
+  assert.notEqual(details[0].props.open, true, "diagnostics must not be permanently open");
+  const text = h.render(tree);
+  assert.match(text, /Details/);
+  h.expansion.set(null);
+  store.stop();
 });

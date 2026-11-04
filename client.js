@@ -25,6 +25,9 @@ window.__ModuleLoader__.load({
       en: {
         "card.expand": "Expand",
         "card.collapse": "Collapse",
+        "card.watch": "Watch",
+        "card.hidePreview": "Hide preview",
+        "card.details": "Details",
         "card.stop": "Stop",
         "card.stopping": "Stopping…",
         "card.target": "Target",
@@ -77,6 +80,9 @@ window.__ModuleLoader__.load({
       zh: {
         "card.expand": "展开",
         "card.collapse": "收起",
+        "card.watch": "观看",
+        "card.hidePreview": "收起预览",
+        "card.details": "详情",
         "card.stop": "停止",
         "card.stopping": "正在停止…",
         "card.target": "目标",
@@ -297,6 +303,7 @@ window.__ModuleLoader__.load({
         const snapshot = this.store.getSnapshot();
         if (!this.store.active) return;
         if (!snapshot?.cuSessionId || this.running || this.opening) return;
+        if (!ACTIVE_STATES.has(snapshot.state)) return;
         if (this.store.expanded === false && this.store.previewWanted === false) return;
         const identity = {
           cuSessionId: snapshot.cuSessionId,
@@ -580,6 +587,9 @@ window.__ModuleLoader__.load({
         this.lastError = null;
         this.dismissed = false;
         this.expanded = false;
+        // The user explicitly asked to watch this session's preview. The card
+        // stays a ~40 px strip until this is true.
+        this.watching = false;
         this.previewWanted = false;
         this.preview = new PreviewController(this);
         this.previewInfo = { status: "unavailable", fps: 0, frameAgeMs: null };
@@ -614,6 +624,7 @@ window.__ModuleLoader__.load({
           lastError: this.lastError,
           stopping: this.stopping === true,
           expanded: this.expanded,
+          watching: this.watching,
           previewWanted: this.previewWanted,
           stoppedAt: this.stoppedAt,
           probe: this.probe,
@@ -644,7 +655,8 @@ window.__ModuleLoader__.load({
         if (this.mounts === 1) {
           this.dismissed = false;
           this.start();
-          this.runProbe();
+          // The carrier probe is a diagnosis route, not product traffic. It is
+          // only exercised by tests; a normal client never sends it.
         }
         return () => {
           this.mounts = Math.max(0, this.mounts - 1);
@@ -758,6 +770,7 @@ window.__ModuleLoader__.load({
         if (this.snapshot.revision > next.revision) return; // never regress
         const wasActive = ACTIVE_STATES.has(this.snapshot.state);
         const becameActive = ACTIVE_STATES.has(next.state);
+        const wasFinal = FINAL_STATES.has(this.snapshot.state);
         const previousGeneration = this.snapshot.targetGeneration;
         const previousCuSessionId = this.snapshot.cuSessionId;
         this.snapshot = next;
@@ -772,12 +785,22 @@ window.__ModuleLoader__.load({
         }
         if (FINAL_STATES.has(next.state)) {
           this.stoppedAt = this.stoppedAt ?? Date.now();
+          // A finished session keeps no live view; the last frame is already
+          // on screen and the card says it is stopped.
+          this.watching = false;
+          this.previewWanted = false;
           this.preview.close();
         }
         this.notify();
         if (becameActive && !wasActive) {
           this.dismissed = false;
           this.stoppedAt = null;
+          this.watching = false;
+          this.previewWanted = false;
+        }
+        if (wasFinal && ACTIVE_STATES.has(next.state)) {
+          this.watching = false;
+          this.previewWanted = false;
         }
         if (ACTIVE_STATES.has(next.state) && (this.expanded || this.previewWanted)) {
           this.preview.open();
@@ -789,20 +812,34 @@ window.__ModuleLoader__.load({
         this.notify();
       }
 
+      toggleWatch() {
+        if (FINAL_STATES.has(this.snapshot.state)) return;
+        if (this.watching) {
+          this.watching = false;
+          this.previewWanted = false;
+          this.preview.close();
+        } else {
+          this.watching = true;
+          this.previewWanted = true;
+          this.pollNow(true);
+          this.preview.open();
+        }
+        this.notify();
+      }
+
       toggleExpanded() {
-        // AXPress can arrive together with a synthesized click; a single
-        // physical activation must not toggle twice and close the panel again.
-        const now = performance.now();
-        if (now - (this.lastToggleAt ?? 0) < 250) return;
-        this.lastToggleAt = now;
         this.expanded = !this.expanded;
-        this.previewWanted = this.expanded;
-        expansion.set(this.expanded ? this.hostSessionId : null);
         if (this.expanded) {
+          this.previewWanted = true;
+          expansion.set(this.hostSessionId);
           this.pollNow(true);
           this.preview.open();
         } else {
-          this.preview.close();
+          expansion.set(null);
+          // Collapsing the big panel returns to the card the user was already
+          // watching; it never starts a preview they did not ask for.
+          this.previewWanted = this.watching === true;
+          if (!this.previewWanted) this.preview.close();
         }
         this.notify();
       }
@@ -810,9 +847,9 @@ window.__ModuleLoader__.load({
       closeExpanded() {
         if (!this.expanded) return;
         this.expanded = false;
-        this.previewWanted = false;
         expansion.set(null);
-        this.preview.close();
+        this.previewWanted = this.watching === true;
+        if (!this.previewWanted) this.preview.close();
         this.notify();
       }
 
@@ -977,6 +1014,15 @@ window.__ModuleLoader__.load({
   -webkit-backdrop-filter: blur(18px) saturate(1.35); backdrop-filter: blur(18px) saturate(1.35);
   box-shadow: 0 8px 28px rgba(0,0,0,.16), 0 1px 0 rgba(255,255,255,.06) inset;
   padding: 8px 9px 9px; overflow: hidden; animation: scu-in 120ms ease-out both; }
+.scu-strip { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 5px 9px; }
+.scu-strip .scu-head { flex: 1 1 auto; min-height: 0; }
+.scu-strip .scu-app { font-size: 11.5px; }
+.scu-strip .scu-sub { font-size: 10.5px; }
+.scu-watch { appearance: none; border: 1px solid color-mix(in srgb, var(--scu-accent) 45%, var(--scu-line));
+  background: color-mix(in srgb, var(--scu-accent) 10%, transparent); color: var(--scu-accent);
+  border-radius: 8px; padding: 4px 9px; font-size: 11px; font-weight: 600; cursor: pointer; flex: 0 0 auto; }
+.scu-watch:hover { background: color-mix(in srgb, var(--scu-accent) 18%, transparent); }
+.scu-watch:focus-visible { outline: 2px solid var(--scu-accent); outline-offset: 1px; }
 .scu-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
 .scu-dot { width: 8px; height: 8px; border-radius: 99px; flex: 0 0 auto; background: var(--scu-fg2);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--scu-fg2) 18%, transparent); }
@@ -1023,8 +1069,12 @@ window.__ModuleLoader__.load({
 .scu-panel-body { position: relative; flex: 1 1 auto; min-height: 240px; background: #05070a; display: grid; place-items: center; }
 .scu-panel-canvas { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; display: block; }
 .scu-panel-foot { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--scu-line); flex-wrap: wrap; }
-.scu-diag { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 4px 14px; padding: 8px 12px 11px;
-  border-top: 1px dashed var(--scu-line); color: var(--scu-fg2); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.scu-diag { border-top: 1px dashed var(--scu-line); color: var(--scu-fg2); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.scu-diag > summary { cursor: pointer; padding: 6px 12px; list-style: none; user-select: none; }
+.scu-diag > summary::-webkit-details-marker { display: none; }
+.scu-diag > summary::before { content: "▸ "; color: var(--scu-fg2); }
+.scu-diag[open] > summary::before { content: "▾ "; }
+.scu-diag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 4px 14px; padding: 0 12px 10px; }
 .scu-diag b { color: var(--scu-fg); font-weight: 600; }
 .scu-hint { color: var(--scu-fg2); font-size: 10.5px; flex: 1 1 220px; }
 @keyframes scu-in { from { opacity: 0; transform: translateY(4px) scale(.995); } to { opacity: 1; transform: none; } }
@@ -1091,10 +1141,9 @@ window.__ModuleLoader__.load({
           type: "button",
           className: "scu-stop",
           disabled: stopping,
-          onPointerDown: (event) => {
-            event.preventDefault();
-            store.stopControl("stop");
-          },
+          // One activation path: click (also produced by keyboard and AXPress).
+          // A pointerdown+click pair relied on the stopping flag/time to hide a
+          // double trigger instead of having only one semantic trigger.
           onClick: () => store.stopControl("stop"),
           title: t("card.stop"),
         },
@@ -1165,8 +1214,41 @@ window.__ModuleLoader__.load({
       const info = snapshot.previewInfo ?? store.previewInfo;
       const hasFrame = store.preview.frames > 0;
       const age = info.frameAgeMs;
+      const watching = snapshot.watching === true || snapshot.expanded === true;
       const badge =
         info.status === "live" ? t("card.fresh") : info.status === "stale" ? t("card.stale") : null;
+
+      const stop = h(StopButton, { store, snapshot, t });
+      const error = snapshot.lastError
+        ? h("div", { className: "scu-error", role: "status" }, snapshot.lastError)
+        : null;
+
+      if (!watching) {
+        // Default: a 40 px status strip. No empty black frame, no waiting for a
+        // click on a video that was never requested.
+        return h(
+          "div",
+          { className: "scu-root", "data-scu-card": hostSessionId },
+          h(
+            "div",
+            { className: "scu-card scu-strip", "data-state": snapshot.state },
+            h("span", { className: "scu-dot", "data-state": snapshot.state, "aria-hidden": true }),
+            h(
+              "div",
+              { className: "scu-titles" },
+              h("span", { className: "scu-app", title: targetName(snapshot, t) }, targetName(snapshot, t)),
+              h("span", { className: "scu-sub" }, stateText(t, snapshot)),
+            ),
+            h(
+              "button",
+              { type: "button", className: "scu-watch", onClick: () => store.toggleWatch() },
+              t("card.watch"),
+            ),
+            stop,
+            error,
+          ),
+        );
+      }
 
       return h(
         "div",
@@ -1182,12 +1264,7 @@ window.__ModuleLoader__.load({
               "div",
               { className: "scu-titles" },
               h("span", { className: "scu-app", title: targetName(snapshot, t) }, targetName(snapshot, t)),
-              h(
-                "span",
-                { className: "scu-sub" },
-                stateText(t, snapshot),
-                snapshot.state === "cleanup_unknown" ? "" : "",
-              ),
+              h("span", { className: "scu-sub" }, stateText(t, snapshot)),
             ),
             h(
               "button",
@@ -1197,10 +1274,6 @@ window.__ModuleLoader__.load({
                 "aria-expanded": snapshot.expanded ? "true" : "false",
                 "aria-label": snapshot.expanded ? t("card.collapse") : t("card.expand"),
                 title: snapshot.expanded ? t("card.collapse") : t("card.expand"),
-                onPointerDown: (event) => {
-                  event.preventDefault();
-                  store.toggleExpanded();
-                },
                 onClick: () => store.toggleExpanded(),
               },
               h(
@@ -1239,11 +1312,14 @@ window.__ModuleLoader__.load({
                 ? stateText(t, snapshot)
                 : `${snapshot.target?.windowId ? `#${snapshot.target.windowId}` : ""} ${ageText(age, t)}`.trim(),
             ),
-            h(StopButton, { store, snapshot, t }),
+            h(
+              "button",
+              { type: "button", className: "scu-watch", onClick: () => store.toggleWatch() },
+              t("card.hidePreview"),
+            ),
+            stop,
           ),
-          snapshot.lastError
-            ? h("div", { className: "scu-error", role: "status" }, snapshot.lastError)
-            : null,
+          error,
         ),
       );
     }
@@ -1259,6 +1335,7 @@ window.__ModuleLoader__.load({
         store ? store.getSnapshot : EMPTY_SNAPSHOT_GET,
       );
       const closeRef = useRef(null);
+      const panelRef = useRef(null);
       const previousFocus = useRef(null);
 
       useEffect(() => {
@@ -1268,6 +1345,27 @@ window.__ModuleLoader__.load({
           if (event.key === "Escape") {
             event.stopPropagation();
             store?.closeExpanded();
+            return;
+          }
+          if (event.key !== "Tab") return;
+          const panel = panelRef.current;
+          if (!panel) return;
+          const focusables = [...panel.querySelectorAll(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+          )].filter((node) => !node.disabled && node.getClientRects().length > 0);
+          if (focusables.length === 0) {
+            event.preventDefault();
+            closeRef.current?.focus?.();
+            return;
+          }
+          const first = focusables[0];
+          const last = focusables[focusables.length - 1];
+          if (event.shiftKey && (document.activeElement === first || !panel.contains(document.activeElement))) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && (document.activeElement === last || !panel.contains(document.activeElement))) {
+            event.preventDefault();
+            first.focus();
           }
         };
         document.addEventListener("keydown", onKey, true);
@@ -1295,7 +1393,6 @@ window.__ModuleLoader__.load({
       if (FINAL_STATES.has(snapshot.state) && store.stoppedAt && Date.now() - store.stoppedAt > 60000) return null;
 
       const info = snapshot.previewInfo ?? store.previewInfo;
-      const probe = snapshot.probe;
       const target = targetName(snapshot, t);
       return h(
         "div",
@@ -1311,6 +1408,7 @@ window.__ModuleLoader__.load({
           h(
             "div",
             {
+              ref: panelRef,
               className: "scu-panel",
               role: "dialog",
               "aria-modal": "true",
@@ -1334,10 +1432,6 @@ window.__ModuleLoader__.load({
                   className: "scu-icon",
                   "aria-label": t("overlay.close"),
                   title: t("overlay.close"),
-                  onPointerDown: (event) => {
-                    event.preventDefault();
-                    store.closeExpanded();
-                  },
                   onClick: () => store.closeExpanded(),
                 },
                 h(
@@ -1380,21 +1474,19 @@ window.__ModuleLoader__.load({
               h(StopButton, { store, snapshot, t }),
             ),
             h(
-              "div",
+              "details",
               { className: "scu-diag" },
-              h("span", null, h("b", null, t("diag.carrier")), ` ${probe?.carrier ?? "—"}`),
+              h("summary", null, t("card.details")),
               h(
-                "span",
-                null,
-                h("b", null, t("diag.probe")),
-                ` ${probe?.ok ? `${probe.firstChunkMs}ms / ${probe.chunks} chunks${probe.aborted ? " / aborted" : ""}` : probe?.error ?? "—"}`,
-              ),
-              h("span", null, h("b", null, t("diag.generation")), ` ${snapshot.targetGeneration ?? "—"}`),
-              h(
-                "span",
-                null,
-                h("b", null, t("diag.frames")),
-                ` ${store.preview.frames}${store.preview.dropped ? ` / dropped ${store.preview.dropped}` : ""}${info.decodeMs ? ` / ${info.decodeMs}ms` : ""}`,
+                "div",
+                { className: "scu-diag-grid" },
+                h("span", null, h("b", null, t("diag.generation")), ` ${snapshot.targetGeneration ?? "—"}`),
+                h(
+                  "span",
+                  null,
+                  h("b", null, t("diag.frames")),
+                  ` ${store.preview.frames}${store.preview.dropped ? ` / dropped ${store.preview.dropped}` : ""}${info.decodeMs ? ` / ${info.decodeMs}ms` : ""}`,
+                ),
               ),
             ),
           ),
@@ -1409,7 +1501,7 @@ window.__ModuleLoader__.load({
       // The Harness module table only needs inject/apply. The test runner loads
       // this same factory and drives the real classes; keeping the hook here is
       // cheaper and more honest than a second copy of the lifecycle logic.
-      __test: { SessionStore, PreviewController, CuCard, Overlay, storeFor },
+      __test: { SessionStore, PreviewController, CuCard, Overlay, storeFor, expansion },
       apply(ctx) {
         CuCard.ctx = ctx;
         Overlay.ctx = ctx;
