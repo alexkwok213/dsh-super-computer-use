@@ -82,7 +82,7 @@ test("a foreign chat cannot stop the owner and learns nothing about it", async (
   assert.equal(manager.activeSession?.windowId, 11);
 });
 
-test("stale cuSessionId and stale revision are rejected with 409", async () => {
+test("a stale cuSessionId is rejected; a stale revision does not block the stop", async () => {
   const manager = createManager();
   const registry = createCuUiRegistry({ manager });
   const a = registry.claim("chat-a");
@@ -105,10 +105,9 @@ test("stale cuSessionId and stale revision are rejected with 409", async () => {
     expectedRevision: 0,
     command: "stop",
   });
-  assert.equal(staleRevision.ok, false);
-  assert.equal(staleRevision.status, 409);
-  assert.equal(staleRevision.error, "stale_revision");
-  assert.equal(manager.stopCalls, 0);
+  assert.equal(staleRevision.ok, true);
+  assert.equal(staleRevision.status, undefined);
+  assert.equal(manager.stopCalls, 1);
 });
 
 test("stop closes the gate immediately, is idempotent and reports unknown cleanup", async () => {

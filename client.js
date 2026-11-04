@@ -622,20 +622,26 @@ window.__ModuleLoader__.load({
         this.stopping = true;
         this.notify();
         try {
+          // STOP is identity-based: the server ignores ordinary state revisions
+          // so a click between two polls still stops. Sending expectedRevision
+          // here would reintroduce exactly the 409 this fixes.
           const data = await postJson(CONTROL_PATH, {
             hostSessionId: this.hostSessionId,
             cuSessionId: this.snapshot.cuSessionId,
-            expectedRevision: this.snapshot.revision,
             command,
           });
-          if (data?.snapshot) this.applySnapshot(data.snapshot);
-          if (data?.state) {
-            this.applySnapshot({
+          // Prefer the host's authoritative snapshot. Never fabricate
+          // revision+1: that poisons the monotonic revision gate and hides the
+          // real state until the next poll.
+          if (data?.snapshot) {
+            this.applySnapshot(data.snapshot);
+          } else if (data?.state) {
+            this.snapshot = {
               ...this.snapshot,
-              revision: this.snapshot.revision + 1,
               state: data.state,
               cleanupState: data.cleanupState ?? this.snapshot.cleanupState,
-            });
+            };
+            this.notify();
           }
           this.lastError = null;
           this.stoppedAt = Date.now();
@@ -644,6 +650,8 @@ window.__ModuleLoader__.load({
         } catch (error) {
           this.lastError = error?.message ?? String(error);
           this.notify();
+          // A stale_session means a newer session already exists; this stop was
+          // for the old one. Never replay the stop against the new session.
           this.pollNow(true);
         } finally {
           this.stopping = false;

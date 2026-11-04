@@ -1,0 +1,37 @@
+{
+  "scope": "in-memory client and real registry; no desktop input",
+  "results": [
+    {
+      "id": "R1-unmount-poll",
+      "reproduced": true,
+      "observation": {
+        "mounts": 0,
+        "timersAfterStop": 1
+      }
+    },
+    {
+      "id": "R2-late-decode",
+      "reproduced": true,
+      "observation": {
+        "drawsOfGeneration1AfterSwitchTo2": 1,
+        "status": "live"
+      }
+    },
+    {
+      "id": "R3-old-action-new-session",
+      "reproduced": true,
+      "observation": {
+        "state": "failed",
+        "error": "old_click_failed"
+      }
+    },
+    {
+      "id": "R4-stop-stale-revision",
+      "reproduced": true,
+      "observation": {
+        "error": "stale_revision",
+        "inputGateClosed": false
+      }
+    }
+  ]
+}
