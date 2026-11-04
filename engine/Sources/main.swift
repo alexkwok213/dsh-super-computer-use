@@ -2211,6 +2211,11 @@ func runCursorOverlay() -> Never {
     _ = motionObserver
     stayInBackground(previous)
 
+    // Preview control folded into this helper: `preview.start/visible/stop` drive
+    // a child `cu preview` card, so one session channel owns cursor + preview.
+    var previewProcess: Process?
+    var previewStdin: Pipe?
+
     // Dedicated reader thread: blocking stdin reads must not stall the main run
     // loop that drives Core Animation.
     DispatchQueue(label: "cu.cursor.stdin").async {
@@ -2250,6 +2255,33 @@ func runCursorOverlay() -> Never {
                     for overlay in overlays { overlay.view.setAura(object["visible"] as? Bool ?? true) }
                 case "hide":
                     for overlay in overlays { overlay.view.hide() }
+                case "preview.start":
+                    let wid = (object["windowId"] as? NSNumber)?.intValue ?? 0
+                    if wid > 0, previewProcess?.isRunning != true {
+                        let pipe = Pipe()
+                        let proc = Process()
+                        proc.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+                        proc.arguments = ["preview", "--window", String(wid), "--seconds", "900"]
+                        proc.standardInput = pipe
+                        proc.standardOutput = FileHandle.nullDevice
+                        proc.standardError = FileHandle.nullDevice
+                        try? proc.run()
+                        previewProcess = proc
+                        previewStdin = pipe
+                    }
+                case "preview.visible":
+                    let visible = object["visible"] as? Bool ?? true
+                    if let pipe = previewStdin {
+                        let line = "{\"cmd\":\"visible\",\"visible\":\(visible)}\n"
+                        pipe.fileHandleForWriting.write(Data(line.utf8))
+                    }
+                case "preview.stop":
+                    if let pipe = previewStdin {
+                        pipe.fileHandleForWriting.write(Data("{\"cmd\":\"stop\"}\n".utf8))
+                    }
+                    previewProcess?.terminate()
+                    previewProcess = nil
+                    previewStdin = nil
                 default:
                     break
                 }
