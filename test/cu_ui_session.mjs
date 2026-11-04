@@ -45,6 +45,16 @@ function createManager() {
   };
 }
 
+function beginLabel(registry, hostSessionId) {
+  registry.beginAction(hostSessionId, { tool: "cu_type", label: "x".repeat(200) + "\n\u0000" });
+}
+
+function begin(registry, hostSessionId = "chat-a", tool = "cu_click") {
+  const claimed = registry.beginAction(hostSessionId, { tool });
+  assert.equal(claimed.ok, true, JSON.stringify(claimed));
+  return claimed.ticket;
+}
+
 test("one owner: a second chat is refused and sees only busy", async () => {
   const manager = createManager();
   const registry = createCuUiRegistry({ manager });
@@ -87,8 +97,8 @@ test("a stale cuSessionId is rejected; a stale revision does not block the stop"
   const registry = createCuUiRegistry({ manager });
   const a = registry.claim("chat-a");
   manager.start();
-  registry.beginAction("chat-a", { tool: "cu_click" });
-  registry.endAction("chat-a", { ok: true });
+  const ticket = begin(registry, "chat-a", "cu_click");
+  registry.endAction(ticket, { ok: true });
 
   const staleSession = await registry.control({
     hostSessionId: "chat-a",
@@ -151,7 +161,7 @@ test("after the owner stops, another chat may start; no takeover of the target",
   const b = registry.claim("chat-b");
   assert.equal(b.ok, true);
   manager.start(88, 999, "Finder");
-  registry.beginAction("chat-b", { tool: "cu_click" });
+  begin(registry, "chat-b", "cu_click");
   const view = registry.snapshot("chat-b");
   assert.equal(view.target.windowId, 88);
   assert.equal(view.state, "running");
@@ -160,25 +170,25 @@ test("after the owner stops, another chat may start; no takeover of the target",
   assert.equal(registry.snapshot("chat-a").target, null);
 });
 
-test("tool lifecycle maps to running / waiting / verified / failed", async () => {
+test("tool lifecycle maps to running / unverified / verified / failed", async () => {
   const manager = createManager();
   const registry = createCuUiRegistry({ manager });
   const a = registry.claim("chat-a");
   manager.start(5, 6, "Notes");
 
-  registry.beginAction("chat-a", { tool: "cu_click" });
+  const click = begin(registry, "chat-a", "cu_click");
   assert.equal(registry.snapshot("chat-a").state, "running");
   assert.equal(registry.snapshot("chat-a").action.kind, "click");
 
-  registry.endAction("chat-a", { ok: true });
-  assert.equal(registry.snapshot("chat-a").state, "waiting");
+  registry.endAction(click, { ok: true });
+  assert.equal(registry.snapshot("chat-a").state, "unverified");
 
-  registry.beginAction("chat-a", { tool: "cu_expect" });
-  registry.endAction("chat-a", { ok: true, verified: true });
+  const expect = begin(registry, "chat-a", "cu_expect");
+  registry.endAction(expect, { ok: true, verified: true });
   assert.equal(registry.snapshot("chat-a").state, "verified");
 
-  registry.beginAction("chat-a", { tool: "cu_type" });
-  registry.endAction("chat-a", { ok: false, error: "element not found" });
+  const typed = begin(registry, "chat-a", "cu_type");
+  registry.endAction(typed, { ok: false, error: "element not found" });
   assert.equal(registry.snapshot("chat-a").state, "failed");
   assert.match(registry.snapshot("chat-a").error, /element not found/);
   assert.equal(a.ok, true);
@@ -189,14 +199,14 @@ test("a late in-flight result cannot overwrite a UI stop", async () => {
   const registry = createCuUiRegistry({ manager });
   const a = registry.claim("chat-a");
   manager.start();
-  registry.beginAction("chat-a", { tool: "cu_click" });
+  const ticket = begin(registry, "chat-a", "cu_click");
   const stopping = registry.control({
     hostSessionId: "chat-a",
     cuSessionId: a.cuSessionId,
     command: "stop",
   });
   // The click that was in flight when the user pressed Stop resolves now.
-  registry.endAction("chat-a", { ok: false, error: "cancelled" });
+  registry.endAction(ticket, { ok: false, error: "cancelled" });
   await stopping;
   const view = registry.snapshot("chat-a");
   assert.equal(view.state, "cleanup_unknown");
@@ -242,7 +252,7 @@ test("labels never carry control characters or unbounded text", () => {
   const registry = createCuUiRegistry({ manager });
   registry.claim("chat-a");
   manager.start();
-  registry.beginAction("chat-a", { tool: "cu_type", label: "x".repeat(200) + "\n\u0000" });
+  beginLabel(registry, "chat-a");
   const view = registry.snapshot("chat-a");
   assert.ok(view.label.length <= 64);
   assert.doesNotMatch(view.label, /[\u0000-\u001f]/);

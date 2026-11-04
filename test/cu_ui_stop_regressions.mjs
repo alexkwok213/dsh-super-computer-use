@@ -59,11 +59,11 @@ test("R4: a stop with an out-of-date revision still stops the current session", 
   const claimed = registry.claim("chat-a");
   manager.start();
 
-  registry.beginAction("chat-a", { tool: "cu_click" });
+  const click = registry.beginAction("chat-a", { tool: "cu_click" });
   const observedRevision = registry.snapshot("chat-a").revision;
   // A normal result bumps the revision between the snapshot the user saw and
   // the click on Stop. That must not turn the stop into a 409.
-  registry.endAction("chat-a", { ok: true });
+  registry.endAction(click.ticket, { ok: true });
   assert.notEqual(registry.snapshot("chat-a").revision, observedRevision);
 
   const stopped = await registry.control({

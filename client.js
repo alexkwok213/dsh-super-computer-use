@@ -18,7 +18,7 @@ window.__ModuleLoader__.load({
     const CONTROL_PATH = "/api/scu/control";
     const PREVIEW_PATH = "/api/scu/preview";
     const PROBE_PATH = "/api/scu/probe";
-    const ACTIVE_STATES = new Set(["claimed", "running", "waiting", "verified", "failed", "stopping"]);
+    const ACTIVE_STATES = new Set(["claimed", "running", "waiting", "verified", "unverified", "failed", "stopping"]);
     const FINAL_STATES = new Set(["stopped", "cleanup_unknown"]);
 
     const STRINGS = {
@@ -36,7 +36,8 @@ window.__ModuleLoader__.load({
         "card.waitingForFrame": "Waiting for the first frame…",
         "state.claimed": "Preparing",
         "state.running": "Working",
-        "state.waiting": "Done, not verified",
+        "state.waiting": "Waiting",
+        "state.unverified": "Done, not verified",
         "state.verified": "Verified",
         "state.failed": "Failed",
         "state.stopping": "Stopping",
@@ -87,7 +88,8 @@ window.__ModuleLoader__.load({
         "card.waitingForFrame": "等待首帧…",
         "state.claimed": "准备中",
         "state.running": "执行中",
-        "state.waiting": "已执行未验证",
+        "state.waiting": "等待中",
+        "state.unverified": "已执行未验证",
         "state.verified": "已验证",
         "state.failed": "失败",
         "state.stopping": "停止中",
