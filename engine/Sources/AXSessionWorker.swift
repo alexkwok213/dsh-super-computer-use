@@ -125,3 +125,45 @@ func runAXWorkerProbe(pid: pid_t, windowId: CGWindowID) -> Never {
           "dispatch": dispatch, "redispatch": redispatch, "afterInvalidate": rejected])
     exit(ok ? 0 : 1)
 }
+
+/// Resident AX worker (Task 8): a long-lived process that keeps the retained
+/// objects + epoch across requests, so a token minted by one `observe` can be
+/// dispatched by a later `click` in the same session. Protocol: one JSON per
+/// stdin line, one JSON reply per command.
+func runAXWorker(pid: pid_t, windowId: CGWindowID) -> Never {
+    let worker = AXSessionWorker()
+    worker.beginSession(pid: pid, windowId: windowId)
+    emit(["ok": true, "axWorker": "ready", "epoch": worker.epoch])
+    while let line = readLine(strippingNewline: true) {
+        guard let data = line.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let cmd = obj["cmd"] as? String else { continue }
+        switch cmd {
+        case "observe":
+            let candidates = worker.observeAndRetain()
+            let rows: [[String: Any]] = candidates.map {
+                ["path": $0.path, "role": $0.role, "title": $0.title,
+                 "elementToken": $0.elementToken, "enabled": $0.enabled]
+            }
+            emit(["ok": true, "cmd": "observe", "epoch": worker.epoch, "candidates": rows])
+        case "click":
+            guard let tokenId = obj["elementToken"] as? String else {
+                emit(["ok": false, "cmd": "click", "error": "missing_token"]); continue
+            }
+            let action = (obj["action"] as? String) ?? "AXPress"
+            let result = worker.resolveAndDispatch(tokenId: tokenId, action: action)
+            var reply = result
+            reply["cmd"] = "click"
+            emit(reply)
+        case "invalidate":
+            worker.invalidate()
+            emit(["ok": true, "cmd": "invalidate", "epoch": worker.epoch])
+        case "stop":
+            emit(["ok": true, "cmd": "stop"])
+            exit(0)
+        default:
+            emit(["ok": false, "error": "unknown_cmd", "cmd": cmd])
+        }
+    }
+    exit(0)
+}
