@@ -80,3 +80,24 @@ test('outside a real session the old one-shot click path is used', async () => {
   assert.equal(res.ok, true);
   assert.equal(calls.includes('click'), true);
 });
+
+test('cu_type verifies a retained token before typing', async () => {
+  const { manager, calls, call } = harness();
+  manager._axWorkerAllowed = true;
+  manager.axTokens = new Map([['k0.3.2', 'tok-A']]);
+  manager.axVerify = async (token) => (token === 'tok-A' ? { ok: true, verified: true } : { ok: false, error: 'identity_unproven' });
+  const res = await call('cu_type', { pid: 42, windowId: 7, ref: 'k0.3.2', text: 'hi', mode: 'type', observe: false });
+  assert.equal(res.ok, true);
+  assert.equal(calls.includes('type'), true, 'a verified identity proceeds to type via the engine');
+});
+
+test('cu_type does not type when the retained identity is rejected', async () => {
+  const { manager, calls, call } = harness();
+  manager._axWorkerAllowed = true;
+  manager.axTokens = new Map([['k0.3.2', 'tok-A']]);
+  manager.axVerify = async () => ({ ok: false, error: 'identity_unproven' });
+  const res = await call('cu_type', { pid: 42, windowId: 7, ref: 'k0.3.2', text: 'hi', mode: 'type', observe: false });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'identity_unproven');
+  assert.equal(calls.includes('type'), false, 'must not type into a rejected target');
+});

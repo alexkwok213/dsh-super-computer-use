@@ -72,6 +72,20 @@ final class AXSessionWorker {
                                  snapshotRevision: 0)
     }
 
+    /// Validate the retained object WITHOUT acting (used to gate ref typing).
+    func verify(_ tokenId: String) -> [String: Any] {
+        guard let element = retained[tokenId], let record = records[tokenId] else {
+            return ["ok": false, "error": "identity_unproven", "message": "no retained object for token"]
+        }
+        guard record.epoch == epoch else { return ["ok": false, "error": "epoch_rebuilt"] }
+        var owner: pid_t = 0
+        AXUIElementGetPid(element, &owner)
+        guard owner == pid else { return ["ok": false, "error": "stale_target"] }
+        let enabled = (attribute(element, kAXEnabledAttribute) as? Bool) ?? true
+        guard enabled else { return ["ok": false, "error": "identity_unproven", "message": "disabled"] }
+        return ["ok": true, "verified": true, "token": tokenId]
+    }
+
     /// Validate the retained object itself, then act. Never looks up by path.
     func resolveAndDispatch(tokenId: String, action: String) -> [String: Any] {
         guard let element = retained[tokenId], let record = records[tokenId] else {
@@ -155,6 +169,11 @@ func runAXWorker(pid: pid_t, windowId: CGWindowID) -> Never {
             var reply = result
             reply["cmd"] = "click"
             emit(reply)
+        case "verify":
+            guard let vt = obj["elementToken"] as? String else {
+                emit(["ok": false, "cmd": "verify", "error": "missing_token"]); continue
+            }
+            var vr = worker.verify(vt); vr["cmd"] = "verify"; emit(vr)
         case "invalidate":
             worker.invalidate()
             emit(["ok": true, "cmd": "invalidate", "epoch": worker.epoch])

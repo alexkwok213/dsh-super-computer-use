@@ -47,6 +47,16 @@ def main() -> int:
         if not button: raise RuntimeError("no Demo Button candidate")
         token = button["elementToken"]
 
+        # verify (no action) accepts the retained token and rejects a bogus one.
+        send(worker, {"cmd": "verify", "elementToken": token})
+        vok = recv(worker)
+        if vok.get("ok") is not True or vok.get("verified") is not True:
+            raise RuntimeError(f"verify should accept retained token: {vok}")
+        send(worker, {"cmd": "verify", "elementToken": "w999-1"})
+        vbad = recv(worker)
+        if vbad.get("error") != "identity_unproven":
+            raise RuntimeError(f"verify should reject bogus token: {vbad}")
+
         before = counter(pid, wid)
         send(worker, {"cmd": "click", "elementToken": token})
         click1 = recv(worker)
