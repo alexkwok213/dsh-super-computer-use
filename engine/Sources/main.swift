@@ -3619,6 +3619,42 @@ func screensPayload() -> [String: Any] {
     return ["ok": true, "count": screens.count, "screens": screens]
 }
 
+// --- service control state (F2): input gate, in-flight actions, cleanup -----
+// One process, several queues -> guard shared state with a lock. The pause gate
+// closes BEFORE cleanup is attempted; a status/pause answer never claims cleanup
+// finished while an action is still in flight.
+let serviceStateLock = NSLock()
+var serviceInputGateClosed = false
+var serviceActionsInFlight = 0
+var serviceCleanupState = "complete"   // complete | pending | unknown
+var serviceRunningChildren: Set<pid_t> = []
+
+func serviceStateSnapshot() -> (gate: Bool, inFlight: Int, cleanup: String) {
+    serviceStateLock.lock(); defer { serviceStateLock.unlock() }
+    return (serviceInputGateClosed, serviceActionsInFlight, serviceCleanupState)
+}
+func serviceBeginAction() {
+    serviceStateLock.lock()
+    serviceActionsInFlight += 1
+    serviceStateLock.unlock()
+}
+func serviceEndAction() {
+    serviceStateLock.lock()
+    serviceActionsInFlight = max(0, serviceActionsInFlight - 1)
+    // After a pause-cancel we can confirm the direct child exited, but not that
+    // every descendant / held input was released — never claim "complete" then.
+    if serviceActionsInFlight == 0 && serviceCleanupState == "pending" {
+        serviceCleanupState = "unknown"
+    }
+    serviceStateLock.unlock()
+}
+func serviceRegisterChild(_ pid: pid_t) {
+    serviceStateLock.lock(); serviceRunningChildren.insert(pid); serviceStateLock.unlock()
+}
+func serviceUnregisterChild(_ pid: pid_t) {
+    serviceStateLock.lock(); serviceRunningChildren.remove(pid); serviceStateLock.unlock()
+}
+
 func runEngine(_ argv: [String], config: ServiceConfig? = nil, noUserPause: Bool = false) -> [String: Any] {
     var direct: [String: Any]?
     if argv == ["frontmost"] { direct = frontmostPayload() }
@@ -3646,6 +3682,8 @@ func runEngine(_ argv: [String], config: ServiceConfig? = nil, noUserPause: Bool
     do { try process.run() } catch {
         return ["ok": false, "error": "spawn_failed", "message": error.localizedDescription]
     }
+    serviceRegisterChild(process.processIdentifier)
+    defer { serviceUnregisterChild(process.processIdentifier) }
     // Drain the pipe while the child runs. Reading only after exit deadlocks as
     // soon as the payload passes the 64 KB pipe buffer — a 400-node snapshot is
     // bigger than that — and the call then burned the full 20 s timeout.
@@ -3685,6 +3723,7 @@ let engineBuildID: String = {
 
 func serviceStatus(_ config: ServiceConfig) -> [String: Any] {
     let front = frontmost()
+    let state = serviceStateSnapshot()
     var payload: [String: Any] = [
         "ok": true,
         "service": "cu",
@@ -3697,6 +3736,10 @@ func serviceStatus(_ config: ServiceConfig) -> [String: Any] {
         "accessibility": AXIsProcessTrusted(),
         "screenRecording": CGPreflightScreenCaptureAccess(),
         "paused": pauseActive(),
+        // Gate + cleanup progress are separate from `paused`: paused:true with a
+        // still-pending cleanup is NOT "everything stopped".
+        "inputGateClosed": state.gate,
+        "cleanupState": state.cleanup,
         "secureInput": secureInputPID() != nil,
         "occluder": fullScreenOverlayExists(),
         "frontmost": ["pid": Int(front.pid), "app": front.app],
@@ -3744,8 +3787,15 @@ func serve(_ config: ServiceConfig) -> Never {
     }
     emit(["ok": true, "service": "listening", "port": config.port,
           "base": "http://127.0.0.1:\(config.port)", "config": serviceConfigPath])
-    let queue = DispatchQueue(label: "cu.service")
+    // F2: reading and classifying a request must NOT happen on the action
+    // queue. A 2.4 s expect used to block the read of the next status query,
+    // which then queued behind the whole action.
+    let actionQueue = DispatchQueue(label: "cu.service.action")                            // serial: input work only
+    let controlQueue = DispatchQueue(label: "cu.service.control", attributes: .concurrent)  // status/pause/resume
     let readQueue = DispatchQueue(label: "cu.service.read", attributes: .concurrent)
+    // Bound how many requests may be mid-read; the slot is released the moment a
+    // request is classified, before it joins the action queue.
+    let readGate = DispatchSemaphore(value: 8)
     while true {
         var client = sockaddr_in()
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
@@ -3760,12 +3810,16 @@ func serve(_ config: ServiceConfig) -> Never {
         var timeout = timeval(tv_sec: 2, tv_usec: 0)
         setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout,
                    socklen_t(MemoryLayout<timeval>.size))
-        queue.async {
+        readQueue.async {
+            readGate.wait()
             guard let request = readHTTP(clientFD) else {
                 writeHTTP(clientFD, status: 400, body: jsonData(["ok": false, "error": "bad_request"]))
                 close(clientFD)
+                readGate.signal()
                 return
             }
+            // Classification only needs method + path; the body is already read.
+            readGate.signal()
             let handle: () -> Void = {
             defer { close(clientFD) }
             let authorized = request.headers["authorization"] == "Bearer \(config.token)"
@@ -3796,7 +3850,9 @@ func serve(_ config: ServiceConfig) -> Never {
                 }
                 let execStarted = DispatchTime.now().uptimeNanoseconds
                 let noUserPause = request.headers["x-cu-no-user-pause"] == "1"
+                serviceBeginAction()
                 let execResult = runEngine(argv, config: config, noUserPause: noUserPause)
+                serviceEndAction()
                 recordHTTPCall(peerPort: peerPort,
                                tool: argv.first ?? "exec",
                                ms: Int((DispatchTime.now().uptimeNanoseconds - execStarted) / 1_000_000),
@@ -3825,6 +3881,7 @@ func serve(_ config: ServiceConfig) -> Never {
                     var results: [[String: Any]] = []
                     let stopOnError = arguments["stopOnError"] as? Bool ?? true
                     var failed = false
+                    serviceBeginAction()
                     for step in steps {
                         let result: [String: Any]
                         if let name = step["tool"] as? String,
@@ -3840,6 +3897,7 @@ func serve(_ config: ServiceConfig) -> Never {
                             if stopOnError { break }
                         }
                     }
+                    serviceEndAction()
                     writeHTTP(clientFD, status: 200, body: jsonData(["ok": !failed, "results": results,
                               "completed": results.count, "requested": steps.count]))
                     return
@@ -3849,7 +3907,9 @@ func serve(_ config: ServiceConfig) -> Never {
                     return
                 }
                 let callStarted = DispatchTime.now().uptimeNanoseconds
+                serviceBeginAction()
                 let callResult = runEngine(argv, config: config)
+                serviceEndAction()
                 recordHTTPCall(peerPort: peerPort, tool: tool,
                                ms: Int((DispatchTime.now().uptimeNanoseconds - callStarted) / 1_000_000),
                                ok: callResult["ok"] as? Bool ?? false,
@@ -3866,37 +3926,62 @@ func serve(_ config: ServiceConfig) -> Never {
                     writeHTTP(clientFD, status: 400, body: jsonData(["ok": false, "error": "bad_image"]))
                     return
                 }
+                serviceBeginAction()
                 let payload = ocrPayload(png: png,
                                          find: object["find"] as? String,
                                          exact: object["exact"] as? Bool ?? false,
                                          level: object["level"] as? String)
+                serviceEndAction()
                 writeHTTP(clientFD, status: 200, body: jsonData(payload))
             case ("POST", "/v1/pause"):
                 guard authorized else {
                     writeHTTP(clientFD, status: 401, body: jsonData(["ok": false, "error": "unauthorized"]))
                     return
                 }
+                // Close the gate first, then cancel in-flight work this service
+                // owns. Report cleanup honestly: pending while an action is still
+                // running, complete only when nothing is in flight.
+                serviceStateLock.lock()
+                serviceInputGateClosed = true
+                let pauseInFlight = serviceActionsInFlight
+                serviceCleanupState = pauseInFlight > 0 ? "pending" : "complete"
+                let cancelChildren = Array(serviceRunningChildren)
+                serviceStateLock.unlock()
                 markPause()
-                writeHTTP(clientFD, status: 200, body: jsonData(["ok": true, "paused": true]))
+                for childPid in cancelChildren { kill(childPid, SIGTERM) }
+                writeHTTP(clientFD, status: 200, body: jsonData([
+                    "ok": true, "paused": true,
+                    "inputGateClosed": true,
+                    "cleanupState": pauseInFlight > 0 ? "pending" : "complete",
+                    "cancelled": cancelChildren.count,
+                ]))
             case ("POST", "/v1/resume"):
                 guard authorized else {
                     writeHTTP(clientFD, status: 401, body: jsonData(["ok": false, "error": "unauthorized"]))
                     return
                 }
                 clearPause()
-                writeHTTP(clientFD, status: 200, body: jsonData(["ok": true, "paused": false]))
+                serviceStateLock.lock()
+                serviceInputGateClosed = false
+                serviceCleanupState = "complete"
+                serviceStateLock.unlock()
+                writeHTTP(clientFD, status: 200, body: jsonData([
+                    "ok": true, "paused": false, "inputGateClosed": false, "cleanupState": "complete",
+                ]))
             default:
                 writeHTTP(clientFD, status: 404, body: jsonData(["ok": false, "error": "not_found"]))
             }
             }
             // Health and catalogue reads answer on their own concurrent queue: a
-            // 20 s action must not make the console look frozen, and a status
-            // query must not queue behind a slow screenshot. Writes stay on the
-            // serial queue, so action order is unchanged.
-            if request.method == "GET" {
-                readQueue.async(execute: handle)
+            // Only input work is serialised. Status / pause / resume and
+            // catalogue reads run on the concurrent control queue so they never
+            // wait behind a slow action (F2).
+            let isWork = request.method == "POST" &&
+                ["/v1/exec", "/v1/call", "/v1/ocr", "/v1/agents/connect"].contains(request.path)
+            if isWork {
+                actionQueue.async(execute: handle)
             } else {
-                handle()
+                controlQueue.async(execute: handle)
             }
         }
     }
