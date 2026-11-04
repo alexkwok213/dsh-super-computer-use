@@ -88,3 +88,12 @@ M0（可信基础：F1/F2/F3/F7/F8）与 M1 的可测试部分（F5/F6 + 统一�
 3. Task 9 真实 DSH 宿主 + 大模型端到端任务、30–60 s 演示录像、30 分钟资源曲线：**未测**。
 
 **推荐续跑顺序**：重装 → 真实会话里跑「开始→定位→点击→输入→等待→验证→停止」并录 30–60 s → 记录事件 JSONL 与耗时 → 按 §10 固定任务集填「通过/失败/未测」。
+
+## 8. 生命周期/资源短跑（Task 7/9 代理指标）
+
+`python3 -B engine/tests/resource_soak.py --seconds 20 --cycles 5`（**有界代理，计划要求的 30 分钟长跑未执行**）：cursor-overlay + 实时预览并跑 20s，按 2.5s 采样 RSS；再做 5 次预览 start/stop。
+
+- overlay RSS：baseline 39424 KB → end 39328 KB，**增长 −96 KB**（基本持平，远低于 20 MB 阈值）。
+- 5 次 start/stop 后**遗留 `cu preview` 进程 = 0**；关闭 stdin 后 cursor-overlay **正常退出**（无孤儿 helper）。
+
+结论：短时无泄漏、无遗留 helper；**30 分钟长跑与 WindowServer/CPU 曲线仍未测**（需更长时间窗口）。
