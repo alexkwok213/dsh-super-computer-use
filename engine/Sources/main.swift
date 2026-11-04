@@ -5773,7 +5773,7 @@ case "ax-worker-probe":
     runAXWorkerProbe(pid: pid_t(probePid), windowId: CGWindowID(probeWin))
 
 case "preview":
-    runPreviewWindow(windowId: args.int("window").map(CGWindowID.init), seconds: args.int("seconds") ?? 8)
+    runPreviewWindow(windowId: args.int("window").map(CGWindowID.init), seconds: args.int("seconds") ?? 8, staticOnly: args.flag("static"))
 
 case "preview-probe":
     runPreviewProbe(windowId: args.int("window").map(CGWindowID.init), seconds: args.int("seconds") ?? 5)

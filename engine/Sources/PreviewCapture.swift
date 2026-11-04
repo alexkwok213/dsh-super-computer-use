@@ -127,10 +127,13 @@ func runPreviewProbe(windowId: CGWindowID?, seconds: Int) -> Never {
 /// border so the panel is unmistakably on screen (and easy to locate in a capture).
 final class PreviewCardView: NSView {
     let displayLayer = AVSampleBufferDisplayLayer()
+    let staticLayer = CALayer()   // static-frame fallback when no live first frame
     private let border = CALayer()
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
+        staticLayer.contentsGravity = .resizeAspect
+        layer?.addSublayer(staticLayer)
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = NSColor.black.cgColor
         layer?.addSublayer(displayLayer)
@@ -143,6 +146,7 @@ final class PreviewCardView: NSView {
     override func layout() {
         super.layout()
         CATransaction.begin(); CATransaction.setDisableActions(true)
+        staticLayer.frame = bounds
         displayLayer.frame = bounds
         border.frame = bounds
         CATransaction.commit()
@@ -153,7 +157,7 @@ final class PreviewCardView: NSView {
 /// `seconds`, presenting live SCStream frames. Emits an early ack, then a final
 /// `{ok, preview:"shown", frames, firstFrameMs}`. A non-capturable window exits
 /// immediately with `window_not_capturable` (no empty card).
-func runPreviewWindow(windowId: CGWindowID?, seconds: Int) -> Never {
+func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = false) -> Never {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
 
@@ -191,6 +195,51 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int) -> Never {
         panel.setFrameOrigin(NSPoint(x: v.maxX - 320 - 24, y: v.maxY - 200 - 24))
     }
     panel.orderFrontRegardless()
+
+    if staticOnly {
+        // Deterministic fallback path: one still frame via SCScreenshotManager,
+        // shown statically (never a per-frame JPEG loop). Used when a live stream
+        // cannot produce a first frame, and straightforward to verify.
+        let filter = windowId != nil
+            ? SCContentFilter(desktopIndependentWindow: scWindow!)
+            : SCContentFilter(display: scDisplay!, excludingWindows: [])
+        let rect = windowId != nil
+            ? scWindow!.frame
+            : CGRect(x: 0, y: 0, width: scDisplay!.width, height: scDisplay!.height)
+        let config = SCStreamConfiguration()
+        let longest = max(rect.width, rect.height, 1)
+        let shrink = min(1.0, 1280.0 / longest)
+        config.width = Int(rect.width * shrink)
+        config.height = Int(rect.height * shrink)
+        config.showsCursor = false
+        let started = Date()
+        var result: [String: Any] = ["ok": false, "error": "static_capture_failed"]
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            do {
+                let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                DispatchQueue.main.async {
+                    card.staticLayer.contents = image
+                    card.displayLayer.isHidden = true
+                }
+                result = ["ok": true, "mode": "static", "pixelWidth": image.width,
+                          "pixelHeight": image.height,
+                          "firstFrameMs": Int(Date().timeIntervalSince(started) * 1000)]
+            } catch {
+                result = ["ok": false, "error": "static_capture_failed",
+                          "message": String(describing: error)]
+            }
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 5)
+        emit(result)
+        let stop = Timer(timeInterval: Double(max(1, seconds)), repeats: false) { _ in
+            exit((result["ok"] as? Bool) == true ? 0 : 1)
+        }
+        RunLoop.main.add(stop, forMode: .common)
+        app.run()
+        exit(0)
+    }
 
     let capture = PreviewCapture()
     capture.displayLayer = card.displayLayer
