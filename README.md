@@ -147,6 +147,17 @@ cu service [--port 47777]                         # 本地 HTTP 引擎后端
 
 ## 常见疑问
 
+**源码已更新，但 DSH 仍表现得像旧版本？**
+
+本地目录链接只更新磁盘文件，不保证正在运行的 DSH 重新加载 Node 模块。完成当前任务后完全退出并重新打开 DSH，再调用 `cu_status`：
+
+- `plugin.entryPath` 应指向本仓库的 `lib/index.mjs`。
+- `plugin.hostPid`、`plugin.loadedAt` 表示加载这份插件的宿主进程与时间。
+- `plugin.sourceHash` 是加载时 `lib/index.mjs` 与 `lib/core.mjs` 内容的 SHA-256 指纹；修改磁盘文件不会改变已经加载的指纹。
+- 没有 `plugin` 字段，说明运行的仍是未包含本次诊断的版本。顶层 `version` 属于原生引擎，不能用来判断 JS 插件是否已更新。
+
+服务不可达时，不要通过模型的 shell 临时启动常驻引擎来替代插件启动验收；这会掩盖宿主加载和进程管理问题。
+
 **重启后 `cu_*` 工具全没了？**
 
 先看 plugin 链接指向哪里：
