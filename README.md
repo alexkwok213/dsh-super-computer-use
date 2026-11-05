@@ -149,7 +149,7 @@ cu service [--port 47777]                         # 本地 HTTP 引擎后端
 
 **源码已更新，但 DSH 仍表现得像旧版本？**
 
-本地目录链接只更新磁盘文件，不保证正在运行的 DSH 重新加载 Node 模块。完成当前任务后完全退出并重新打开 DSH，再调用 `cu_status`：
+本地目录链接只更新磁盘文件，不保证正在运行的 DSH 重新加载 Node 模块。宿主插件属于 Host 模块：DSH 的 HMR 只会把变更记为 `pending`（`host-module` / `module-comparison`），不会在进程内替换已加载的代码；`plugin_manager` 重新启用同一行也只是复用旧模块（日志里出现新的 `apply()`，但没有新的 `module evaluated`）。因此：完成当前任务后完全退出并重新打开 DSH，再调用 `cu_status`：
 
 - `plugin.entryPath` 应指向本仓库的 `lib/index.mjs`。
 - `plugin.hostPid`、`plugin.loadedAt` 表示加载这份插件的宿主进程与时间。
@@ -157,6 +157,10 @@ cu service [--port 47777]                         # 本地 HTTP 引擎后端
 - 没有 `plugin` 字段，说明运行的仍是未包含本次诊断的版本。顶层 `version` 属于原生引擎，不能用来判断 JS 插件是否已更新。
 
 服务不可达时，不要通过模型的 shell 临时启动常驻引擎来替代插件启动验收；这会掩盖宿主加载和进程管理问题。
+
+**测试会不会改到我的真实 `~/.cu`？**
+
+不会。`npm test` 通过 `scripts/test-isolated.mjs` 为所有测试进程设置临时 `CU_STATE_DIR`，并在结束后核对真实 `~/.cu/config.json` 与 `pause` 未被修改。在 Node 测试上下文里，没有显式状态目录的 `CuSessionManager` 会直接返回 `test_isolation_required`，而不是启动 helper 去改写真实配置。
 
 **重启后 `cu_*` 工具全没了？**
 

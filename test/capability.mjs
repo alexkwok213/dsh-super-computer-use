@@ -145,7 +145,11 @@ test('an active session supplies the target so calls stop repeating it', async (
   assert.equal(snap.ok, true);
   assert.equal(snap.pid, 42);
   assert.equal(snap.windowId, 7);
-  assert.ok(seen[0].includes('--pid 42') && seen[0].includes('--window 7'), seen[0]);
+  // The observation also reads the window frame (for coordinate provenance),
+  // so the snapshot argv is no longer necessarily the first engine call.
+  const snapshotCall = seen.find((line) => line.startsWith('snapshot'));
+  assert.ok(snapshotCall && snapshotCall.includes('--pid 42') && snapshotCall.includes('--window 7'), snapshotCall);
+  assert.ok(seen.some((line) => line.startsWith('windows')), 'the snapshot records the live window frame');
 
   const click = await call('cu_click', { ref: 'k0.0', observe: false });
   assert.equal(click.ok, true);

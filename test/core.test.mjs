@@ -174,34 +174,51 @@ test("sniffImageMediaType detects PNG and JPEG headers", () => {
 });
 
 test("live CU service roundtrip (windows listing, frontmost, screens, screenshot)", async () => {
-  const manager = new CuSessionManager();
-  const status = await manager.getStatus();
-  assert.equal(status.ok, true, "CU service on 127.0.0.1:47777 should be reachable");
-  assert.equal(status.accessibility, true, "CU service should have Accessibility granted");
-  assert.equal(status.screenRecording, true, "CU service should have Screen Recording granted");
+  // This test needs a real helper (TCC, WindowServer), but not the user's
+  // helper: boot a private one from a throwaway state directory and reclaim it.
+  const isolatedDir = mkdtempSync(join(tmpdir(), "cu-live-"));
+  const manager = new CuSessionManager({ stateDir: isolatedDir });
+  let pid = null;
+  try {
+    const status = await manager.getStatus();
+    assert.equal(status.ok, true, "isolated CU service should be reachable");
+    assert.equal(status.accessibility, true, "CU service should have Accessibility granted");
+    assert.equal(status.screenRecording, true, "CU service should have Screen Recording granted");
+    pid = manager.managedServiceProcess?.pid ?? null;
 
-  // 1. List windows and find a real visible window
-  const winList = await manager.exec(["windows"]);
-  assert.equal(winList.ok, true, "windows command should succeed");
-  assert.ok(Array.isArray(winList.windows) && winList.windows.length > 0, "should have on-screen windows");
-  const targetWin = winList.windows[0];
+    // 1. List windows and find a real visible window
+    const winList = await manager.exec(["windows"]);
+    assert.equal(winList.ok, true, "windows command should succeed");
+    assert.ok(Array.isArray(winList.windows) && winList.windows.length > 0, "should have on-screen windows");
+    const targetWin = winList.windows[0];
 
-  // 2. Capture a window screenshot
-  const shotRes = await manager.exec([
-    "shot",
-    "--window",
-    String(targetWin.windowId),
-    "--max-dim",
-    "640",
-    "--format",
-    "jpeg",
-    "--quality",
-    "0.72",
-  ]);
-  assert.equal(shotRes.ok, true, JSON.stringify(shotRes));
-  assert.ok(shotRes.base64 && shotRes.base64.length > 100, "Screenshot base64 should be non-empty");
-  const bytes = Buffer.from(shotRes.base64, "base64");
-  assert.equal(sniffImageMediaType(bytes), "image/jpeg");
+    // 2. Capture a window screenshot
+    const shotRes = await manager.exec([
+      "shot",
+      "--window",
+      String(targetWin.windowId),
+      "--max-dim",
+      "640",
+      "--format",
+      "jpeg",
+      "--quality",
+      "0.72",
+    ]);
+    assert.equal(shotRes.ok, true, JSON.stringify(shotRes));
+    assert.ok(shotRes.base64 && shotRes.base64.length > 100, "Screenshot base64 should be non-empty");
+    const bytes = Buffer.from(shotRes.base64, "base64");
+    assert.equal(sniffImageMediaType(bytes), "image/jpeg");
+  } finally {
+    manager.stopManagedService();
+    if (pid) {
+      const deadline = Date.now() + 2500;
+      while (Date.now() < deadline) {
+        try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 50)); }
+        catch { break; }
+      }
+    }
+    rmSync(isolatedDir, { recursive: true, force: true });
+  }
 });
 
 test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, and capsule session", async () => {

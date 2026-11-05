@@ -17,11 +17,29 @@ test("CuSessionManager resolveBinaryPath prefers plugin bin/cu and eliminates le
   assert.equal(bin.includes("Application Support/cu"), false, "must not resolve to ~/Library/Application Support/cu");
 });
 
-test("CuSessionManager openSystemSettings opens correct macOS preference panes", () => {
-  const manager = new CuSessionManager();
-  assert.equal(manager.openSystemSettings("accessibility"), true);
-  assert.equal(manager.openSystemSettings("screenRecording"), true);
+test("CuSessionManager openSystemSettings maps panes without launching System Settings", () => {
+  assert.equal(
+    CuSessionManager.systemSettingsUrl("accessibility"),
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+  );
+  assert.equal(
+    CuSessionManager.systemSettingsUrl("screenRecording"),
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+  );
 });
+
+async function waitForProcessExit(pid, timeoutMs = 2500) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((r) => setTimeout(r, 50));
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
 
 test("Clean install authentication: manager boots helper and passes authentication without ~/.cu/config.json", async () => {
   const isolatedDir = mkdtempSync(join(tmpdir(), "cu-clean-install-"));
@@ -49,8 +67,11 @@ test("Clean install authentication: manager boots helper and passes authenticati
     });
     assert.equal(statusRes.status, 200, "status should return 200");
 
-    // Clean up managed process
+    // Clean up managed process and wait for it to actually exit before the
+    // temporary state directory disappears underneath it.
+    const pid = manager.managedServiceProcess?.pid;
     manager.stopManagedService();
+    if (pid) assert.equal(await waitForProcessExit(pid), true, `helper ${pid} did not exit`);
   } finally {
     rmSync(isolatedDir, { recursive: true, force: true });
   }
@@ -79,6 +100,7 @@ test("Concurrent ensureServiceRunning launches exactly one managed helper proces
 
     manager.stopManagedService();
     assert.equal(manager.managedServiceProcess, null);
+    assert.equal(await waitForProcessExit(pid), true, `helper ${pid} did not exit`);
   } finally {
     rmSync(isolatedDir, { recursive: true, force: true });
   }
@@ -175,37 +197,41 @@ test("Disposed guard: ensureServiceRunning refuses to launch helper during or af
 });
 
 test("Host abnormal exit simulation: helper with watch-parent terminates when parent pipe closes", async () => {
-  const manager = new CuSessionManager();
+  // The helper writes config.json as soon as it boots. Without its own state
+  // directory this test rewrote the real ~/.cu/config.json with a port that
+  // died with the test — exactly the dead port the live plugin then dialed.
+  const isolatedDir = mkdtempSync(join(tmpdir(), "cu-watch-parent-"));
+  const manager = new CuSessionManager({ stateDir: isolatedDir });
   const bin = manager.resolveBinaryPath();
   assert.ok(existsSync(bin), `binary must exist at ${bin}`);
-  const freePort = await manager._findAvailablePort(49158);
+  const freePort = await manager._findAvailablePort(0);
 
-  // Spawn helper with pipe for stdin and --watch-parent flag
   const child = spawn(bin, ["service", "--port", String(freePort), "--watch-parent"], {
+    // Explicit, not inherited: the helper must never fall back to ~/.cu.
+    env: { ...process.env, CU_STATE_DIR: isolatedDir },
     stdio: ["pipe", "ignore", "ignore"],
   });
 
   const pid = child.pid;
   assert.ok(pid > 0);
 
-  // Let it boot and confirm it is alive
-  await new Promise((r) => setTimeout(r, 300));
-  assert.doesNotThrow(() => process.kill(pid, 0));
+  try {
+    // Let it boot, confirm it is alive and that its config landed in the
+    // throwaway directory rather than the real one.
+    await new Promise((r) => setTimeout(r, 300));
+    assert.doesNotThrow(() => process.kill(pid, 0));
+    assert.equal(existsSync(join(isolatedDir, "config.json")), true, "helper must write config into CU_STATE_DIR");
 
-  // Simulate parent abnormal exit or host termination: close child stdin pipe
-  child.stdin.end();
-
-  // Child should detect EOF and exit on its own within 1.5 seconds
-  const deadline = Date.now() + 2000;
-  let exited = false;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-      await new Promise((r) => setTimeout(r, 60));
-    } catch {
-      exited = true;
-      break;
-    }
+    // Simulate parent abnormal exit or host termination: close child stdin pipe
+    child.stdin.end();
+    assert.equal(
+      await waitForProcessExit(pid, 2500),
+      true,
+      `helper ${pid} must automatically self-terminate when parent pipe closes`,
+    );
+  } finally {
+    try { child.kill("SIGKILL"); } catch { /* already exited */ }
+    await waitForProcessExit(pid, 1000);
+    rmSync(isolatedDir, { recursive: true, force: true });
   }
-  assert.equal(exited, true, `helper ${pid} must automatically self-terminate when parent pipe closes`);
 });

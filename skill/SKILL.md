@@ -45,3 +45,22 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
    - Pass `expect` to declare what the app must show: `{ query: "导入完成", timeoutMs: 2000 }`, or `{ ref, enabled, value, contains }`. The result then carries `verified: true|false` plus `verification`. `verified: false` means the action was dispatched but the app never showed that state: re-observe (and read `warning`) instead of replaying the click, which `actionReplaySafe: false` marks.
    - `cu_expect` runs the same check on its own, which is the right tool when the condition comes from an action you did not issue (user typing, a background import, another app's window).
    - A deterministic input followed by `expect` is the shortest reliable compound action; use `cu_batch` when the steps have no branch between them.
+
+7. **Coordinates Must Come From the Current Frame**
+   - Read coordinates from the observation you are looking at, not from an earlier window position or from memory.
+   - `cu_click` refuses `point_outside_target_window` when the point is outside the target window's live bounds, and `window_geometry_changed` when the window moved or resized after your last `cu_snapshot`. Both are refusals, not transient errors: call `cu_snapshot` again and derive a new point. Never repeat the rejected numbers.
+   - When a reliable control ref exists, click the ref (or `cu_type` with `mode: "action"`, `actionName: "AXPress"`) instead of a coordinate. Coordinates are for canvas areas with no AX node.
+
+8. **A Dispatched Event Is Not a Successful Action**
+   - `ok: true` only means the engine dispatched the event. If `observation.changed` is `false` or the expected state is absent, the app did not react: stop and re-observe. Do not replay the same click, type or key "once more" — a second identical dispatch is how a background click becomes a counter or a duplicate.
+   - Do not scan the application bundle, guess internal files, or try random shortcuts after one failure. Identify the visible control, its enabled state and the current window, then act on that.
+   - Do not guess app shortcuts (`⌘L`, `⌘K`, …). Use a visible menu item, an AXPress control, or a documented toolbar action; if you cannot find one, say so.
+
+9. **Wait on What the Screen Shows**
+   - Build `expect` / wait conditions from text or controls you actually observed, not from a hardcoded phrase. If the page already says "立即试用", waiting for "已安装" for 60 seconds is waiting for a state that does not exist.
+   - When a condition times out, re-read the tree before deciding: the app may have taken a different path, which is information, not a reason to replay.
+
+10. **Report Only What Was Verified**
+    - `restoredTarget: false` means the target window was not restored; `cleanupState: "unknown"` means cleanup is unknown. Never describe either as "restored" or "cleaned up".
+    - A screenshot path, a successful click and a model's summary are not proof of the business result. Quote the verified field (`verified`, `expect` match, before/after text) or state that it is unverified.
+    - A snapshot from another chat is never your baseline: the first `cu_snapshot` in each chat returns `mode: "full"`. If you receive a delta you did not build on, re-observe with `full: true`.
