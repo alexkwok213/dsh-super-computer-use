@@ -37,11 +37,11 @@
 
 以下是从原视频裁出的证据，不是设计稿：
 
-![21 秒附近的目标窗口小画面](/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/codex-animation-reference/preview-card-21s.jpg)
+![21 秒附近的目标窗口小画面](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/reviews/codex-animation-reference/preview-card-21s.jpg)
 
-![88 秒附近的运行状态菜单](/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/codex-animation-reference/status-popover-88s.jpg)
+![88 秒附近的运行状态菜单](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/reviews/codex-animation-reference/status-popover-88s.jpg)
 
-![123 秒附近切换后的目标小画面](/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/codex-animation-reference/target-preview-123s.jpg)
+![123 秒附近切换后的目标小画面](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/reviews/codex-animation-reference/target-preview-123s.jpg)
 
 **证据限制：这段录屏不足以逐项量出 Codex 光标曲线、点击涟漪、60 fps 帧稳定性或真实输入延迟。** 后文的动画参数和性能门槛是 SCU 的建议设计值，不是 OpenAI 内部参数，也不是从这段视频实测得到的成绩。
 
@@ -60,7 +60,7 @@
 | pid/window 独立继承，snapshotId 只表示客户端缓存版本 | `lib/index.mjs:933`、`lib/core.mjs:1135` | 原子目标 + 持续身份校验；不能把序号等同于真实控件身份 |
 | rim 关闭后会被动作重新点亮；默认 preview 重复预热；schema 必填冲突 | 第二轮复查 F6/F7/F8 | F7/F8 先修，F6 随视觉层修复交付 |
 
-详细复现与证据见 [第二轮复查](/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/second-review.md)。此前的 73/73 测试通过和 demo 延迟数据属于上一轮测试，本次只复核源码与录屏，没有重新运行整套性能测试。
+详细复现与证据见 [第二轮复查](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/reviews/second-review.md)。此前的 73/73 测试通过和 demo 延迟数据属于上一轮测试，本次只复核源码与录屏，没有重新运行整套性能测试。
 
 ## 4. 最终观看体验与动画规范
 
@@ -303,7 +303,7 @@ worker 首版服务一个活动控制会话，先覆盖 snapshot/ref click/expec
 
 ## 8. 文件职责和改动范围
 
-路径相对仓库根 `/Users/johnkwok/Downloads/work/super-computer-use`。下面标为“新增”的文件均为计划，尚不存在。
+路径相对仓库根 `/Users/johnkwok/Downloads/work/dsh-super-computer-use`。下面标为“新增”的文件均为计划，尚不存在。
 
 | 文件 | 改动职责 |
 |---|---|
@@ -336,7 +336,7 @@ M1 可以在 M0 的目标和预算修复落地后开始；不必等待完整 M3�
 
 每阶段提交源码、对应失败→通过证据、受影响回归结果和局限。安装前核对仓库二进制、安装 app、运行服务三者 buildId；打包验证和开发目录验证分别记录。
 
-详细开发任务见 [实施清单](/Users/johnkwok/Downloads/work/super-computer-use/docs/superpowers/plans/2026-11-04-cu-codex-experience.md)。
+详细开发任务见 [实施清单](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/superpowers/plans/2026-11-04-cu-codex-experience.md)。
 
 ## 10. 验收标准：用什么证明更快、更顺、更准
 

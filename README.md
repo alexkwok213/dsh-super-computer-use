@@ -1,27 +1,30 @@
 # DSH Super Computer Use
 
-一个仓库、两层代码，给 DeepSeek Harness 提供完整的 macOS 桌面操控能力。
+DeepSeek Harness 专属 macOS 桌面智能操控插件。
 
 ```
-DSH  ──加载──▶  本仓库根目录（Cordis 插件，JS）
-                      │  HTTP 127.0.0.1:47777
-                      ▼
-                 engine/（原生 Swift 引擎）──▶ macOS AX / ScreenCaptureKit / CGEvent
+DeepSeek Harness 宿主
+└─ DSH 插件 (dsh-super-computer-use)
+    ├─ 13 个 cu_* 工具、Agent 技能、参数校验与权限引导
+    ├─ 聊天内嵌观看卡片、实时画面流（ScreenCaptureKit）、用户安全停止闸门
+    └─ 内置受管原生 Helper (bin/cu)
+        ├─ 进程生命周期：按需启动、心跳与异常自毁回收（--watch-parent）、退出清理
+        ├─ 安全认证：实例级凭据安全传递（CU_AUTH_TOKEN/CU_STATE_DIR），零全局配置依赖，不打印 Token
+        └─ 原生操控：macOS Accessibility (AX)、ScreenCaptureKit 抓屏、CGEvent 输入、光环与状态胶囊
 ```
 
 ## 目录
 
 | 路径 | 作用 |
 |---|---|
-| `lib/` | Cordis 插件：13 个 `cu_*` 工具、会话管理、附件预览 |
-| `client.js` | Harness 内嵌观看 UI：输入框上方卡片、全帧预览、状态、停止 |
+| `bin/` | 预编译 macOS Universal Binary（Apple Silicon + Intel，开箱即用，免 Xcode） |
+| `lib/` | Cordis 插件：13 个 `cu_*` 工具、进程自管理、会话管理、附件预览 |
+| `client.js` | Harness 内嵌观看 UI：输入框上方卡片、全帧预览、状态、停止、一键系统授权 |
 | `locale/` `skill/` | 插件文案与技能说明 |
 | `test/` | 插件测试（Node） |
+| `scripts/` | 自动化构建通用二进制脚本（`build-universal.sh`） |
 | `engine/Sources/` | 原生引擎源码（Swift） |
-| `engine/build.sh` | 编译 `engine/bin/cu` |
-| `engine/install-app.sh` | 打包并安装 `Computer Use.app`，注册 launchd 服务 |
-| `install.sh` | 一条命令装完整个产品（引擎 + 提示接入 DSH 插件） |
-| `assets/icon.png` | 插件与 App 共用的产品图标 |
+| `assets/icon.png` | 插件产品图标 |
 | `engine/tests/` | 原生回归测试（光环/抓屏/窗口查询/控制台界面） |
 | `docs/` | 设计与验证记录；`docs/legacy/` 为合并前两个仓库的历史文档；`docs/demo/` 为演示素材 |
 | `docs/ui/` | 控制台界面的对照参考（`reference/`）与改造后截图（`console-after/`） |
@@ -42,83 +45,41 @@ ScreenCaptureKit 常驻捕获路径，经本机认证的 `/api/scu/preview` 以�
 验收与回滚记录见 `docs/reviews/2026-11-04-harness-integrated-cu-acceptance.md`。
 
 
-## 安装
+## 开箱即用安装（纯粹 DSH 插件 · 免 Xcode · 免后台常驻）
 
-一个产品、一个命令：
+本插件现已全面重构为**纯粹的 DeepSeek Harness 插件**：
+- **自带通用二进制（Zero-Build）**：安装包已预编译内置 macOS Universal Binary（同时支持 Apple Silicon M1/M2/M3/M4 与 Intel 芯片，macOS 14+），**完全不需要安装 Xcode、Command Line Tools，更不需要编译 Swift 源码**。
+- **随 DSH 自启停（Daemonless）**：无需注册系统 `launchd` 服务，无需安装独立外部 App，DSH 加载插件时自动拉起引擎，DSH 退出时自动释放。
+- **零配置权限引导**：缺权限时，DSH Web 界面卡片上直接显示「打开系统设置授权」按钮，一键直达系统辅助功能与屏幕录制设置。
 
-```bash
-./install.sh          # 引擎（app + launchd 服务）→ 再按提示接入 DSH 插件
-```
+### 方式 A：从 GitHub Releases 下载（推荐普通用户）
 
-分步说明如下。
+1. 在 GitHub Releases 页面下载最新的 `dsh-super-computer-use-standalone.zip` 或 `dsh-super-computer-use.tgz`。
+2. 打开 DeepSeek Harness：
+   - 进入「设置 → 插件」页面，点击「从本地目录 / 压缩包安装」，选择下载的文件即可；
+   - 或者在当前 profile 目录下运行：
+     ```bash
+     dsh plugin add dsh-super-computer-use.tgz
+     ```
+3. 首次使用在系统弹出的权限提示或 Web UI 卡片按钮中，为 **DeepSeek Harness** 勾选「辅助功能」与「屏幕录制」权限，即可开箱即用！
 
-### 1. 引擎（必须先装）
-
-```bash
-cd engine
-./build.sh            # 产出 engine/bin/cu，用稳定签名身份签名
-./install-app.sh      # 安装 /Applications/Computer Use.app + launchd 服务
-```
-
-首次安装后需在「系统设置 → 隐私与安全性」给 **Super Computer Use**
-（磁盘路径 `/Applications/Computer Use.app`）授予
-**辅助功能** 与 **屏幕录制** 权限。
-
-签名身份**不随仓库提交**。想做到「重编译不丢授权」，在本机建一个文件：
+### 方式 B：通过 Git Clone 安装
 
 ```bash
-security find-identity -v -p codesigning | awk -F'"' '/Apple Development/{print $2; exit}' \
-  > engine/signing-identity
+git clone https://github.com/alexkwok213/dsh-super-computer-use.git
+# 在 DSH 中链接本地插件即可
 ```
 
-`engine/signing-identity` 已在 `.gitignore` 中。没有该文件时会退回 ad-hoc 签名
-（可以运行，但重编译后 macOS 可能要求重新授权）。也可用 `CU_SIGN_IDENTITY` 覆盖。
+### 开发者说明（源码二次开发）
 
-校验：
+如果你修改了 `engine/Sources/*.swift` 中的原生引擎代码，可直接运行一键打包脚本更新通用二进制：
 
 ```bash
-~/Library/Application\ Support/cu/bin/cu perms
-# {"accessibility":true,"screenRecording":true,"ok":true,...}
+./scripts/build-universal.sh
+pnpm test
 ```
 
-安装器现在会保证 app、后台 service 与预览 helper 来自同一份构建，并分别校验签名：
-
-```bash
-APP="/Applications/Computer Use.app"
-SVC="$HOME/Library/Application Support/cu/bin/cu"
-PRE="$HOME/Library/Application Support/cu/bin/cu-preview"
-codesign --verify --strict "$APP"
-codesign --verify --strict "$SVC"
-codesign --verify --strict "$PRE"
-shasum -a 256 "$SVC" "$PRE"      # 两者应相同
-```
-
-不要把 app bundle 内的可执行文件直接复制成 `cu-preview`：bundle 签名的副本离开 app 后会被
-amfid 判为 invalid signature 并杀掉。`install-app.sh` 复制的是 standalone 签名的
-`engine/bin/cu`。运行中的 buildId 应与 service 的 sha256 一致：
-
-```bash
-python3 - <<'PY'
-import json,urllib.request,os
-c=json.load(open(os.path.expanduser('~/.cu/config.json')))
-d=json.load(urllib.request.urlopen(urllib.request.Request(
-  f"http://127.0.0.1:{c['port']}/v1/status",
-  headers={'Authorization':'Bearer '+c['token']}),timeout=5))
-print({k:d.get(k) for k in ('buildId','accessibility','screenRecording')})
-PY
-```
-
-回滚步骤与已验证快照见
-[回滚说明](docs/reviews/2026-11-04-harness-integrated-cu-rollback.md)；本轮安装证据见
-[安装报告](docs/reviews/harness-round2-installation.md)。
-
-### 2. 插件
-
-```bash
-pnpm add link:/path/to/dsh-super-computer-use
-```
-
-在目标 DSH profile 中安装依赖，并确保 `package.json` 的 `dsh.profile.bundles` 包含 `dsh-super-computer-use`，然后重启 DSH 并验证插件已加载。技能名是 `/super-computer-use`（`/` 菜单里敲 `/super` 就能排到第一条）；工具加载成功时会注册 13 个 `cu_*` 工具。
+发版时只需推送 tag（例如 `git tag v0.3.0 && git push origin v0.3.0`），GitHub Actions 工作流会自动在云端编译通用二进制并打包 Release。
 
 ## 能力
 
@@ -131,34 +92,21 @@ pnpm add link:/path/to/dsh-super-computer-use
 - 渐变光环：跟随目标窗口，独立停止面板
 - 毛玻璃 HUD：实时动作文本 + 计时器 + 脉冲状态灯
 - 光标层：虚拟箭头滑向目标、动作标签、点击涟漪（不移动真实鼠标）
+- DSH 内嵌观看卡片：会话期间输入框上方实时显示工作状态、目标应用名称、停止按钮与实时画面流
 
-**菜单栏控制台**（菜单栏 `● CU` → 控制台…）
-
-无边框毛玻璃圆角面板，一页看完：应用图标与标题、权限卡片（状态点 / 一键「去授权」+ 可拖拽的悬浮授权引导）、
-本地 agent 连接开关（直接写入 / 移除 MCP 配置并回读状态）、服务状态卡（端口、在线客户端、正在做什么、检测 / 重启）。
-底部固定版本、暂停与三个图标入口（连接与使用 / 诊断 / 设置）；「＋ 其他 agent」页给出可直接复制的 MCP 配置，
-复制后按钮变「已复制」。视觉与交互参考 Claude CU Bridge，对照见 `docs/ui/reference/claude-cu-ui-notes.md`，
-改造后截图在 `docs/ui/console-after/`。
-
-![控制台概览](docs/ui/console-after/console-overview-live.png)
-
-界面本身可以被机器验证，不靠肉眼回归：
+**引擎命令**（供插件底层调用，也可本地 CLI 直接调试）
 
 ```bash
-cu menubar --selftest-ui                       # 控制台结构的 JSON 断言
-cu menubar --snapshot-console /tmp/c.png --snapshot-page overview   # 任一页渲染成 PNG
-cu menubar --snapshot-guide /tmp/guide.png     # 授权引导浮窗
-```
-
-**引擎命令**（除插件外也可直接用）
-
-```bash
-cu windows | snapshot --pid <pid> [--window <id>] [--max-nodes 1500] [--no-actions]
-cu click --ref <ref> --pid <pid> [--background]
-cu shot --window <id> --format jpeg --max-dim 1280
-cu halo --window <id> --label "..." | cu capsule --label "..." | cu cursor-overlay | cu capture-daemon
-cu agents | agents-connect [--id …] | agents-disconnect [--id …]
-cu menubar [--open-settings] | --selftest-ui | --snapshot-console <png> | --snapshot-guide <png>
+cu windows                                        # 列出屏幕窗口（含 bounds 与层级）
+cu snapshot --pid <pid> [--window <id>] [--all]   # 提取无障碍树节点与数字引用（e1, e2...）
+cu click --ref e12 --pid <pid> [--button left]    # 后台无焦点点击目标控件
+cu type --text "你好"                             # 后台 Unicode / 中文直接输入
+cu key --name return [--mods cmd]                 # 快捷键发送
+cu shot --window <id> --format jpeg --max-dim 1280# 高效截图
+cu halo --window <id> --label "..."               # 渲染目标高亮边框光环
+cu capsule --label "..."                          # 顶部置顶非激活胶囊指示
+cu preview-stream --window <id>                   # ScreenCaptureKit 低延迟内嵌画面流
+cu service [--port 47777]                         # 本地 HTTP 引擎后端
 ```
 
 ## 实测性能
@@ -191,9 +139,9 @@ cu menubar [--open-settings] | --selftest-ui | --snapshot-console <png> | --snap
 - **坐标有出处**：`cu screens` 给真实显示器可用区域，截图带 `capturedAt` / `displayId`，窗口移动后按实时 bounds 计算 origin
 - **用户可中断**：胶囊与光环上的停止键会写入暂停标记，所有变更类动作随即被拦截
 - **会话侧栏布局**：进入操作会话时 DSH 窗口缩到右侧三分之一、目标窗口占左侧，结束时自动还原；首次点击也会缩窗但不动目标窗口（避免点击坐标失效）
-- **录屏有提醒**：会话期间菜单栏显示 `● CU · REC`，同时 macOS 升起系统录屏隐私指示；结束时一起消失
-- **控制台不粘焦点**：只有你点开控制台时才激活窗口；关掉后立即把焦点还给之前的应用
-- **界面可回归**：`--selftest-ui` / `--snapshot-console` / `--snapshot-guide` 让每次改版都有断言与截图证据
+- **录屏有提醒**：会话期间 DSH 内嵌卡片显示实时录制与操作状态，同时 macOS 升起系统屏幕录制安全指示；结束时自动释放
+- **无感生命周期**：原生 Helper 仅在执行期间运行，DSH 退出或插件停用时秒级回收，不留孤儿进程
+- **完整回归测试**：内置 210+ 项自动化回归测试，覆盖生命周期、认证隔离、权限指引和无障碍操控
 - **光效不常驻**：边缘呼吸光只在动作时亮起；overlay 进程 2 小时无活动自动退出，不会遗留常驻光斑
 - **授权可自愈**：缺权限时给系统设置深链 + 可拖拽应用卡片的引导浮窗；失效授权只在日志有证据且确实缺权限时才重置
 
@@ -235,34 +183,14 @@ DSL 里最容易踩的三条：`type: "object"` 必须显式写 `additionalPrope
 `npm test` 里的 `test/tool_schema.mjs` 会把全部 13 个工具按同一套规则验一遍，改 schema 后先跑它。
 
 
-**Super Computer Use 和 DSH Super Computer Use 是什么关系？**
+**本插件与旧版独立 Computer Use.app 的区别？**
 
-产品整体品牌为 **Super Computer Use**：它是本机的多 AI 应用引擎与菜单栏控制台；而 **DSH Super Computer Use** 是 DeepSeek Harness 专用的插件适配层，通过本机服务调用引擎。WorkBuddy、Claude 等支持 MCP 的 AI 应用也可以直接接入本体。配置存在并不代表客户端当前会话已连接，需通过工具调用验证。
-
-本机应用继续使用 `/Applications/Computer Use.app`、bundle id `local.cu.app`、launchd 标签 `local.cu.*` 和命令 `cu`，以保持现有配置及授权身份的连续性。重装后的权限状态仍应实际检查。
-
-插件和应用的版本从根目录 `package.json` 生成；安装或升级任一组件后，需验证另一组件版本及运行状态。
-
-**启动台/应用程序里的 “Computer Use” 是什么？可以删吗？**
-
-它就是引擎本体：launchd 后台服务（`local.cu.service`）、菜单栏助手（`local.cu.menubar`）、
-**辅助功能/屏幕录制权限宿主**及控制台。DSH 插件通过 `127.0.0.1:47777` 和引擎协作；其他 AI 客户端可通过 MCP 使用。删除 app 会影响控制台及引用该路径的组件；后台服务和预览 helper 还使用 `~/Library/Application Support/cu/bin/` 下的独立副本，因此不要把删除应用当作完整卸载。
-
-它故意不占 Dock（`LSUIElement`），但启动台会列出 `/Applications` 下的应用，所以能看到它：
-
-- 从启动台/应用程序打开它 = 打开控制台，同时确保菜单栏的 `● CU` 在跑。
-- 菜单栏里的「退出菜单栏」只退出菜单栏助手，后台服务继续工作；重新打开 app 即可恢复。
-- 早期版本 `build/` 目录下的复制品被删除后，可能在启动台留下点不开的“幽灵”图标；
-  系统注册信息可以用 `lsregister -gc` 清理（或重装一次）。
-
-## 历史
-
-本仓库由两个旧仓库合并而来：
-
-- `computer-use` —— 原生 Swift 引擎（现位于 `engine/`）
-- `dsh-computer-use` —— DSH Cordis 插件（现位于仓库根）
-
-两者的 git 历史保留在原仓库中，本仓库以合并后的完整形态作为唯一维护入口。
+本插件为 **DeepSeek Harness 专属插件**，现已彻底收敛为单插件交付模式：
+- **无需独立 App / 菜单栏**：不再需要安装或运行 `Computer Use.app`，没有外部常驻菜单栏图标。
+- **无需系统 launchd 服务**：不再注册 `local.cu.service` 系统守护进程，原生 helper 随 DSH 插件生命周期按需由 Node 托管启动。
+- **无需配置全局环境**：不再依赖 `~/.cu/config.json` 或 `~/Library/Application Support/cu/`，认证信息与状态在实例级安全隔离传递。
+- **异常退出自毁保活**：Helper 原生支持父进程管道感知（`--watch-parent`），DSH 退出、禁用插件或异常崩溃时，helper 会自动秒级回收，绝不残留孤儿僵尸进程。
+- **权限归属明确**：屏幕录制与辅助功能由当前执行组件管理，缺权限时插件直接提示并可一键打开系统隐私设置面板。
 
 ## License
 

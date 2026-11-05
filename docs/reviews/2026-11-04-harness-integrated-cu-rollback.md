@@ -29,7 +29,7 @@ standalone 签名（identifier `cu`，CDHash `b58d9c70…`）。不要用 app �
 
 ```bash
 set -euo pipefail
-cd /Users/johnkwok/Downloads/work/super-computer-use
+cd /Users/johnkwok/Downloads/work/dsh-super-computer-use
 SNAP="$PWD/.rollback/round2-pre-20261104-2319"
 test -d "$SNAP/Computer Use.app" || { echo "缺少 app 快照，停止"; exit 1; }
 test -x "$SNAP/bin/cu" || { echo "缺少 service 快照，停止"; exit 1; }
@@ -114,7 +114,7 @@ PY
 本轮从 `52b244f` 开始。仓库未推送，推荐用可审阅的 revert，而不是 `git reset --hard`：
 
 ```bash
-cd /Users/johnkwok/Downloads/work/super-computer-use
+cd /Users/johnkwok/Downloads/work/dsh-super-computer-use
 git log --oneline 52b244f..HEAD          # 先确认范围
 git revert --no-commit 52b244f..HEAD     # 逐提交反向应用，保留历史
 git status && git diff --cached --stat   # 审阅

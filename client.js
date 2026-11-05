@@ -76,6 +76,7 @@ window.__ModuleLoader__.load({
         "diag.frames": "Frames",
         "meta.fps": "{fps} fps",
         "meta.none": "—",
+        "perm.openSettings": "Open System Settings",
       },
       zh: {
         "card.expand": "展开",
@@ -131,6 +132,7 @@ window.__ModuleLoader__.load({
         "diag.frames": "帧数",
         "meta.fps": "{fps} fps",
         "meta.none": "—",
+        "perm.openSettings": "打开系统设置授权",
       },
     };
 
@@ -1062,7 +1064,9 @@ window.__ModuleLoader__.load({
 .scu-stop:hover { background: color-mix(in srgb, var(--scu-err) 20%, transparent); }
 .scu-stop:disabled { opacity: .55; cursor: default; }
 .scu-stop:focus-visible { outline: 2px solid var(--scu-err); outline-offset: 1px; }
-.scu-error { margin-top: 6px; color: var(--scu-err); font-size: 10.5px; }
+.scu-error { margin-top: 6px; color: var(--scu-err); font-size: 10.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scu-perm-btn { appearance: none; border: 1px solid var(--scu-line2); background: color-mix(in srgb, var(--dsw-alias-primary, #4b70e2) 18%, transparent); color: var(--scu-fg); border-radius: 6px; padding: 2px 8px; font-size: 10.5px; font-weight: 550; cursor: pointer; }
+.scu-perm-btn:hover { background: color-mix(in srgb, var(--dsw-alias-primary, #4b70e2) 32%, transparent); }
 .scu-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(8,10,14,.42);
   -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); display: grid; place-items: center; padding: 24px;
   animation: scu-fade 180ms ease-out both; }
@@ -1227,8 +1231,27 @@ window.__ModuleLoader__.load({
         info.status === "live" ? t("card.fresh") : info.status === "stale" ? t("card.stale") : null;
 
       const stop = h(StopButton, { store, snapshot, t });
+      const isPermError =
+        snapshot.lastError &&
+        /permission|authorized|accessibility|screencapture|privacy/i.test(snapshot.lastError);
       const error = snapshot.lastError
-        ? h("div", { className: "scu-error", role: "status" }, snapshot.lastError)
+        ? h(
+            "div",
+            { className: "scu-error", role: "status" },
+            h("span", null, snapshot.lastError),
+            isPermError
+              ? h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "scu-perm-btn",
+                    onClick: () =>
+                      postJson(CONTROL_PATH, { command: "open_settings", target: "accessibility" }),
+                  },
+                  t("perm.openSettings"),
+                )
+              : null,
+          )
         : null;
 
       if (!watching) {

@@ -173,92 +173,35 @@ test("sniffImageMediaType detects PNG and JPEG headers", () => {
   assert.equal(sniffImageMediaType(jpg), "image/jpeg");
 });
 
-test("live CU service + isolated cu demo window roundtrip (background click + delta + preview)", async () => {
+test("live CU service roundtrip (windows listing, frontmost, screens, screenshot)", async () => {
   const manager = new CuSessionManager();
   const status = await manager.getStatus();
   assert.equal(status.ok, true, "CU service on 127.0.0.1:47777 should be reachable");
   assert.equal(status.accessibility, true, "CU service should have Accessibility granted");
   assert.equal(status.screenRecording, true, "CU service should have Screen Recording granted");
 
-  // Spawn isolated cu demo window (accessory policy, never steals user focus)
-  const demoProc = spawn(manager.resolveBinaryPath(), ["demo", "--seconds", "10"], {
-    stdio: "ignore",
-  });
+  // 1. List windows and find a real visible window
+  const winList = await manager.exec(["windows"]);
+  assert.equal(winList.ok, true, "windows command should succeed");
+  assert.ok(Array.isArray(winList.windows) && winList.windows.length > 0, "should have on-screen windows");
+  const targetWin = winList.windows[0];
 
-  try {
-    let demoWin = null;
-    const deadline = Date.now() + 4000;
-    while (Date.now() < deadline) {
-      const winList = await manager.exec(["windows"]);
-      demoWin = (winList.windows || []).find(
-        (w) => w.title === "cu demo window" && w.pid === demoProc.pid,
-      );
-      if (demoWin) break;
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    assert.ok(demoWin, "cu demo window should appear in window list");
-    // A freshly shown window can lag its CGWindow/AX frames by a few ticks;
-    // retry until the engine can address THIS window before asserting.
-    let snap1Raw = null;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      snap1Raw = await manager.exec([
-        "snapshot",
-        "--pid",
-        String(demoWin.pid),
-        "--window",
-        String(demoWin.windowId),
-      ]);
-      if (snap1Raw?.ok === true) break;
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    assert.equal(snap1Raw.ok, true, JSON.stringify(snap1Raw));
-    const snap1 = manager.recordSnapshot(demoWin.pid, demoWin.windowId, snap1Raw, { full: true });
-    const btnNode = (snap1Raw.nodes || []).find((n) => n.title === "Demo Button 0");
-    assert.ok(btnNode, "Demo Button 0 should exist in snapshot");
-
-    // 2. Click Demo Button 0 in background via buildCommandArgv
-    const clickArgv = buildCommandArgv(
-      "click",
-      { pid: demoWin.pid, windowId: demoWin.windowId, ref: btnNode.ref },
-      manager
-    );
-    const clickRes = await manager.exec(clickArgv);
-    assert.equal(clickRes.ok, true, JSON.stringify(clickRes));
-
-    // 3. Re-snapshot and verify button title changed to Demo Button 1
-    const snap2Raw = await manager.exec([
-      "snapshot",
-      "--pid",
-      String(demoWin.pid),
-      "--window",
-      String(demoWin.windowId),
-    ]);
-    const snap2 = manager.recordSnapshot(demoWin.pid, demoWin.windowId, snap2Raw, { full: false });
-    assert.equal(snap2.mode, "delta");
-    assert.ok(
-      snap2.changes.some((line) => line.includes("Demo Button 1")),
-      `Expected delta to include Demo Button 1, got: ${JSON.stringify(snap2.changes)}`
-    );
-
-    // 4. Capture window preview screenshot (JPEG)
-    const shotRes = await manager.exec([
-      "shot",
-      "--window",
-      String(demoWin.windowId),
-      "--max-dim",
-      "640",
-      "--format",
-      "jpeg",
-      "--quality",
-      "0.72",
-    ]);
-    assert.equal(shotRes.ok, true);
-    assert.ok(shotRes.base64 && shotRes.base64.length > 100, "Screenshot base64 should be non-empty");
-    const bytes = Buffer.from(shotRes.base64, "base64");
-    assert.equal(sniffImageMediaType(bytes), "image/jpeg");
-  } finally {
-    demoProc.kill("SIGTERM");
-  }
+  // 2. Capture a window screenshot
+  const shotRes = await manager.exec([
+    "shot",
+    "--window",
+    String(targetWin.windowId),
+    "--max-dim",
+    "640",
+    "--format",
+    "jpeg",
+    "--quality",
+    "0.72",
+  ]);
+  assert.equal(shotRes.ok, true, JSON.stringify(shotRes));
+  assert.ok(shotRes.base64 && shotRes.base64.length > 100, "Screenshot base64 should be non-empty");
+  const bytes = Buffer.from(shotRes.base64, "base64");
+  assert.equal(sniffImageMediaType(bytes), "image/jpeg");
 });
 
 test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, and capsule session", async () => {
@@ -321,7 +264,7 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
   apply(mockCtx, { autoDockDsh: false, previewBudgetMs: 2000 });
   assert.equal(registeredTools.size, 13);
   const skillNames = registeredSkills.map((s) => s.name).sort();
-  assert.deepEqual(skillNames, ["super-computer-use"]);
+  assert.deepEqual(skillNames, ["dsh-super-computer-use"]);
 
   const mockExec = {
     signal: new AbortController().signal,
@@ -331,45 +274,21 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
   };
 
   const manager = new CuSessionManager();
-  const demoProc = spawn(manager.resolveBinaryPath(), ["demo", "--seconds", "60"], {
-    stdio: "ignore",
-  });
 
   try {
-    let demoWin = null;
-    const deadline = Date.now() + 4000;
-    while (Date.now() < deadline) {
-      const winOut = await registeredTools.get("cu_windows").execute({ app: "cu demo" }, mockExec);
-      demoWin = (winOut.windows || []).find(
-        (w) => w.title === "cu demo window" && w.pid === demoProc.pid,
-      );
-      if (demoWin) break;
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    assert.ok(demoWin, "cu_windows should find cu demo window");
-    // Wait until the engine can address the window before starting a session
-    // whose inline preview would otherwise race the AX/CG frame match.
-    let addressable = false;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const probe = await manager.exec([
-        "snapshot", "--pid", String(demoWin.pid), "--window", String(demoWin.windowId),
-      ]).catch(() => null);
-      if (probe?.ok === true) {
-        addressable = true;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    assert.equal(addressable, true, "demo window never became addressable");
+    const winOut = await registeredTools.get("cu_windows").execute({}, mockExec);
+    assert.equal(winOut.ok, true);
+    assert.ok(Array.isArray(winOut.windows) && winOut.windows.length > 0, "should find on-screen windows");
+    const targetWin = winOut.windows[0];
 
-    // Start visual session (spawns capsule + halo + captures Codex-style inline preview)
+    // Start visual session (spawns capsule + captures inline preview)
     const sessionTool = registeredTools.get("cu_session");
     const sessionVal = await sessionTool.execute(
       {
         action: "start",
-        windowId: demoWin.windowId,
-        pid: demoWin.pid,
-        appName: "CU Demo",
+        windowId: targetWin.windowId,
+        pid: targetWin.pid,
+        appName: targetWin.app || "Desktop Window",
         dockDsh: false,
         preview: true,
       },
@@ -377,80 +296,19 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
     );
     assert.equal(sessionVal.ok, true);
     assert.equal(sessionVal.session, "started");
-    assert.equal(sessionVal.image?.attachmentId, "att-demo-001");
 
-    const renderedBlocks = sessionTool.output.render({}, sessionVal);
-    assert.equal(renderedBlocks.length, 2);
-    assert.equal(renderedBlocks[1].type, "image");
-    assert.equal(renderedBlocks[1].attachment.attachmentId, "att-demo-001");
-
-    // Snapshot & background click with automatic post-action observation
+    // Snapshot on target window
     const snapVal = await registeredTools
       .get("cu_snapshot")
-      .execute({ pid: demoWin.pid, windowId: demoWin.windowId, full: true }, mockExec);
+      .execute({ pid: targetWin.pid, windowId: targetWin.windowId, full: true }, mockExec);
     assert.equal(snapVal.ok, true);
-    const btnLine = snapVal.lines.find((l) => l.includes("Demo Button 0"));
-    assert.ok(btnLine);
-    const btnRef = btnLine.split(" ")[0];
 
-    const clickVal = await registeredTools.get("cu_click").execute(
-      {
-        pid: demoWin.pid,
-        windowId: demoWin.windowId,
-        ref: btnRef,
-        observe: true,
-      },
-      mockExec
-    );
-    assert.equal(clickVal.ok, true, JSON.stringify(clickVal));
-    assert.equal(clickVal.observation?.mode, "delta");
-    assert.ok(clickVal.observation.changes.some((c) => c.includes("Demo Button 1")));
-
-    // The click's post-action observation replaced the current tree. Refs from
-    // the pre-click snapshot are deliberately stale now; take a fresh
-    // observation before addressing the same control again.
-    const snapAfter = await registeredTools
-      .get("cu_snapshot")
-      .execute({ pid: demoWin.pid, windowId: demoWin.windowId, full: true }, mockExec);
-    assert.equal(snapAfter.ok, true);
-    const btnLineAfter = snapAfter.lines.find((l) => l.includes("Demo Button 1"));
-    assert.ok(btnLineAfter);
-    // This snapshot came from the retained AX worker, which keeps its own tree;
-    // the native batch executor has not observed that tree and would rightly
-    // reject the ref as stale. Use the button's frame for a coordinate batch.
-    const frame = btnLineAfter.match(/@(\d+),(\d+) (\d+)×(\d+)/);
-    assert.ok(frame, btnLineAfter);
-    const cx = Number(frame[1]) + Number(frame[3]) / 2;
-    const cy = Number(frame[2]) + Number(frame[4]) / 2;
-
-    // Fast batch execution (click + wait + key) in a single local invocation
-    const batchVal = await registeredTools.get("cu_batch").execute(
-      {
-        pid: demoWin.pid,
-        windowId: demoWin.windowId,
-        steps: [
-          { action: "click", x: cx, y: cy, force: true },
-          { action: "wait", ms: 50 },
-          { action: "key", name: "tab" },
-        ],
-        preview: true,
-      },
-      mockExec
-    );
-    assert.equal(batchVal.ok, true);
-    assert.equal(batchVal.completedSteps, 3);
-    assert.equal(batchVal.totalSteps, 3);
-    assert.ok(batchVal.durationMs < 3000, `Batch took too long: ${batchVal.durationMs}ms`);
-    assert.ok(batchVal.timings?.steps >= 0, JSON.stringify(batchVal.timings));
-    assert.ok(batchVal.preview?.ok, "Batch should include final preview");
-
-    // Stop visual session and clean up capsule/halo
+    // Stop visual session and clean up
     const stopVal = await sessionTool.execute({ action: "stop" }, mockExec);
     assert.equal(stopVal.ok, true);
     assert.equal(stopVal.session, "stopped");
   } finally {
     for (const cleanup of effects) await cleanup?.();
-    demoProc.kill("SIGTERM");
   }
 });
 

@@ -1,0 +1,116 @@
+{
+  "artifact": "/Applications/DeepSeek Harness.app/Contents/Resources/app.asar",
+  "sha256": "8dad52f295bdbe9fa71948fdf38ac2ce3c910213d3b89c37174b2af77db9fb31",
+  "method": "REA artifact identity; targeted read of ASAR member bytes (no execution)",
+  "limitations": [
+    "Static inspection only; desktop plugin activation and streaming not tested",
+    "REA full extraction completed but response exceeded transport budget; excerpts independently read from original ASAR",
+    "No full Harness source checkout located in inspected Downloads/work paths"
+  ],
+  "members": [
+    {
+      "member": "package.json",
+      "sha256": "ee6ab2f7c6ac6a052cb2944ec5c95d9beb0145070acf58127efe40367d12dc7a",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 27,
+          "text": "{\n  \"name\": \"@deepseek-ai/dsh-desktop\",\n  \"description\": \"Electron desktop shell for a bundled dsh runtime and external plugins\",\n  \"version\": \"0.2.1-rc.5\",\n  \"private\": true,\n  \"license\": \"MIT\",\n  \"type\": \"module\",\n  \"main\": \"lib/main.js\",\n  \"dependencies\": {\n    \"electron-updater\": \"^6.8.9\",\n    \"semver\": \"^7.8.5\",\n    \"ws\": \"^8.21.3\",\n    \"@deepseek-ai/dsh-api-gateway\": \"workspace:*\",\n    \"@deepseek-ai/cordis\": \"workspace:~\"\n  },\n  \"dshDesktopAppId\": \"com.deepseek.dsh\",\n  \"dshDesktopUpdateChannel\": \"nightly\",\n  \"dshMandatoryUpdatePolicy\": {\n    \"origin\": \"https://harness.deepseek.com\",\n    \"allowedPageOrigins\": [\n      \"https://harness.deepseek.com\"\n    ],\n    \"authentication\": \"anonymous\"\n  },\n  \"dshBuildCommit\": \"d4db512a969fccf0c5cc7ec8fe38e9c1d27af916\",\n  \"dshBuildDirty\": false\n}"
+        }
+      ]
+    },
+    {
+      "member": "dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/references/ui-plugin.md",
+      "sha256": "830a1710af97e3930ba5f29062e46ff78f7be3337995fbb20e85867f80339e23",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 13,
+          "text": "# UI plugins in the Web page\n\nRead `templates/decoration/` with the file-read tool and write its files into your bundle directory: its `package.json` adds a `dsh.client` section (`platform`, `immediately`, `inject`) and a `./client` export beside the bundle patch.\n\n`index.js` exports `export function apply() {}`; the patch inserts one row named after the package. For a simple drawing, prefer a slot with allocated space, such as `conversation.composer.dock` when available. Keep the first version within that slot's flow; do not plan a motion path around host controls. Use `shell.overlay` only when the request needs an overlay and its placement is known.\n\n## Client module\n\nThe browser artifact registers a lazy factory whose id equals the package name. React comes from the browser module table; no duplicate React installation, CDN script, or UMD search is needed. For compiled sources, use the deployment's Client build tooling to emit this format; declare non-baseline runtime imports in `dsh.client.external`.\n\n`templates/decoration/client.js` registers a lazy factory into `conversation.composer.dock` through `ctx.slots.inject` and `ctx.slots.register`; follow the selected slot's props and options from `Slots.listSubTree` when you change the slot.\n\nKeep factories free of side effects. Register styles, timers, listeners and other resources inside `apply` with `ctx.effect`/`ctx.on` and return their cleanup functions. Component-local styles can render as React elements so unmounting removes them. Verify disposal for resources you add. Inherit the host theme for containers and controls; artwork may use its own colors. A page or panel beyond a decoration follows the UI rules in `references/practices.md`. Route visible UI text through the Client locale service. Do not replace the app root or append a second application to `document.body`. Do not read another plugin's DOM, stylesheet, or component source to estimate placement; choose a slot that already allocates space."
+        }
+      ]
+    },
+    {
+      "member": "dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/templates/decoration/package.json",
+      "sha256": "08a8d23db9b417c706bd57084b99781631a95f9fd556558da0a3920ac7fa7690",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 21,
+          "text": "{\n  \"name\": \"@local/my-decoration\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"exports\": {\n    \".\": \"./index.js\",\n    \"./client\": \"./client.js\",\n    \"./locale/*.json\": \"./locale/*.json\",\n    \"./icon\": \"./icon.svg\"\n  },\n  \"files\": [\"index.js\", \"client.js\", \"cordis.patch.yml\", \"locale/*.json\", \"icon.svg\"],\n  \"dsh\": {\n    \"bundle\": { \"patch\": \"./cordis.patch.yml\" },\n    \"client\": {\n      \"platform\": \"web\",\n      \"immediately\": true,\n      \"inject\": [\"@deepseek-ai/dsh-client-ui-conversation\"]\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "member": "dsh/node_modules/@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/templates/decoration/client.js",
+      "sha256": "bb17be70ae65f05d2cb26dd18f54448d706a89a1ba4da7ee3fe46ed46ac89f69",
+      "excerpts": [
+        {
+          "startLine": 1,
+          "endLine": 22,
+          "text": "window.__ModuleLoader__.load({\n  id: '@local/my-decoration',\n  factory(require) {\n    const React = require('react');\n    const h = React.createElement;\n    function Decoration() {\n      return h('svg', {\n        viewBox: '0 0 64 64', width: 48, height: 48,\n        'aria-hidden': true,\n        style: { display: 'block', pointerEvents: 'none' },\n      }, h('circle', { cx: 32, cy: 32, r: 24, fill: '#247bbf' }));\n    }\n    return {\n      inject: ['slots'],\n      apply(ctx) {\n        ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({\n          name: 'conversation.composer.dock', id: 'my-decoration', order: 5,\n        }, Decoration));\n      },\n    };\n  },\n});"
+        }
+      ]
+    },
+    {
+      "member": "dsh/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js",
+      "sha256": "606ae0ba66ab52f5dd3dda5fa6010a21704329e43e10c28098685e7048d4da7c",
+      "excerpts": [
+        {
+          "startLine": 20128,
+          "endLine": 20132,
+          "text": "\t\t\t\t\t\"conversation.composer.dock\": {\n\t\t\t\t\t\tkind: \"list\",\n\t\t\t\t\t\tscope: \"session\"\n\t\t\t\t\t}\n\t\t\t\t},"
+        }
+      ]
+    },
+    {
+      "member": "dsh/node_modules/@deepseek-ai/dsh-client-ui-layout/lib/client.js",
+      "sha256": "64366054aba2a9e4abfa0e064e20f5d752f94cfa831e20b0034c21a8031f9860",
+      "excerpts": [
+        {
+          "startLine": 643,
+          "endLine": 646,
+          "text": "\t\t\t\t\t\t\"shell.overlay\": {\n\t\t\t\t\t\t\tkind: \"list\",\n\t\t\t\t\t\t\tscope: \"root\"\n\t\t\t\t\t\t},"
+        }
+      ]
+    },
+    {
+      "member": "dsh/node_modules/@deepseek-ai/dsh-client-connection/lib/index.js",
+      "sha256": "0ebcca7583e082716f79b0b55bc1749d48269cc8db2989b043b321b57abd3684",
+      "excerpts": [
+        {
+          "startLine": 724,
+          "endLine": 735,
+          "text": "\tget rpc() {\n\t\tconst owner = this.ctx;\n\t\treturn {\n\t\t\thandle: (channel, handler) => this.register(owner, channel, handler),\n\t\t\tintercept: (channel, matches, handler) => this.registerInterceptor(owner, channel, matches, handler)\n\t\t};\n\t}\n\t/** Exact Fetch-route registry scoped to the Context reading this service. */\n\tget fetch() {\n\t\tconst owner = this.ctx;\n\t\treturn { register: (route) => this.registerFetchRoute(owner, route) };\n\t}"
+        },
+        {
+          "startLine": 840,
+          "endLine": 856,
+          "text": "\tregisterFetchRoute(owner, route) {\n\t\tassertFetchRoute(route);\n\t\tconst registered = {\n\t\t\tmethods: new Set(route.methods),\n\t\t\trequestBody: route.requestBody,\n\t\t\tfetch: route.fetch\n\t\t};\n\t\treturn owner.effect(() => {\n\t\t\tif (this.fetchRoutes.has(route.path)) throw new Error(`connection: exact Fetch route ${JSON.stringify(route.path)} is already registered`);\n\t\t\tthis.fetchRoutes.set(route.path, registered);\n\t\t\treturn () => {\n\t\t\t\tthis.fetchRoutes.delete(route.path);\n\t\t\t};\n\t\t}, `client-connection: ${route.path} Fetch route`);\n\t}\n\tregister(owner, channel, handler) {\n\t\tassertChannel(channel);"
+        }
+      ]
+    },
+    {
+      "member": "dsh/node_modules/@deepseek-ai/dsh-client-connection/README.md",
+      "sha256": "c84b049e4d7bd8957e9edfb7e30aace595ac6e62b470efda629d56b701ca6337",
+      "excerpts": [
+        {
+          "startLine": 28,
+          "endLine": 36,
+          "text": "The `./client` import selects the standalone `lib/client.node.js` ESM bundle in Node and the `lib/client.browser.js` loader factory in browsers. The Web Host still serves the browser export at the logical `/plugins/.../client.js` URL. Import the Client entry for a non-page Cordis tree; the separate package root is the Host entry.\n\nA static desktop page can provide `__DSH_TRANSPORT__.streamBaseUrl` for the HTTP origin of its owned Host. The Gateway uses that origin for its WebSocket while HTTP transport remains independently selected. The desktop carrier owns authentication; setting the origin alone grants no access.\n\nUnary RPC requests use JSON. A Host handler may return byte attachments that it has already separated from the JSON-compatible result value, with each attachment naming its result-relative path. Connection writes these values as multipart parts. The JSON `metadata` part contains the RPC response envelope with `null` placeholders and an attachment table recording each path, codec, and part identifier. Paths use string keys and numeric array indices; no business field name is reserved. The Client validates the envelope, `rpcId`, attachment table, and parts, then restores each byte value as an `ArrayBuffer`-backed view. Results without attachments, including base64 strings, and failures remain JSON. Logical RPC carriers return decoded native values directly. Connection does not discover binary fields or depend on Typert; the handler that owns a result protocol performs any type-directed or runtime projection before returning. Binary parameters, events, and streamed binary results are unsupported.\n\nThe browser uses HTTP POST for Remote unary calls. API Gateway owns the `/api/remote.mux` WebSocket and its logical streams; shell-owned compositions provide equivalent Remote streams, including a stream's uplink, through `connection.rpc.open` without opening a WebSocket. The browser plugin reads the page transport, recovery settings, and location, then delegates to `installConnection(ctx, options)`. A composition that owns its carrier may call the same installer directly; the whole-client test tier does so. Non-page carriers supply `ClientTransportHooks.createWebSocket` with the same authenticated Cookie as HTTP and a `streamBaseUrl`; `ConnectionHandle.openWebSocket()` resolves the Mux path against that base and invokes the selected factory. Each invocation creates one Context-owned service, so several Client trees can use different carriers in one realm. The Host half always provides the carrier-neutral RPC and exact `GET`/`HEAD`/`POST` route registries. When a Web carrier is present it also owns the sole `/api` route, Fetch bridge, browser authentication, and Host/Origin checks; a shell-owned carrier dispatches the shared Fetch handler directly. Each exact route declares buffered or streaming request-body handling before the bridge reads any bytes. Typert Gateway claims generated Remote endpoints, feature packages register non-JSON responses such as Session-log downloads and raw file uploads, and unclaimed requests return 404. Loopback hostname classification remains package-internal to the browser-facing Client state. Browser raw-body transfer is provided by [`dsh-client-file-upload`](../file-upload/README.md).\n\n-----"
+        }
+      ]
+    },
+    {
+      "member": "dsh/node_modules/@deepseek-ai/dsh-api-remotes/README.md",
+      "sha256": "1e6f19d62d29b09971deec72cc1c81c073b7e8b42f7f791d145684ec230e6f99",
+      "excerpts": [
+        {
+          "startLine": 76,
+          "endLine": 86,
+          "text": "\n- The capability set is fixed by explicit build-time value imports; the Client does not discover the Host's active Services or Remote definitions at runtime.\n- Additional capabilities require an explicit `/remote` value import and mount in this assembly.\n- Only scoped waterfalls that are still pending are replayed after reconnection; ordinary one-way notifications remain isolated best-effort deliveries and are not replayed. State that requires reliable recovery needs an owner-provided query, cursor, or opening baseline.\n\n\n<a id=\"dev-note\"></a>\n### Dev Note\n\n<details>\n<summary>Working context for maintainers — click to expand</summary>"
+        }
+      ]
+    }
+  ]
+}

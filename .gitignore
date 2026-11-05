@@ -21,3 +21,9 @@ engine/signing-identity
 
 # Local rollback snapshots (binaries + profile backups); never published.
 .rollback/
+
+# Video production artefacts
+video_build/
+zcode_install_github.mp4
+zcode_install_thumbnail.jpg
+

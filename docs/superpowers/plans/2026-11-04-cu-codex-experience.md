@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node ESM、Swift、AppKit、Core Animation、Accessibility、ScreenCaptureKit、AVFoundation；沿用现有构建方式。
 
-**Spec:** [技术方案](/Users/johnkwok/Downloads/work/super-computer-use/docs/2026-11-04-cu-codex-experience-technical-design.md)。开发前同时阅读该文与 [第二轮复查](/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/second-review.md)。本清单尚未执行；所有“新增”文件和命令选项都是待实现内容。
+**Spec:** [技术方案](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/2026-11-04-cu-codex-experience-technical-design.md)。开发前同时阅读该文与 [第二轮复查](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/reviews/second-review.md)。本清单尚未执行；所有“新增”文件和命令选项都是待实现内容。
 
 ## Global Constraints
 
@@ -31,7 +31,7 @@
 
 ---
 
-路径相对 `/Users/johnkwok/Downloads/work/super-computer-use`。现有文件及基线定位见 Spec §8。各任务独立提交，执行顺序为 1→2→3→4→5→6→7→8→9；Task 6 先建立基准，Task 9 再用于验收。
+路径相对 `/Users/johnkwok/Downloads/work/dsh-super-computer-use`。现有文件及基线定位见 Spec §8。各任务独立提交，执行顺序为 1→2→3→4→5→6→7→8→9；Task 6 先建立基准，Task 9 再用于验收。
 
 ## Task 1：目标整体解析与工具 schema（M0 / F1、F8）
 

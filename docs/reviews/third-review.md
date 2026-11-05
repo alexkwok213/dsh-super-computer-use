@@ -17,11 +17,11 @@
 | 已有录像及日志 | 32 秒左右；56 条事件全部为 `source:adapter`、`kind:click` | demo 循环和点击反馈；不能证明所有动作的 native 事件链或完整观看预览 |
 | 呈现和业务完成率 | 未测 | 没有“与内置 CU 一样流畅”的量化结论；没有模型 + DSH 端到端完成率 |
 
-原始结果见 [third-review-evidence.json](/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/third-review-evidence.json)。模拟探针的 `reproduced:true` 和退出码 0 表示**缺陷成功复现**，不是产品验收通过。
+原始结果见 [third-review-evidence.json](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/reviews/third-review-evidence.json)。模拟探针的 `reproduced:true` 和退出码 0 表示**缺陷成功复现**，不是产品验收通过。
 
 **R1 · P1：显式切换目标后，token 点击仍可作用于旧目标**
 
-定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/index.mjs) `1322–1331`；[lib/core.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/core.mjs) `936–939`。
+定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/index.mjs) `1322–1331`；[lib/core.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/core.mjs) `936–939`。
 
 `resolveTargetArgs` 正确解析了新目标，但 token 分支只执行 `axTokenFor(ref)`，随后将 token 交给原 worker。此处分支没有比较请求的 pid/window 与 worker 的绑定目标，也没有把请求目标传到原生派发端。`startAXWorker` 内部的目标重启判断不能覆盖绕过该方法的点击。
 
@@ -33,7 +33,7 @@
 
 **R2 · P1：展示给模型的节点与 token 来自两次不同观察**
 
-定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/index.mjs) `794–806`。
+定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/index.mjs) `794–806`。
 
 `cu_snapshot` 先运行一次 snapshot 并保存节点和 snapshotId，再通过 worker 重新观察，最后把第二次观察的 path→token 映射附到第一次观察的结果中。控件在两次观察之间重排时，同一路径可以指向不同对象。
 
@@ -45,7 +45,7 @@
 
 **R3 · P1：输入前的身份验证异常会放行，而且实际输入仍按路径执行**
 
-定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/index.mjs) `1496–1512`。
+定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/index.mjs) `1496–1512`。
 
 `axVerify` 抛错后被转成 null，只有“存在 verdict 且非 ok”才拒绝。因此超时、worker 退出等无法证明身份的情况，会继续执行旧路径输入。即使 verify 成功，后续另一个命令仍重新按 ref 解析；验证与实际作用对象之间仍有竞态。
 
@@ -57,7 +57,7 @@
 
 **R4 · P1：worker 超时后的迟到响应会被当作下一请求的结果**
 
-定位：[lib/core.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/core.mjs) `896–920`。
+定位：[lib/core.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/core.mjs) `896–920`。
 
 `_axRequest` 按“收到的第一行 JSON”完成当前请求。超时只移除监听器；worker 没有重启，协议也没有 requestId。下一个请求安装监听器后，会接收到前一个请求的迟到结果。
 
@@ -69,7 +69,7 @@
 
 **R5 · P1：停止只取消已创建的请求，排队动作仍可在停止后启动**
 
-定位：[lib/core.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/core.mjs) `1110–1147`、`1914–1918`、`1971–1986`。
+定位：[lib/core.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/core.mjs) `1110–1147`、`1914–1918`、`1971–1986`。
 
 AbortController 在队列任务实际运行时才创建。stop 只能遍历当前 `_inflight`，无法取消尚未启动的任务；任务出队也不检查 session generation。默认 stop 不调用原生 pause。取消 HTTP fetch 本身亦不证明服务器已取消其子进程。
 
@@ -81,7 +81,7 @@ AbortController 在队列任务实际运行时才创建。stop 只能遍历当�
 
 **R6 · P1：预览在 deadline 前开始 fallback，超时后仍堵住动作队列**
 
-定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/index.mjs) `284–306`。
+定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/index.mjs) `284–306`。
 
 已有修复可以阻止“daemon 超时后才启动”的幽灵 shot，但 deadline 前已启动的 fallback 仍通过 `manager.exec` 占用动作队列。预算到期只结束调用者等待，没有取消这个 shot。
 
@@ -93,7 +93,7 @@ AbortController 在队列任务实际运行时才创建。stop 只能遍历当�
 
 **R7 · P1：原生预览有独立组件，但插件入口尚未接通，默认路径也没有自动降级**
 
-定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/index.mjs) session/preview 路径；[engine/Sources/main.swift](/Users/johnkwok/Downloads/work/super-computer-use/engine/Sources/main.swift) `2258–2284`；[PreviewCapture.swift](/Users/johnkwok/Downloads/work/super-computer-use/engine/Sources/PreviewCapture.swift) `180–200`、`219–225`、`275–295`。
+定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/index.mjs) session/preview 路径；[engine/Sources/main.swift](/Users/johnkwok/Downloads/work/dsh-super-computer-use/engine/Sources/main.swift) `2258–2284`；[PreviewCapture.swift](/Users/johnkwok/Downloads/work/dsh-super-computer-use/engine/Sources/PreviewCapture.swift) `180–200`、`219–225`、`275–295`。
 
 `preview.start/visible/stop` 只在原生 helper 的入口实现；`lib` 中没有调用这些命令的插件接线。`cu_session` 的 preview 仍走截图/附件路径。因此“原生卡片可单独运行”尚不能推导出日常插件操作会呈现该卡片。
 
@@ -105,7 +105,7 @@ AbortController 在队列任务实际运行时才创建。stop 只能遍历当�
 
 **R8 · P1：cursor helper EOF 退出后，preview 子进程遗留**
 
-定位：[engine/Sources/main.swift](/Users/johnkwok/Downloads/work/super-computer-use/engine/Sources/main.swift) `2258–2291`；[PreviewCapture.swift](/Users/johnkwok/Downloads/work/super-computer-use/engine/Sources/PreviewCapture.swift) `301–331`。
+定位：[engine/Sources/main.swift](/Users/johnkwok/Downloads/work/dsh-super-computer-use/engine/Sources/main.swift) `2258–2291`；[PreviewCapture.swift](/Users/johnkwok/Downloads/work/dsh-super-computer-use/engine/Sources/PreviewCapture.swift) `301–331`。
 
 正常 preview.stop 会结束子进程，但 helper 的 stdin EOF 直接 exit(0)，没有执行相同清理。子 preview 的 readLine 循环遇到 EOF 仅结束 reader，app.run 继续等待其定时器。
 
@@ -117,7 +117,7 @@ AbortController 在队列任务实际运行时才创建。stop 只能遍历当�
 
 **R9 · P1：native 阶段事件没有贯通真实工具链，动作动画仍有两套来源**
 
-定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/index.mjs) `1395` 及各动作 execute；[lib/core.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/core.mjs) `1150–1192`、`1229–1254`；[engine/Sources/main.swift](/Users/johnkwok/Downloads/work/super-computer-use/engine/Sources/main.swift) `3603–3623`。
+定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/index.mjs) `1395` 及各动作 execute；[lib/core.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/core.mjs) `1150–1192`、`1229–1254`；[engine/Sources/main.swift](/Users/johnkwok/Downloads/work/dsh-super-computer-use/engine/Sources/main.swift) `3603–3623`。
 
 原生命令支持 `--events-v1`，JS 也有流解析器，但普通工具调用没有开启这条路径；服务 `/v1/exec` 不处理 eventsVersion/eventContext，也没有转发阶段事件，而是在 runEngine 完成后返回一个 JSON。token worker 路径同样只返回最终结果。
 
@@ -129,7 +129,7 @@ AbortController 在队列任务实际运行时才创建。stop 只能遍历当�
 
 **R10 · P2：token click 丢失 button/count 的公开语义**
 
-定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/index.mjs) `1331`。
+定位：[lib/index.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/index.mjs) `1331`。
 
 复现 `token_click_loses_semantics`：请求 right + count=2，实际仍只有一次 AXPress。这可能把期望的上下文菜单操作变成普通激活。
 
@@ -139,7 +139,7 @@ AbortController 在队列任务实际运行时才创建。stop 只能遍历当�
 
 **R11 · P2：宣称“队列≤64”和呈现测量完成，目前没有实现证据**
 
-定位：[engine/Sources/main.swift](/Users/johnkwok/Downloads/work/super-computer-use/engine/Sources/main.swift) `2221–2226`；[VisualFeedback.swift](/Users/johnkwok/Downloads/work/super-computer-use/engine/Sources/VisualFeedback.swift) `214–224`；[lib/core.mjs](/Users/johnkwok/Downloads/work/super-computer-use/lib/core.mjs) `674–680`。
+定位：[engine/Sources/main.swift](/Users/johnkwok/Downloads/work/dsh-super-computer-use/engine/Sources/main.swift) `2221–2226`；[VisualFeedback.swift](/Users/johnkwok/Downloads/work/dsh-super-computer-use/engine/Sources/VisualFeedback.swift) `214–224`；[lib/core.mjs](/Users/johnkwok/Downloads/work/dsh-super-computer-use/lib/core.mjs) `674–680`。
 
 每条 stdin 命令先向主线程投递一个 block，随后才合并 cursor。`visualQueueLimit=64` 只被用于限制 droppedCursorCount 的计数值，不是待处理队列的容量。现有 10→1 离屏测试不能证明 stdin 持续突发时主线程 backlog 有界。
 
@@ -169,7 +169,7 @@ helper stdout 被 ignore；没有计划中的渲染提交 ack。`firstFrameMs` �
 
 **复跑资料**
 
-- [纯逻辑复现脚本](/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/third-review-probes.mjs)：真实工具/manager + 模拟引擎，无桌面操作。在 4bfe1ca 的独立导出目录运行；脚本断言缺陷仍存在，修复后应转写为正确行为的测试。
-- [原生预览 EOF 复现](/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/third-review-native-preview-probe.py)：只创建专用 demo 和 helper，并清理自身进程；需要本机辅助功能/录屏权限。
-- [状态读取探针](/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/service-read-probe.mjs)：已安装服务 + 本轮专用 demo，不调用全局 pause。
-- [本轮原始证据](/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/third-review-evidence.json)：模拟、原生、本机服务及已有录像日志统计分别存放，禁止混合解释。
+- [纯逻辑复现脚本](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/reviews/third-review-probes.mjs)：真实工具/manager + 模拟引擎，无桌面操作。在 4bfe1ca 的独立导出目录运行；脚本断言缺陷仍存在，修复后应转写为正确行为的测试。
+- [原生预览 EOF 复现](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/reviews/third-review-native-preview-probe.py)：只创建专用 demo 和 helper，并清理自身进程；需要本机辅助功能/录屏权限。
+- [状态读取探针](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/reviews/service-read-probe.mjs)：已安装服务 + 本轮专用 demo，不调用全局 pause。
+- [本轮原始证据](/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/reviews/third-review-evidence.json)：模拟、原生、本机服务及已有录像日志统计分别存放，禁止混合解释。

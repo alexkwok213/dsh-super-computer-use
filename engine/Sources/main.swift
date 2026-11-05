@@ -857,19 +857,30 @@ func bringOnStage(pid: pid_t, target: CGWindowID) -> Bool {
 // (secure_input_active, sheet_or_modal_on_target_window, another_window_on_top,
 // app_hidden, …), so a caller can react to the same conditions either way.
 
-let pausePath = NSString(string: "~/.cu/pause").expandingTildeInPath
+func stateDirectoryPath() -> String {
+    if let env = ProcessInfo.processInfo.environment["CU_STATE_DIR"], !env.isEmpty {
+        return (env as NSString).expandingTildeInPath
+    }
+    return NSString(string: "~/.cu").expandingTildeInPath
+}
 
-let lastActionPath = NSString(string: "~/.cu/last-action").expandingTildeInPath
+func ensureStateDirectory() {
+    try? FileManager.default.createDirectory(
+        atPath: stateDirectoryPath(),
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700])
+}
 
-let actionsLogPath = NSString(string: "~/.cu/actions.log").expandingTildeInPath
+var pausePath: String { (stateDirectoryPath() as NSString).appendingPathComponent("pause") }
+var lastActionPath: String { (stateDirectoryPath() as NSString).appendingPathComponent("last-action") }
+var actionsLogPath: String { (stateDirectoryPath() as NSString).appendingPathComponent("actions.log") }
 
 // The service log only sees traffic that comes through /v1/exec, so a command run
 // straight from a shell left no trace — which made "who moved my front window"
 // unanswerable. Every action and every activation is appended here instead.
 func audit(_ note: String) {
     let manager = FileManager.default
-    try? manager.createDirectory(atPath: NSString(string: "~/.cu").expandingTildeInPath,
-                                 withIntermediateDirectories: true)
+    ensureStateDirectory()
     if let size = (try? manager.attributesOfItem(atPath: actionsLogPath)[.size]) as? Int, size > 2_000_000 {
         if let text = try? String(contentsOfFile: actionsLogPath, encoding: .utf8) {
             let kept = text.split(separator: "\n").suffix(1000).joined(separator: "\n")
@@ -887,8 +898,7 @@ func audit(_ note: String) {
 }
 
 func markAction() {
-    try? FileManager.default.createDirectory(atPath: NSString(string: "~/.cu").expandingTildeInPath,
-                                            withIntermediateDirectories: true)
+    ensureStateDirectory()
     let stamp = String(Date().timeIntervalSince1970)
     try? stamp.write(toFile: lastActionPath, atomically: true, encoding: .utf8)
     let argv = CommandLine.arguments.dropFirst().joined(separator: " ")
@@ -929,8 +939,7 @@ func pauseActive() -> Bool {
 }
 
 func markPause() {
-    try? FileManager.default.createDirectory(atPath: NSString(string: "~/.cu").expandingTildeInPath,
-                                            withIntermediateDirectories: true)
+    ensureStateDirectory()
     FileManager.default.createFile(atPath: pausePath, contents: Data())
 }
 
@@ -1028,7 +1037,7 @@ func hasSheet(_ pid: pid_t) -> Bool {
 }
 
 /// Returns a refusal payload, or nil when the action may proceed.
-let allowlistPath = NSString(string: "~/.cu/allowed-apps.json").expandingTildeInPath
+var allowlistPath: String { (stateDirectoryPath() as NSString).appendingPathComponent("allowed-apps.json") }
 
 func allowlist() -> [String] {
     guard let data = FileManager.default.contents(atPath: allowlistPath),
@@ -1703,7 +1712,7 @@ final class HaloPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-let activityPath = NSString(string: "~/.cu/activity.json").expandingTildeInPath
+var activityPath: String { (stateDirectoryPath() as NSString).appendingPathComponent("activity.json") }
 
 func currentActivity() -> String? {
     guard let data = FileManager.default.contents(atPath: activityPath),
@@ -1831,7 +1840,7 @@ final class CaptureDaemon {
     /// moment. Remembering a stall across daemon restarts keeps the very first
     /// preview of a session at ~300 ms instead of paying the 1.5 s detection
     /// again. It expires, so an OS update that fixes the path is picked up.
-    private static let stallMarker = NSString(string: "~/.cu/sck-stall.json").expandingTildeInPath
+    private static var stallMarker: String { (stateDirectoryPath() as NSString).appendingPathComponent("sck-stall.json") }
     private static let osBuild = ProcessInfo.processInfo.operatingSystemVersionString
 
     private static func stalledRecently() -> Bool {
@@ -2158,9 +2167,10 @@ final class ScreenRecordingIndicator: NSObject, SCStreamOutput {
 /// Path the menu-bar app publishes its stream state to. The CLI cannot see the
 /// app's ScreenCaptureKit stream, so this file is the only evidence that the
 /// on/off request was actually applied by the process that owns it.
-let screenIndicatorStatePath: String = NSString(string: "~/.cu/screen-indicator.json").expandingTildeInPath
+var screenIndicatorStatePath: String { (stateDirectoryPath() as NSString).appendingPathComponent("screen-indicator.json") }
 
 func writeScreenIndicatorState(active: Bool) {
+    ensureStateDirectory()
     let payload: [String: Any] = ["active": active, "pid": getpid(),
                                   "ts": Date().timeIntervalSince1970]
     guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
@@ -2666,7 +2676,7 @@ func runCapsule(label: String, seconds: Double) -> Never {
     app.setActivationPolicy(.accessory)
 
     // One capsule per session: a second one takes over from the first.
-    let pidPath = NSString(string: "~/.cu/capsule.pid").expandingTildeInPath
+    let pidPath = (stateDirectoryPath() as NSString).appendingPathComponent("capsule.pid")
     if let text = try? String(contentsOfFile: pidPath, encoding: .utf8),
        let previous = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
        previous > 0, previous != getpid(),
@@ -2674,8 +2684,7 @@ func runCapsule(label: String, seconds: Double) -> Never {
         .lastPathComponent == "cu" {
         NSRunningApplication(processIdentifier: previous)?.terminate()
     }
-    try? FileManager.default.createDirectory(atPath: NSString(string: "~/.cu").expandingTildeInPath,
-                                            withIntermediateDirectories: true)
+    ensureStateDirectory()
     try? "\(getpid())".write(toFile: pidPath, atomically: true, encoding: .utf8)
 
     let width: CGFloat = 340
@@ -3166,26 +3175,31 @@ struct ServiceConfig: Codable {
     var autoHalo: Bool?
 }
 
-let serviceConfigPath = NSString(string: "~/.cu/config.json").expandingTildeInPath
+var serviceConfigPath: String {
+    (stateDirectoryPath() as NSString).appendingPathComponent("config.json")
+}
 
 func loadServiceConfig(portOverride: Int?, tokenOverride: String?) -> ServiceConfig {
+    ensureStateDirectory()
     var config = ServiceConfig(port: 47777, token: "", screenshotMaxDimension: 1600,
                                pauseOnUserActivity: true, autoHalo: true)
     if let data = FileManager.default.contents(atPath: serviceConfigPath),
        let decoded = try? JSONDecoder().decode(ServiceConfig.self, from: data) {
         config = decoded
     }
+    let envToken = ProcessInfo.processInfo.environment["CU_AUTH_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let envToken, !envToken.isEmpty {
+        config.token = envToken
+    } else if let tokenOverride, !tokenOverride.isEmpty {
+        config.token = tokenOverride
+    }
     if config.token.isEmpty {
         config.token = UUID().uuidString.replacingOccurrences(of: "-", with: "")
     }
-    let explicit = portOverride != nil || tokenOverride != nil
     if let portOverride { config.port = portOverride }
-    if let tokenOverride { config.token = tokenOverride }
-    try? FileManager.default.createDirectory(
-        atPath: NSString(string: "~/.cu").expandingTildeInPath,
-        withIntermediateDirectories: true)
-    if !explicit, let encoded = try? JSONEncoder().encode(config) {
-        try? encoded.write(to: URL(fileURLWithPath: serviceConfigPath))
+    if let encoded = try? JSONEncoder().encode(config) {
+        try? encoded.write(to: URL(fileURLWithPath: serviceConfigPath), options: .atomic)
+        chmod(serviceConfigPath, 0o600)
     }
     return config
 }
@@ -3443,9 +3457,12 @@ func toolArgv(_ tool: String, _ a: [String: Any], config: ServiceConfig? = nil) 
     }
 }
 
-let serviceLogPath = NSString(string: "~/.cu/service.log").expandingTildeInPath
+var serviceLogPath: String {
+    (stateDirectoryPath() as NSString).appendingPathComponent("service.log")
+}
 
 func serviceLog(_ line: String) {
+    ensureStateDirectory()
     let stamp = ISO8601DateFormatter().string(from: Date())
     let text = "[\(stamp)] \(line)\n"
     if let handle = FileHandle(forWritingAtPath: serviceLogPath) {
@@ -3825,16 +3842,6 @@ func serve(_ config: ServiceConfig) -> Never {
                 writeHTTP(clientFD, status: 200, body: jsonData(serviceStatus(config)))
             case ("GET", "/v1/tools"):
                 writeHTTP(clientFD, status: 200, body: toolsJSON())
-            case ("GET", "/v1/agents"):
-                writeHTTP(clientFD, status: 200, body: jsonData(["ok": true, "agents": agentsCatalog()]))
-            case ("POST", "/v1/agents/connect"):
-                guard authorized else {
-                    writeHTTP(clientFD, status: 401, body: jsonData(["ok": false, "error": "unauthorized"]))
-                    return
-                }
-                let ids = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])
-                    .flatMap { $0["ids"] as? [String] }
-                writeHTTP(clientFD, status: 200, body: jsonData(["ok": true, "results": agentsConnect(ids: ids)]))
             case ("POST", "/v1/exec"):
                 guard authorized else {
                     writeHTTP(clientFD, status: 401, body: jsonData(["ok": false, "error": "unauthorized"]))
@@ -4189,89 +4196,14 @@ func captureForOCR(windowId: CGWindowID?, screen: Bool, maxDimension: Int = 0) t
                           maxDimension: maxDimension)
     }
     if ProcessInfo.processInfo.environment["CU_SHOT_CLI"] == "1" {
-        do {
-            return try cli()
-        } catch {
-            return try captureViaMenuBarApp(windowId: windowId, screen: screen,
-                                            maxDimension: maxDimension)
-        }
+        return try cli()
     }
     do {
         return try capture(windowId: windowId, screen: screen, displayIndex: 0,
                            maxDimension: maxDimension)
     } catch {
-        do {
-            return try cli()
-        } catch {
-            return try captureViaMenuBarApp(windowId: windowId, screen: screen,
-                                            maxDimension: maxDimension)
-        }
+        return try cli()
     }
-}
-
-// MARK: - capture delegation
-
-/// ScreenCaptureKit completions never fire inside a launchd agent, and the
-/// screencapture CLI keeps its own TCC identity. The menu bar app is a real UI
-/// process with its own Screen Recording grant, so a capture that fails here is
-/// delegated to it over DistributedNotificationCenter: request → PNG in tmp →
-/// reply. Everything stays local to the login session.
-func captureViaMenuBarApp(windowId: CGWindowID?, screen: Bool, maxDimension: Int,
-                          timeout: TimeInterval = 20) throws -> Capture {
-    if ProcessInfo.processInfo.environment["CU_NO_APP_SHOT"] == "1" {
-        throw NSError(domain: "cu", code: 12,
-                      userInfo: [NSLocalizedDescriptionKey: "app capture delegation disabled"])
-    }
-    let running = NSRunningApplication.runningApplications(withBundleIdentifier: "local.cu.app")
-    guard !running.isEmpty else {
-        throw NSError(domain: "cu", code: 11,
-                      userInfo: [NSLocalizedDescriptionKey:
-                                 "no capture permission here and the menu bar app (Computer Use.app) is not running"])
-    }
-    let requestId = UUID().uuidString
-    let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("cu-shot-\(requestId).png")
-    var info: [String: Any] = ["id": requestId, "path": path, "maxDimension": maxDimension]
-    if let windowId { info["windowId"] = Int(windowId) }
-    if screen { info["screen"] = true }
-    let center = DistributedNotificationCenter.default()
-    var reply: [String: Any] = [:]
-    let observer = center.addObserver(forName: NSNotification.Name("local.cu.capture-reply"),
-                                      object: nil, queue: nil) { note in
-        guard let payload = note.userInfo,
-              (payload["id"] as? String) == requestId else { return }
-        reply = Dictionary(uniqueKeysWithValues: payload.compactMap { entry in
-            (entry.key as? String).map { ($0, entry.value) }
-        })
-    }
-    defer { center.removeObserver(observer) }
-    center.postNotificationName(NSNotification.Name("local.cu.capture-request"),
-                                object: nil, userInfo: info, deliverImmediately: true)
-    let deadline = Date().addingTimeInterval(timeout)
-    while reply.isEmpty && Date() < deadline {
-        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
-    }
-    guard !reply.isEmpty else {
-        throw NSError(domain: "cu", code: 13,
-                      userInfo: [NSLocalizedDescriptionKey:
-                                 "the menu bar app did not answer the capture request within \(Int(timeout))s"])
-    }
-    guard reply["ok"] as? Bool == true else {
-        let message = (reply["message"] as? String) ?? "unknown error"
-        throw NSError(domain: "cu", code: 14,
-                      userInfo: [NSLocalizedDescriptionKey:
-                                 "the menu bar app could not capture: \(message)"])
-    }
-    guard let png = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
-        throw NSError(domain: "cu", code: 15,
-                      userInfo: [NSLocalizedDescriptionKey: "the menu bar app reported success but wrote no file"])
-    }
-    try? FileManager.default.removeItem(atPath: path)
-    let origin = reply["origin"] as? [String: Double] ?? [:]
-    let size = reply["size"] as? [String: Double] ?? [:]
-    return Capture(png: png,
-                   origin: CGPoint(x: origin["x"] ?? 0, y: origin["y"] ?? 0),
-                   size: CGSize(width: size["width"] ?? 0, height: size["height"] ?? 0),
-                   scale: reply["scale"] as? Double ?? 1)
 }
 
 
@@ -4360,24 +4292,8 @@ func openSystemSettings(_ pane: String) {
     try? process.run()
 }
 
-func revealServiceBinary() {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    process.arguments = ["-R", NSString(string: "~/Library/Application Support/cu/bin/cu").expandingTildeInPath]
-    try? process.run()
-}
-
-func restartService() {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-    process.arguments = ["kickstart", "-k", "gui/\(getuid())/local.cu.service"]
-    try? process.run()
-    process.waitUntilExit()
-}
-
 func readAllowedAppsFile() -> String {
-    let path = NSString(string: "~/.cu/allowed-apps.json").expandingTildeInPath
-    guard let data = FileManager.default.contents(atPath: path),
+    guard let data = FileManager.default.contents(atPath: allowlistPath),
           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let apps = object["apps"] as? [String] else { return "" }
     return apps.joined(separator: "\n")
@@ -4386,12 +4302,10 @@ func readAllowedAppsFile() -> String {
 func writeAllowedAppsFile(_ text: String) {
     let apps = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         .filter { !$0.isEmpty }
-    let path = NSString(string: "~/.cu/allowed-apps.json").expandingTildeInPath
-    try? FileManager.default.createDirectory(atPath: NSString(string: "~/.cu").expandingTildeInPath,
-                                            withIntermediateDirectories: true)
+    ensureStateDirectory()
     if let data = try? JSONSerialization.data(withJSONObject: ["apps": apps],
                                               options: [.prettyPrinted, .sortedKeys]) {
-        try? data.write(to: URL(fileURLWithPath: path))
+        try? data.write(to: URL(fileURLWithPath: allowlistPath))
     }
 }
 
@@ -4471,7 +4385,7 @@ func declaredCaller(_ headers: [String: String]) -> (pid: pid_t, name: String)? 
 func recordHTTPCall(peerPort: UInt16, tool: String, ms: Int, ok: Bool,
                     declared: (pid: pid_t, name: String)? = nil) {
     let caller = declared ?? httpCallerName(peerPort: peerPort)
-    let dir = NSString(string: "~/.cu/clients").expandingTildeInPath
+    let dir = (stateDirectoryPath() as NSString).appendingPathComponent("clients")
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     let key = caller.pid != 0 ? "http-\(caller.pid)" : "http-port-\(peerPort)"
     let path = dir + "/" + key + ".json"
@@ -4507,7 +4421,7 @@ func clientsReport() -> [String: Any] {
     // Each MCP proxy session publishes a record of the app that spawned it, so
     // the console can show who is connected and what they last did. Dead pids are
     // pruned here — a client that quit without cleanup leaves no ghost behind.
-    let dir = NSString(string: "~/.cu/clients").expandingTildeInPath
+    let dir = (stateDirectoryPath() as NSString).appendingPathComponent("clients")
     let manager = FileManager.default
     let now = Date().timeIntervalSince1970
     var rows: [[String: Any]] = []
@@ -4545,349 +4459,12 @@ func clientsReport() -> [String: Any] {
     }.sorted { ($0["calls"] as? Int ?? 0) > ($1["calls"] as? Int ?? 0) }
     var report: [String: Any] = ["ok": true, "count": rows.count,
                                  "clients": rows, "usage": usageRows]
-    if let text = try? String(contentsOfFile: NSString(string: "~/.cu/activity.json").expandingTildeInPath,
-                              encoding: .utf8),
+    if let text = try? String(contentsOfFile: activityPath, encoding: .utf8),
        let activity = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] {
         report["activity"] = activity
         report["activityAge"] = Int(now - (activity["ts"] as? Double ?? now))
     }
     return report
-}
-
-// MARK: - agent catalog (magpie-style)
-
-struct AgentSpec {
-    let id: String
-    let name: String
-    let processes: [String]
-    let configPath: String?      // nil = the agent manages its connectors in its own UI
-    let managedNote: String?
-    // Claude Code refuses a server called "computer-use" (reserved name), so it
-    // gets its own key; the other clients keep the name their UIs already show.
-    var serverName: String = "computer-use"
-}
-
-func agentSpecs() -> [AgentSpec] {
-    let home = NSHomeDirectory()
-    return [
-        AgentSpec(id: "dsh", name: "DeepSeek Harness", processes: ["DeepSeek Harness"],
-                  configPath: nil, managedNote: "由 DSH desktop profile 管理"),
-        AgentSpec(id: "qoder", name: "Qoder CN", processes: ["Qoder"],
-                  configPath: nil, managedNote: "由 Qoder 设置 → 连接器 管理；需握手和调用记录确认"),
-        AgentSpec(id: "workbuddy", name: "WorkBuddy", processes: ["WorkBuddy"],
-                  configPath: home + "/.workbuddy/mcp.json", managedNote: nil),
-        AgentSpec(id: "claude-code", name: "Claude Code", processes: ["claude"],
-                  configPath: home + "/.claude.json", managedNote: nil,
-                  serverName: "cu"),
-        AgentSpec(id: "claude-desktop", name: "Claude Desktop", processes: ["Claude"],
-                  configPath: home + "/Library/Application Support/Claude/claude_desktop_config.json",
-                  managedNote: nil),
-    ]
-}
-
-// Stable home for the MCP proxy script so agent configs survive repo moves.
-func agentProxyScriptPath() -> String {
-    NSString(string: "~/Library/Application Support/cu/mcp/server.py").expandingTildeInPath
-}
-
-func installedEnginePath() -> String {
-    let candidates = [
-        "/Applications/Computer Use.app/Contents/MacOS/Computer Use",
-        NSHomeDirectory() + "/Applications/Computer Use.app/Contents/MacOS/Computer Use",
-    ]
-    if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-        return found
-    }
-    return URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
-}
-
-func runningProcessNames() -> Set<String> {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/ps")
-    process.arguments = ["-axo", "comm="]
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = FileHandle.nullDevice
-    do { try process.run() } catch { return [] }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    guard let text = String(data: data, encoding: .utf8) else { return [] }
-    return Set(text.split(separator: "\n").map { line in
-        line.split(separator: "/").last.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
-    })
-}
-
-func dshProfileState() -> String {
-    let path = NSHomeDirectory() + "/.dsh/profiles/desktop/package.json"
-    guard let data = FileManager.default.contents(atPath: path),
-          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          object["dependencies"] == nil || object["dependencies"] is [String: Any],
-          object["dsh"] == nil || object["dsh"] is [String: Any] else { return "unknown" }
-    let dsh = object["dsh"] as? [String: Any] ?? [:]
-    guard dsh["profile"] == nil || dsh["profile"] is [String: Any] else { return "unknown" }
-    let profile = dsh["profile"] as? [String: Any] ?? [:]
-    guard profile["bundles"] == nil || profile["bundles"] is [String] else { return "unknown" }
-    let dependencies = object["dependencies"] as? [String: Any] ?? [:]
-    let dependency = dependencies["dsh-super-computer-use"] is String
-    let bundle = (profile["bundles"] as? [String] ?? []).contains("dsh-super-computer-use")
-    return dependency && bundle ? "configured" : dependency || bundle ? "partial" : "absent"
-}
-
-func agentsCatalog() -> [[String: Any]] {
-    let rows = (clientsReport()["clients"] as? [[String: Any]]) ?? []
-    let names = runningProcessNames()
-    return agentSpecs().filter { spec in
-        guard spec.id == "qoder" else { return true }
-        let running = names.contains { name in spec.processes.contains { name.hasPrefix($0) } }
-        let roots = ["/Applications", NSHomeDirectory() + "/Applications"]
-        let installed = roots.contains { root in
-            ["Qoder.app", "Qoder CN.app"].contains { app in
-                FileManager.default.fileExists(atPath: root + "/" + app)
-            }
-        }
-        return running || installed
-    }.map { spec in
-        var wired = false
-        if let path = spec.configPath,
-           let data = FileManager.default.contents(atPath: path),
-           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let servers = object["mcpServers"] as? [String: Any] {
-            wired = servers[spec.serverName] != nil
-        }
-        let running = names.contains { name in
-            spec.processes.contains { name.hasPrefix($0) }
-        }
-        let matched = rows.filter { row -> Bool in
-            let client = (row["client"] as? String ?? "").lowercased()
-            let info = row["clientInfo"] as? [String: Any] ?? [:]
-            let reported = (info["name"] as? String ?? "").lowercased()
-            let isCode = client.contains("claude-code") || client == "claude" && (row["appPath"] as? String ?? "").contains(".app") == false || reported.contains("claude-code")
-            if spec.id == "dsh" { return client == "dsh-computer-use" && (row["via"] as? String) == "http" }
-            if spec.id == "claude-code" { return isCode }
-            if spec.id == "claude-desktop" { return client.contains("claude") && !isCode }
-            return spec.processes.contains { client.contains($0.lowercased()) }
-        }
-        var entry: [String: Any] = [
-            "id": spec.id, "name": spec.name,
-            "running": running, "wired": wired,
-            // Managed agents keep their connectors in their own UI; only the
-            // config-file agents get a connect switch in the console.
-            "configurable": spec.configPath != nil,
-            "connected": matched.contains { ($0["alive"] as? Bool ?? false) && $0["initializedAt"] != nil },
-        ]
-        if let best = matched.first {
-            entry["lastTool"] = (best["lastTool"] as? String) ?? ""
-            entry["idleSeconds"] = best["idleSeconds"] ?? 0
-            entry["calls"] = best["calls"] ?? 0
-        }
-        let live = matched.filter { $0["alive"] as? Bool ?? false }
-        if spec.id == "dsh" {
-            let config = dshProfileState()
-            let verified = live.contains { ($0["lastOk"] as? Bool ?? false) && ($0["calls"] as? Int ?? 0) > 0 }
-            entry["configState"] = config
-            entry["wired"] = config == "configured"
-            entry["connected"] = verified
-            entry["state"] = verified ? "● 调用已验证" : "○ 未验证接入"
-            let details = ["configured": "插件依赖和 bundle 已配置", "partial": "插件配置不完整", "absent": "插件未配置", "unknown": "无法读取插件配置"]
-            entry["note"] = verified ? "最近调用成功；\(details[config] ?? "")" : "\(details[config] ?? "无法读取插件配置") · 尚无成功调用验证"
-            return entry
-        }
-        let verified = live.contains { $0["lastSuccessfulCallAt"] != nil }
-        let listed = live.contains { $0["toolsListedAt"] != nil }
-        let initialized = live.contains { $0["initializedAt"] != nil }
-        entry["state"] = verified ? "● 调用已验证" : listed ? "● 已请求工具清单" : initialized ? "◐ 已握手" : wired ? "◐ 已配置·待连接" : "○ 未验证接入"
-        entry["note"] = verified ? "本客户端已有成功调用；不代表其他会话可用"
-            : listed ? "客户端已请求工具清单，请在新会话调用 list_windows 验证"
-            : initialized ? "握手完成，尚未收到工具清单请求"
-            : wired ? "配置存在不代表当前会话已加载；重连 MCP 或重启客户端并新建会话"
-            : spec.managedNote ?? "请先写入 MCP 配置"
-        return entry
-    }
-}
-
-func agentMCPEntry(name: String) -> [String: Any] {
-    ["command": "/usr/bin/python3",
-     "args": [agentProxyScriptPath()],
-     "env": ["CU_BIN": installedEnginePath()]]
-}
-
-func agentsConnect(ids: [String]?) -> [[String: Any]] {
-    var results: [[String: Any]] = []
-    for spec in agentSpecs() {
-        if let ids, !ids.isEmpty, !ids.contains(spec.id) { continue }
-        guard let path = spec.configPath else {
-            results.append(["id": spec.id, "name": spec.name, "status": "managed",
-                            "note": spec.managedNote ?? ""])
-            continue
-        }
-        let manager = FileManager.default
-        var object: [String: Any] = [:]
-        if manager.fileExists(atPath: path) {
-            guard let data = manager.contents(atPath: path),
-                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  parsed["mcpServers"] == nil || parsed["mcpServers"] is [String: Any] else {
-                results.append(["id": spec.id, "name": spec.name, "status": "error",
-                                "error": "现有配置不可读或格式无效，已保留原文件，请先修复配置"])
-                continue
-            }
-            object = parsed
-        }
-        var servers = object["mcpServers"] as? [String: Any] ?? [:]
-        let desired = agentMCPEntry(name: spec.serverName)
-        func canonical(_ value: [String: Any]) -> String {
-            guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
-                  let text = String(data: data, encoding: .utf8) else { return "" }
-            return text
-        }
-        if let existing = servers[spec.serverName] {
-            if let entry = existing as? [String: Any], canonical(entry) == canonical(desired) {
-                results.append(["id": spec.id, "name": spec.name, "status": "already"])
-            } else {
-                results.append(["id": spec.id, "name": spec.name, "status": "error",
-                                "error": "同名 MCP 配置与本程序配置不一致，已保留原配置：\(spec.serverName)"])
-            }
-            continue
-        }
-        servers[spec.serverName] = desired
-        object["mcpServers"] = servers
-        let backup = path + ".bak-cu"
-        try? manager.removeItem(atPath: backup)
-        if manager.fileExists(atPath: path) { try? manager.copyItem(atPath: path, toPath: backup) }
-        do {
-            let data = try JSONSerialization.data(withJSONObject: object,
-                                                  options: [.prettyPrinted, .sortedKeys])
-            try manager.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
-            results.append(["id": spec.id, "name": spec.name, "status": "wired", "backup": backup])
-        } catch {
-            results.append(["id": spec.id, "name": spec.name, "status": "error", "error": "\(error)"])
-        }
-    }
-    return results
-}
-
-func agentsDisconnect(ids: [String]?) -> [[String: Any]] {
-    var results: [[String: Any]] = []
-    for spec in agentSpecs() {
-        if let ids, !ids.isEmpty, !ids.contains(spec.id) { continue }
-        guard let path = spec.configPath else {
-            results.append(["id": spec.id, "name": spec.name, "status": "managed",
-                            "note": spec.managedNote ?? ""])
-            continue
-        }
-        let manager = FileManager.default
-        guard manager.fileExists(atPath: path),
-              let data = manager.contents(atPath: path),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["mcpServers"] is [String: Any] else {
-            results.append(["id": spec.id, "name": spec.name, "status": "absent"])
-            continue
-        }
-        var servers = object["mcpServers"] as? [String: Any] ?? [:]
-        guard let existing = servers[spec.serverName] else {
-            results.append(["id": spec.id, "name": spec.name, "status": "absent"])
-            continue
-        }
-        let desired = agentMCPEntry(name: spec.serverName)
-        let desiredData = try? JSONSerialization.data(withJSONObject: desired, options: [.sortedKeys])
-        let existingData = (existing as? [String: Any]).flatMap {
-            try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys])
-        }
-        guard let desiredData, let existingData, existingData == desiredData else {
-            results.append(["id": spec.id, "name": spec.name, "status": "error",
-                            "error": "同名 MCP 配置与本程序配置不一致，已保留原配置：\(spec.serverName)"])
-            continue
-        }
-        servers.removeValue(forKey: spec.serverName)
-        var updated = object
-        if servers.isEmpty { updated.removeValue(forKey: "mcpServers") }
-        else { updated["mcpServers"] = servers }
-        let backup = path + ".bak-cu"
-        try? manager.removeItem(atPath: backup)
-        try? manager.copyItem(atPath: path, toPath: backup)
-        do {
-            let data = try JSONSerialization.data(withJSONObject: updated,
-                                                  options: [.prettyPrinted, .sortedKeys])
-            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
-            results.append(["id": spec.id, "name": spec.name, "status": "removed", "backup": backup])
-        } catch {
-            results.append(["id": spec.id, "name": spec.name, "status": "error", "error": "\(error)"])
-        }
-    }
-    return results
-}
-
-func releaseMenuBarLock() {
-    let path = NSString(string: "~/.cu/menubar.pid").expandingTildeInPath
-    guard let text = try? String(contentsOfFile: path, encoding: .utf8),
-          pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) == getpid() else { return }
-    try? FileManager.default.removeItem(atPath: path)
-}
-
-/// Held for the lifetime of the menu-bar process. flock is atomic across
-/// processes, unlike the old "read pid file, check liveness, then write" dance,
-/// which let two simultaneous launches both become the menu bar.
-private var menuBarLockHandle: Int32 = -1
-
-func acquireMenuBarLock() -> Bool {
-    let lockPath = NSString(string: "~/.cu/menubar.lock").expandingTildeInPath
-    let fd = open(lockPath, O_CREAT | O_RDWR, 0o600)
-    guard fd >= 0 else { return true }        // never block startup on a lock failure
-    if flock(fd, LOCK_EX | LOCK_NB) != 0 {
-        close(fd)
-        return false
-    }
-    _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
-    menuBarLockHandle = fd
-    // Keep the pid file for diagnostics and for older copies' takeover detection.
-    let pidPath = NSString(string: "~/.cu/menubar.pid").expandingTildeInPath
-    try? String(ProcessInfo.processInfo.processIdentifier).write(toFile: pidPath, atomically: true,
-                                                                 encoding: .utf8)
-    return true
-}
-
-func runMenuBar(openSettings: Bool, openMenu: Bool = false, openConsole: Bool = false,
-                snapshotConsole: String? = nil, snapshotPage: String? = nil,
-                snapshotGuide: String? = nil, selftest: Bool = false) -> Never {
-    // Snapshot/selftest processes are one-shot helpers: they must not take over
-    // the menu-bar instance, so they skip the single-instance lock.
-    let oneShot = snapshotConsole != nil || snapshotGuide != nil || selftest
-    if !oneShot {
-        // A takeover can race: the previous instance may still be exiting when the
-        // new copy asks for the lock. Retry before giving up so a double launch
-        // cannot leave zero menu-bar instances behind.
-        var acquired = acquireMenuBarLock()
-        var attempt = 0
-        while !acquired && attempt < 40 {
-            usleep(150_000)
-            acquired = acquireMenuBarLock()
-            attempt += 1
-        }
-        guard acquired else {
-            // Exit cleanly (another instance owns the bar, so the LaunchAgent
-            // must stay dead), but never silently: a bare exit(0) here is
-            // indistinguishable from a healthy handover in launchd's state.
-            let holder = (try? String(contentsOfFile: NSString(string: "~/.cu/menubar.pid")
-                .expandingTildeInPath, encoding: .utf8))?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown"
-            NSLog("menu bar: lock still held (pid %@) after retries; exiting without a bar", holder)
-            exit(0)
-        }
-    }
-    let previous = frontmostBeforeLaunch()
-    let app = NSApplication.shared
-    let controller = MenuBarController()
-    controller.launchFrontPid = previous
-    controller.openSettingsAtLaunch = openSettings
-    controller.openMenuAtLaunch = openMenu && !oneShot
-    controller.openConsoleAtLaunch = openConsole && !oneShot
-    controller.snapshotPath = snapshotConsole
-    controller.snapshotPage = snapshotPage
-    controller.guideSnapshotPath = snapshotGuide
-    controller.selftestMode = selftest
-    app.delegate = controller
-    app.run()
-    exit(0)
 }
 
 // MARK: - dispatch
@@ -4959,41 +4536,19 @@ case "shot":
         let captureFormat = jpeg && args["region"] == nil ? "jpeg" : "png"
         let raw: Capture
         let idCG = id.map(CGWindowID.init)
-        if args.flag("via-app") {
-            // Diagnostic path: prove the menu bar app can capture on our behalf,
-            // whatever this process's own grants are.
-            raw = try captureViaMenuBarApp(windowId: idCG, screen: screen,
-                                           maxDimension: maxDimension)
-        } else if ProcessInfo.processInfo.environment["CU_SHOT_CLI"] == "1" {
-            // Measured both routes on this machine: screencapture answers in
-            // ~250–380 ms (JPEG/PNG), delegating to the menu bar app in
-            // ~600–700 ms. The CLI stays first; the app is the fallback, as
-            // when Screen Recording is only granted to the app.
-            do {
-                raw = try cliCapture(windowId: idCG, screen: screen,
-                                     displayIndex: args.int("display") ?? 0,
-                                     format: captureFormat, bounds: knownBounds)
-            } catch {
-                raw = try captureViaMenuBarApp(windowId: idCG, screen: screen,
-                                               maxDimension: maxDimension)
-            }
+        if ProcessInfo.processInfo.environment["CU_SHOT_CLI"] == "1" {
+            raw = try cliCapture(windowId: idCG, screen: screen,
+                                 displayIndex: args.int("display") ?? 0,
+                                 format: captureFormat, bounds: knownBounds)
         } else {
             do {
                 raw = try capture(windowId: idCG, screen: screen,
                                   displayIndex: args.int("display") ?? 0,
                                   maxDimension: maxDimension)
             } catch {
-                // The async SCK path needs an app that gets completion callbacks;
-                // a launchd agent does not, so fall back to the synchronous CLI,
-                // then to the menu bar app and its own Screen Recording grant.
-                do {
-                    raw = try cliCapture(windowId: idCG, screen: screen,
-                                         displayIndex: args.int("display") ?? 0,
-                                         format: captureFormat, bounds: knownBounds)
-                } catch {
-                    raw = try captureViaMenuBarApp(windowId: idCG, screen: screen,
-                                                   maxDimension: maxDimension)
-                }
+                raw = try cliCapture(windowId: idCG, screen: screen,
+                                     displayIndex: args.int("display") ?? 0,
+                                     format: captureFormat, bounds: knownBounds)
             }
         }
         // Cropping happens on the already-captured pixels, so asking for a region
@@ -6100,110 +5655,6 @@ case "preview-stream":
                      fps: streamFps, maxDimension: streamMaxDim,
                      watchParentStdin: args.flag("watch-parent"))
 
-case "demo":
-    // A window that belongs to us: used to verify window dragging and zooming
-    // without touching anything the user is working in.
-    let app = NSApplication.shared
-    // Accessory, never regular: the demo window must appear without taking the
-    // user's focus, otherwise testing would itself break the background promise.
-    app.setActivationPolicy(.accessory)
-    let rect = NSRect(x: 420, y: 380, width: 520, height: 470)
-    let window = NSWindow(contentRect: rect,
-                          styleMask: [.titled, .closable, .resizable, .miniaturizable],
-                          backing: .buffered, defer: false)
-    window.title = "cu demo window"
-    window.isReleasedWhenClosed = false
-
-    // A tiny self-contained testbed: an editable field, a counter button and a
-    // scrollable text view, so set_value / select_text / click / scroll can be
-    // exercised without touching any other application.
-    let field = NSTextField(frame: NSRect(x: 20, y: 360, width: 480, height: 24))
-    field.placeholderString = "demo-field"
-    field.stringValue = ""
-    window.contentView?.addSubview(field)
-
-    let button = NSButton(frame: NSRect(x: 20, y: 320, width: 200, height: 28))
-    button.title = "Demo Button 0"
-    button.bezelStyle = .rounded
-    var clicks = 0
-    let handler = ClickCounter {
-        clicks += 1
-        button.title = "Demo Button \(clicks)"
-    }
-    button.target = handler
-    button.action = #selector(ClickCounter.fire)
-    window.contentView?.addSubview(button)
-    objc_setAssociatedObject(button, "cu.demo.handler", handler, .OBJC_ASSOCIATION_RETAIN)
-
-    // A sheet button: lets the safety layer's "a modal is open" refusal be tested
-    // without involving any other application.
-    let sheetButton = NSButton(frame: NSRect(x: 240, y: 320, width: 140, height: 28))
-    sheetButton.title = "Demo Sheet"
-    sheetButton.bezelStyle = .rounded
-    let sheetHandler = ClickCounter {
-        let alert = NSAlert()
-        alert.messageText = "demo sheet"
-        alert.addButton(withTitle: "OK")
-        alert.beginSheetModal(for: window, completionHandler: nil)
-    }
-    sheetButton.target = sheetHandler
-    sheetButton.action = #selector(ClickCounter.fire)
-    window.contentView?.addSubview(sheetButton)
-    objc_setAssociatedObject(sheetButton, "cu.demo.handler", sheetHandler, .OBJC_ASSOCIATION_RETAIN)
-
-    let secret = NSSecureTextField(frame: NSRect(x: 400, y: 360, width: 100, height: 24))
-    secret.placeholderString = "demo-secret"
-    window.contentView?.addSubview(secret)
-
-    let scroll = NSScrollView(frame: NSRect(x: 20, y: 20, width: 480, height: 280))
-    scroll.hasVerticalScroller = true
-    let textView = NSTextView(frame: scroll.bounds)
-    textView.string = (0..<120).map { "demo line \($0)" }.joined(separator: "\n")
-    scroll.documentView = textView
-    window.contentView?.addSubview(scroll)
-
-    // Chromium/Electron bury controls ~20 levels down; this chain gives the tree
-    // a deep branch so `ax --find` can prove it searches as deep as snapshot.
-    final class DeepGroup: NSView {
-        override func isAccessibilityElement() -> Bool { true }
-        override func accessibilityRole() -> NSAccessibility.Role? { .group }
-    }
-    var host: NSView = window.contentView!
-    var chainTop: NSView?
-    for _ in 1...16 {
-        let child = DeepGroup(frame: NSRect(x: 0, y: 0, width: 480, height: 40))
-        host.addSubview(child)
-        if chainTop == nil { chainTop = child }
-        host = child
-    }
-    let deepButton = NSButton(frame: NSRect(x: 4, y: 8, width: 180, height: 24))
-    deepButton.title = "深层按钮 甲"
-    deepButton.bezelStyle = .rounded
-    host.addSubview(deepButton)
-    chainTop?.setFrameOrigin(NSPoint(x: 20, y: 400))
-    // orderFrontRegardless, not makeKeyAndOrderFront: showing a key window would
-    // activate this process and pull focus away from whatever the user is doing.
-    let priorFront = NSWorkspace.shared.frontmostApplication
-    window.orderFrontRegardless()
-    func restoreFocus() {
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid(),
-              let prior = priorFront, prior.processIdentifier != getpid() else { return }
-        // An unbundled AppKit process can still come forward just by showing a
-        // window; hand the focus straight back to whoever had it.
-        _ = activate(pid: prior.processIdentifier)
-        window.orderFrontRegardless()
-    }
-    restoreFocus()
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { restoreFocus() }
-    emit(["ok": true, "demo": "shown"])
-    let seconds = args.double("seconds") ?? 20
-    DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
-        emit(["ok": true, "demo": "timeout"])
-        exit(0)
-    }
-    app.run()
-    exit(0)
-
 case "phantom":
     let x = args.number("x") { fail("missing_x", $0) }
     let y = args.number("y") { fail("missing_y", $0) }
@@ -6219,8 +5670,7 @@ case "allow":
     } else if !apps.contains(where: { $0.caseInsensitiveCompare(spec) == .orderedSame }) {
         apps.append(spec)
     }
-    try? FileManager.default.createDirectory(atPath: NSString(string: "~/.cu").expandingTildeInPath,
-                                            withIntermediateDirectories: true)
+    ensureStateDirectory()
     let payload = try? JSONSerialization.data(withJSONObject: ["apps": apps], options: [.prettyPrinted, .sortedKeys])
     try? payload?.write(to: URL(fileURLWithPath: allowlistPath))
     emit(["ok": true, "action": "allow", "apps": apps, "path": allowlistPath])
@@ -6265,106 +5715,22 @@ case "resume":
     clearPause()
     emit(["ok": true, "action": "resume"])
 
-case "agents":
-    emit(["ok": true, "agents": agentsCatalog()])
-
-case "agents-connect":
-    let ids = args["id"]?.split(separator: ",").map(String.init)
-    emit(["ok": true, "results": agentsConnect(ids: ids)])
-
-case "agents-disconnect":
-    let ids = args["id"]?.split(separator: ",").map(String.init)
-    emit(["ok": true, "results": agentsDisconnect(ids: ids)])
-
 case "service":
     let config = loadServiceConfig(portOverride: args.int("port"), tokenOverride: args["token"])
-    // The service runs the engine hardlink outside the .app bundle; macOS 27
-    // attributes TCC per process, so the app's grants do not cover it. Raise the
-    // consent dialogs under the service's own identity until it is granted.
-    DispatchQueue.global().asyncAfter(deadline: .now() + 2) { requestPermissionsIfMissing() }
-    serve(config)
-
-case "app":
-    // Snapshot/selftest runs are one-shot helpers launched from the same bundle;
-    // they must not retire the running menu-bar instance.
-    let oneShot = args.flag("selftest-ui") || args["snapshot-console"] != nil
-        || args["snapshot-guide"] != nil
-    if !oneShot {
-        // Launched from the .app bundle: keep a single menu-bar instance. A second
-        // launch does NOT exit immediately — LaunchServices would report "not open
-        // anymore" for the process it just started. Instead it asks the running copy
-        // to retire (clean exit, so the LaunchAgent stays dead) and takes over.
-        let others = NSRunningApplication.runningApplications(withBundleIdentifier: "local.cu.app")
-            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-        var previous: pid_t? = others.first?.processIdentifier
-        // The login agent may run a copy without a bundle id; the pid file catches it.
-        if previous == nil,
-           let text = try? String(contentsOfFile: NSString(string: "~/.cu/menubar.pid").expandingTildeInPath,
-                                  encoding: .utf8),
-           let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
-           pid > 0, pid != getpid(), kill(pid, 0) == 0 {
-            previous = pid
-        }
-        if let old = previous {
-            // `from` lets the receiver tell a real takeover from its own
-            // notification: delivery is asynchronous, so this process can still
-            // be starting up when the note it just posted comes back.
-            DistributedNotificationCenter.default().postNotificationName(
-                NSNotification.Name("local.cu.handover"), object: nil,
-                userInfo: ["from": Int(getpid())],
-                deliverImmediately: true)
-            for _ in 0..<30 {
-                if kill(old, 0) != 0 { break }
-                usleep(100_000)
+    if args.flag("watch-parent") || ProcessInfo.processInfo.environment["CU_WATCH_PARENT"] == "1" {
+        DispatchQueue.global(qos: .background).async {
+            var buf = [UInt8](repeating: 0, count: 1)
+            while true {
+                let n = read(STDIN_FILENO, &buf, 1)
+                if n <= 0 {
+                    // Pipe EOF or broken: parent process has died or pipe closed
+                    exit(0)
+                }
             }
         }
-        if httpGetJSON(port: loadServiceConfig(portOverride: nil, tokenOverride: nil).port,
-                       path: "/v1/status", timeout: 0.6) == nil {
-            restartService()
-            usleep(900_000)
-        }
     }
-    runMenuBar(openSettings: args.flag("open-settings"), openMenu: args.flag("open-menu"),
-               openConsole: !args.flag("quiet"),
-               snapshotConsole: args["snapshot-console"],
-               snapshotPage: args["snapshot-page"],
-               snapshotGuide: args["snapshot-guide"],
-               selftest: args.flag("selftest-ui"))
-
-case "menubar":
-    runMenuBar(openSettings: args.flag("open-settings"), openMenu: args.flag("open-menu"),
-               openConsole: !args.flag("quiet"),
-               snapshotConsole: args["snapshot-console"],
-               snapshotPage: args["snapshot-page"],
-               snapshotGuide: args["snapshot-guide"],
-               selftest: args.flag("selftest-ui"))
-
-case "selfcheck":
-    let front = frontmost()
-    var report: [String: Any] = [
-        "ok": true,
-        "accessibility": AXIsProcessTrusted(),
-        "screenRecording": CGPreflightScreenCaptureAccess(),
-        "secureInput": secureInputPID() != nil,
-        "paused": pauseActive(),
-        "occluder": fullScreenOverlayExists(),
-        "frontmost": ["pid": Int(front.pid), "app": front.app],
-        "userIdleSeconds": (userIdleSeconds() * 1000).rounded() / 1000,
-        "allowedApps": allowlist(),
-        "chromiumAccess": attribute(AXUIElementCreateApplication(front.pid),
-                                    "AXManualAccessibility") as? Bool ?? false,
-    ]
-    let windows = onScreenWindows()
-    report["windows"] = windows.count
-    report["offStageWindows"] = offStageIds(windows).count
-    let suggestions: [String] = [
-        AXIsProcessTrusted() ? nil : "grant Accessibility",
-        CGPreflightScreenCaptureAccess() ? nil : "grant Screen Recording",
-        pauseActive() ? "resume (paused by the stop control)" : nil,
-        fullScreenOverlayExists() ? "dismiss the full-screen system overlay" : nil,
-    ].compactMap { $0 }
-    report["nextSteps"] = suggestions
-    emit(report)
+    DispatchQueue.global().asyncAfter(deadline: .now() + 2) { requestPermissionsIfMissing() }
+    serve(config)
 
 case "guards":
     // Test seam: the decision is a pure function of (last action age, idle time),
@@ -6396,19 +5762,6 @@ case "halo":
             label: args["label"] ?? "")
 
 case "help", "--help", "-h", "":
-    // LaunchServices starts the bundle with no arguments; from inside the app
-    // bundle, no arguments means "run the menu bar".
-    if args.command.isEmpty, Bundle.main.bundleIdentifier == "local.cu.app" {
-        let others = NSRunningApplication.runningApplications(withBundleIdentifier: "local.cu.app")
-            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-        if !others.isEmpty { exit(0) }
-        if httpGetJSON(port: loadServiceConfig(portOverride: nil, tokenOverride: nil).port,
-                       path: "/v1/status", timeout: 0.6) == nil {
-            restartService()
-            usleep(900_000)
-        }
-        runMenuBar(openSettings: false, openMenu: false)
-    }
     print("""
     cu — standalone computer-use engine for macOS
 

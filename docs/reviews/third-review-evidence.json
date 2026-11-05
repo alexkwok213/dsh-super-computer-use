@@ -128,7 +128,7 @@
     ]
   },
   "nativePreviewEOF": {
-    "binary": "/Users/johnkwok/Downloads/work/super-computer-use/engine/bin/cu",
+    "binary": "/Users/johnkwok/Downloads/work/dsh-super-computer-use/engine/bin/cu",
     "binarySHA256": "cbc33d77ffa823d7e6d970af90a6694393cd6bce8b91374f1c9bf0db2b9808c7",
     "result": {
       "parentExited": true,
@@ -185,7 +185,7 @@
     "binaryEquivalenceNote": "Different signatures can change hashes. Source-code equivalence is not established by these hashes alone."
   },
   "existingDemoEventLog": {
-    "path": "/Users/johnkwok/Downloads/work/super-computer-use/docs/reviews/codex-experience-events.jsonl",
+    "path": "/Users/johnkwok/Downloads/work/dsh-super-computer-use/docs/reviews/codex-experience-events.jsonl",
     "count": 56,
     "sourceCounts": {
       "adapter": 56

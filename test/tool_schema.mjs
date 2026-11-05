@@ -188,10 +188,10 @@ test("object parameters carry an explicit openness contract", () => {
   // Regression: `expect` was declared as a bare `{type: "object"}` and took the
   // whole plugin down at load time.
   const tools = collectTools();
-  const expectish = tools.filter((tool) => tool.parameters.expect);
+  const expectish = tools.filter((tool) => (tool.parameters.properties ?? tool.parameters).expect);
   assert.ok(expectish.length >= 3, JSON.stringify(tools.map((tool) => tool.name)));
   for (const tool of expectish) {
-    const spec = tool.parameters.expect;
+    const spec = (tool.parameters.properties ?? tool.parameters).expect;
     assert.equal(spec.type, "object");
     assert.equal(typeof spec.additionalProperties, "boolean", `${tool.name}.expect`);
     assert.ok(isPlainRecord(spec.properties), `${tool.name}.expect.properties`);

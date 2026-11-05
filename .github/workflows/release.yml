@@ -1,0 +1,72 @@
+name: Release DSH Super Computer Use
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Build Universal Native Binary
+        run: |
+          chmod +x ./scripts/build-universal.sh
+          ./scripts/build-universal.sh
+
+      - name: Install Dependencies
+        run: pnpm install
+
+      - name: Run Test Suite
+        run: pnpm test
+
+      - name: Package Plugin
+        run: |
+          # Create npm tarball
+          pnpm pack
+          TARBALL=$(ls dsh-super-computer-use-*.tgz | head -n 1)
+          cp "$TARBALL" dsh-super-computer-use.tgz
+
+          # Create standalone zip with prebuilt binaries
+          mkdir -p dist
+          zip -r "dist/dsh-super-computer-use-standalone.zip" \
+            bin \
+            client.js \
+            lib \
+            locale \
+            skill \
+            cordis.patch.yml \
+            assets \
+            package.json \
+            README.md \
+            LICENSE
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: "Release ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dsh-super-computer-use.tgz
+            dsh-super-computer-use-*.tgz
+            dist/dsh-super-computer-use-standalone.zip
