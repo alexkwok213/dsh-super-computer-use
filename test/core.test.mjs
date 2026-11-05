@@ -278,7 +278,7 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
     },
   };
 
-  apply(mockCtx, { autoDockDsh: false, previewBudgetMs: 2000 });
+  await apply(mockCtx, { autoDockDsh: false, previewBudgetMs: 2000 });
   assert.equal(registeredTools.size, 13);
   const skillNames = registeredSkills.map((s) => s.name).sort();
   assert.deepEqual(skillNames, ["dsh-super-computer-use"]);

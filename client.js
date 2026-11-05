@@ -5,6 +5,31 @@
  * host's module table: React comes from the page, there is no second React and
  * no app-root replacement.
  */
+// Captured while this classic bundle is executing. The Host serves bundles at a
+// revisioned URL; the browser half reports that revision back so a development
+// update can prove which artifact is actually running. The whole bundle is
+// wrapped in an IIFE because Client HMR executes this classic script again in the
+// same global lexical environment; top-level `const` would fail with
+// "Identifier has already been declared" on the second execution.
+(() => {
+const SCRIPT_URL = (() => {
+  try {
+    if (typeof document === "undefined" || !document.currentScript) return "";
+    return String(document.currentScript.src || "");
+  } catch {
+    return "";
+  }
+})();
+const SCRIPT_REV = (() => {
+  const match = /[?&]rev=([^&#]+)/.exec(SCRIPT_URL);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+})();
+
 window.__ModuleLoader__.load({
   id: "dsh-super-computer-use",
   factory(require) {
@@ -13,11 +38,43 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } = React;
 
     const NS = "dsh-super-computer-use";
-    const CLIENT_VERSION = "0.1.0";
+    const CLIENT_VERSION = "0.3.0";
     const STATE_PATH = "/api/scu/state";
     const CONTROL_PATH = "/api/scu/control";
     const PREVIEW_PATH = "/api/scu/preview";
     const PROBE_PATH = "/api/scu/probe";
+    const CLIENT_HELLO_PATH = "/api/scu/client-hello";
+    const CLIENT_HELLO_INTERVAL_MS = 5000;
+    const CLIENT_CAPABILITIES = ["dev-sync-hello"];
+    let helloInFlight = false;
+    function announceClient() {
+      if (helloInFlight || !SCRIPT_REV) return;
+      if (typeof fetch !== "function") return;
+      helloInFlight = true;
+      try {
+        Promise.resolve(
+          fetch(CLIENT_HELLO_PATH, {
+            method: "POST",
+            credentials: "same-origin",
+            cache: "no-store",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              clientRev: SCRIPT_REV,
+              clientVersion: CLIENT_VERSION,
+              scriptUrl: SCRIPT_URL,
+              capabilities: CLIENT_CAPABILITIES,
+            }),
+          }),
+        )
+          .catch(() => {})
+          .finally(() => {
+            helloInFlight = false;
+          });
+      } catch {
+        helloInFlight = false;
+      }
+    }
+
     const ACTIVE_STATES = new Set(["claimed", "running", "waiting", "verified", "unverified", "failed", "stopping"]);
     const FINAL_STATES = new Set(["stopped", "cleanup_unknown"]);
 
@@ -1588,9 +1645,26 @@ window.__ModuleLoader__.load({
         );
 
         if (typeof window !== "undefined") {
-          window.__SCU_CLIENT__ = { version: CLIENT_VERSION, storeFor, expansion };
+          window.__SCU_CLIENT__ = {
+            version: CLIENT_VERSION,
+            rev: SCRIPT_REV,
+            capabilities: CLIENT_CAPABILITIES,
+            storeFor,
+            expansion,
+          };
+          // Announce once immediately and then slowly, so a Host reload that
+          // disposes the route cannot hide a client whose bundle is current.
+          // The interval is torn down with this plugin fiber on HMR replacement.
+          announceClient();
+          if (typeof setInterval === "function") {
+            ctx.effect(() => {
+              const timer = setInterval(announceClient, CLIENT_HELLO_INTERVAL_MS);
+              return () => clearInterval(timer);
+            }, "scu: client identity heartbeat");
+          }
         }
       },
     };
   },
 });
+})();

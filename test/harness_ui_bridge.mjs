@@ -32,8 +32,14 @@ function harness() {
     },
   };
   const registry = createCuUiRegistry({ manager });
-  const bridge = installHarnessUiBridge(ctx, { registry, manager, config: { uiProbe: true } });
-  return { routes, ctx, manager, registry, bridge };
+  const hellos = [];
+  const bridge = installHarnessUiBridge(ctx, {
+    registry,
+    manager,
+    config: { uiProbe: true },
+    onClientHello: (hello) => hellos.push(hello),
+  });
+  return { routes, ctx, manager, registry, bridge, hellos };
 }
 
 function post(path, body) {
@@ -44,12 +50,37 @@ function post(path, body) {
   });
 }
 
-test("bridge registers exact state, control, probe and preview routes", () => {
+test("bridge registers exact state, control, hello, probe and preview routes", () => {
   const { routes } = harness();
   assert.ok(routes.has("POST /api/scu/state"));
   assert.ok(routes.has("POST /api/scu/control"));
+  assert.ok(routes.has("POST /api/scu/client-hello"));
   assert.ok(routes.has("GET /api/scu/probe"));
   assert.ok(routes.has("GET /api/scu/preview"));
+});
+
+test("client hello records the executed bundle revision and rejects a missing one", async () => {
+  const { routes, hellos } = harness();
+  const route = routes.get("POST /api/scu/client-hello");
+  const response = await route.fetch(
+    post("/scu/client-hello", {
+      clientRev: "abc123",
+      clientVersion: "0.3.0",
+      scriptUrl: "http://127.0.0.1:1/plugins/??dsh-super-computer-use/client.js&rev=abc123",
+      capabilities: ["dev-sync-hello", "ignored", 7],
+    }),
+  );
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).ok, true);
+  assert.equal(hellos.length, 1);
+  assert.equal(hellos[0].clientRev, "abc123");
+  assert.deepEqual(hellos[0].capabilities, ["dev-sync-hello", "ignored"]);
+  assert.match(hellos[0].scriptUrl, /rev=abc123/);
+
+  const missing = await route.fetch(post("/scu/client-hello", { clientVersion: "0.3.0" }));
+  assert.equal(missing.status, 400);
+  assert.equal((await missing.json()).error, "invalid_client_rev");
+  assert.equal(hellos.length, 1);
 });
 
 test("state returns this chat's snapshot and marks the client present", async () => {

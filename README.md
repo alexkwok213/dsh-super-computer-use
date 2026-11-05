@@ -72,14 +72,20 @@ git clone https://github.com/alexkwok213/dsh-super-computer-use.git
 
 ### 开发者说明（源码二次开发）
 
-如果你修改了 `engine/Sources/*.swift` 中的原生引擎代码，可直接运行一键打包脚本更新通用二进制：
+修改 Host JS、Client 或 Swift 后，统一运行：
 
 ```bash
-./scripts/build-universal.sh
-pnpm test
+npm run dev:sync
 ```
 
-发版时只需推送 tag（例如 `git tag v0.3.0 && git push origin v0.3.0`），GitHub Actions 工作流会自动在云端编译通用二进制并打包 Release。
+它会依次确认软链接仍指向本仓库、运行隔离测试、只在原生源码变化时重建 universal helper、通过运行中 DSH 的官方 HMR 接口重载 Host/Client、回收并重启 helper，最后在真实运行版本上核对三部分身份。成功时必须看到 `OK` 且退出码为 0；退出码 3 表示被活跃 CU 会话、页面未连接、HMR 不可用或重启需求阻塞，不能算成功。只改 JS/Client 不会重复编译 Swift。
+
+```bash
+npm run dev:sync -- --check-only      # 只检查链接、运行版本与更新计划
+npm run dev:sync -- --wait-idle=30    # 活跃 CU 会话时最多等待 30 秒
+```
+
+完整说明、退出码与限制见 [`docs/dev-sync.md`](docs/dev-sync.md)。发版时仍按独立流程推送 tag（例如 `git tag v0.3.0 && git push origin v0.3.0`），GitHub Actions 会自动编译并打包 Release；`dev:sync` 不提交、不推送、不发布。
 
 ## 能力
 
@@ -141,7 +147,7 @@ cu service [--port 47777]                         # 本地 HTTP 引擎后端
 - **会话侧栏布局**：进入操作会话时 DSH 窗口缩到右侧三分之一、目标窗口占左侧，结束时自动还原；首次点击也会缩窗但不动目标窗口（避免点击坐标失效）
 - **录屏有提醒**：会话期间 DSH 内嵌卡片显示实时录制与操作状态，同时 macOS 升起系统屏幕录制安全指示；结束时自动释放
 - **无感生命周期**：原生 Helper 仅在执行期间运行，DSH 退出或插件停用时秒级回收，不留孤儿进程
-- **完整回归测试**：内置 210+ 项自动化回归测试，覆盖生命周期、认证隔离、权限指引和无障碍操控
+- **完整回归测试**：内置 239 项自动化回归测试，覆盖生命周期、认证隔离、权限指引和无障碍操控
 - **光效不常驻**：边缘呼吸光只在动作时亮起；overlay 进程 2 小时无活动自动退出，不会遗留常驻光斑
 - **授权可自愈**：缺权限时给系统设置深链 + 可拖拽应用卡片的引导浮窗；失效授权只在日志有证据且确实缺权限时才重置
 
@@ -149,14 +155,17 @@ cu service [--port 47777]                         # 本地 HTTP 引擎后端
 
 **源码已更新，但 DSH 仍表现得像旧版本？**
 
-本地目录链接只更新磁盘文件，不保证正在运行的 DSH 重新加载 Node 模块。宿主插件属于 Host 模块：DSH 的 HMR 只会把变更记为 `pending`（`host-module` / `module-comparison`），不会在进程内替换已加载的代码；`plugin_manager` 重新启用同一行也只是复用旧模块（日志里出现新的 `apply()`，但没有新的 `module evaluated`）。因此：完成当前任务后完全退出并重新打开 DSH，再调用 `cu_status`：
+先运行 `npm run dev:sync`，不要靠反复重启或从 GitHub 重装。当前桌面版 DSH 0.2.2-rc.1 已实测支持同一 Host 进程内的 Host 插件重载（官方 `ctx.hmr.runExclusive` + `reconcileProfile`），Client 由 `dsh-client-hmr` 换包，原生 helper 由插件回收重启。`dev:sync` 只有在真实运行版本核对通过时才返回 0。
 
-- `plugin.entryPath` 应指向本仓库的 `lib/index.mjs`。
-- `plugin.hostPid`、`plugin.loadedAt` 表示加载这份插件的宿主进程与时间。
-- `plugin.sourceHash` 是加载时 `lib/index.mjs` 与 `lib/core.mjs` 内容的 SHA-256 指纹；修改磁盘文件不会改变已经加载的指纹。
+用 `cu_status.plugin` 区分三部分：
+
+- `plugin.entryPath` 应指向本仓库的 `lib/index.mjs`；`hostPid`/`loadedAt` 是加载这份插件的宿主进程与时间。
+- `plugin.sourceHash` 覆盖 `package.json` + 所有 `lib/*.mjs`，不再只覆盖两个文件；它只证明 Host 部分。
+- `plugin.client.sourceHash`/`entryRev` 证明 Client bundle；浏览器实际上报的 `rev` 记录在 `plugin.client` 的运行时报告与 `~/.cu/dev-sync/<repo-key>/client.json`。
+- `plugin.native.serviceBuildId` 是本次 generation 加载时 `bin/cu` 的 SHA-256；`plugin.native.runningServiceBuildId`/`runningPid` 是实际运行 helper 的身份。原生变更后两者必须一致，且旧 helper 已退出。
 - 没有 `plugin` 字段，说明运行的仍是未包含本次诊断的版本。顶层 `version` 属于原生引擎，不能用来判断 JS 插件是否已更新。
 
-服务不可达时，不要通过模型的 shell 临时启动常驻引擎来替代插件启动验收；这会掩盖宿主加载和进程管理问题。
+如果 `dev:sync` 退出 3，按提示处理：完成/停止活跃 CU 会话，保持 DSH 页面打开后重跑，或如实报告需要重启；不要通过 shell 临时启动常驻引擎来替代插件启动验收。完整限制见 [`docs/dev-sync.md`](docs/dev-sync.md)。
 
 **测试会不会改到我的真实 `~/.cu`？**
 

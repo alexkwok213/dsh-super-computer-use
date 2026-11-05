@@ -49,7 +49,9 @@ let suiteOutput = "";
 try {
   const child = spawn(
     process.execPath,
-    ["--test", ...files],
+    // Serial execution and a per-test ceiling keep helper-spawning suites from
+    // racing each other (and from hanging forever) on a loaded machine.
+    ["--test", "--test-concurrency=1", "--test-timeout=120000", ...files],
     {
       cwd: ROOT,
       env: {
