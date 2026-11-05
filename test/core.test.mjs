@@ -591,3 +591,59 @@ test("dockDsh false leaves both windows untouched", async () => {
   await manager.stopVisualSession();
   rmSync(stateDir, { recursive: true, force: true });
 });
+
+test("the indicator-off request survives the input gate stopVisualSession closes", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "cu-indicator-gate-"));
+  const manager = new CuSessionManager({ stateDir });
+  // stopVisualSession() closes the gate before cleanup runs. A non-control
+  // command is answered locally, so the old fire-and-forget off never reached
+  // the launchd service and macOS kept its "Currently Sharing" panel forever.
+  manager.inputGateClosed = true;
+  manager.sessionGeneration = 4;
+  const dropped = await manager.exec(["screen-indicator", "--state", "off"], undefined, {});
+  assert.equal(dropped.error, "cancelled");
+
+  const seen = [];
+  manager.exec = async (argv, signal, options = {}) => {
+    seen.push({ argv, control: options.control === true });
+    return { ok: true, screenIndicator: "off" };
+  };
+  assert.equal(await manager.stopScreenIndicator(), true);
+  assert.deepEqual(seen[0].argv, ["screen-indicator", "--state", "off"]);
+  assert.equal(seen[0].control, true, "indicator cleanup is control work");
+  rmSync(stateDir, { recursive: true, force: true });
+});
+
+test("stopScreenIndicator retries and reports a service that answers on", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "cu-indicator-retry-"));
+  const manager = new CuSessionManager({ stateDir });
+  let attempts = 0;
+  manager.exec = async () => {
+    attempts += 1;
+    return { ok: true, screenIndicator: "on" };
+  };
+  assert.equal(await manager.stopScreenIndicator({ attempts: 2, timeoutMs: 200 }), false);
+  assert.equal(attempts, 2, "a failed read-back must be retried, not trusted");
+  assert.equal(manager.lastIndicatorError, "indicator_state_on");
+  rmSync(stateDir, { recursive: true, force: true });
+});
+
+test("a missing menu-bar listener is reported without failing the release", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "cu-indicator-listener-"));
+  const manager = new CuSessionManager({ stateDir });
+  manager.exec = async () => ({ ok: true, screenIndicator: "off", applied: false, listenerPid: 0 });
+  // Nothing was ever opened, so cleanup succeeded — but the missing listener must
+  // stay visible: it is why the system panel used to look permanently on.
+  assert.equal(await manager.stopScreenIndicator(), true);
+  assert.equal(manager.screenIndicatorListenerMissing, true);
+  assert.equal(manager.screenIndicatorWasOn, false);
+
+  // "previous":"on" is what turns a boot-time off into a reported leak.
+  manager.exec = async () => ({
+    ok: true, screenIndicator: "off", applied: true, previous: "on", listenerPid: 42,
+  });
+  assert.equal(await manager.stopScreenIndicator(), true);
+  assert.equal(manager.screenIndicatorListenerMissing, false);
+  assert.equal(manager.screenIndicatorWasOn, true);
+  rmSync(stateDir, { recursive: true, force: true });
+});

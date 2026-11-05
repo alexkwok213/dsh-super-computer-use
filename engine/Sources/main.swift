@@ -2155,6 +2155,37 @@ final class ScreenRecordingIndicator: NSObject, SCStreamOutput {
 /// the app (a real bundle process with its own Screen Recording grant) is what
 /// makes macOS raise its system indicator reliably, and it lets our menu-bar
 /// item show the same "recording" state while a session is active.
+/// Path the menu-bar app publishes its stream state to. The CLI cannot see the
+/// app's ScreenCaptureKit stream, so this file is the only evidence that the
+/// on/off request was actually applied by the process that owns it.
+let screenIndicatorStatePath: String = NSString(string: "~/.cu/screen-indicator.json").expandingTildeInPath
+
+func writeScreenIndicatorState(active: Bool) {
+    let payload: [String: Any] = ["active": active, "pid": getpid(),
+                                  "ts": Date().timeIntervalSince1970]
+    guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+          let text = String(data: data, encoding: .utf8) else { return }
+    try? text.write(toFile: screenIndicatorStatePath, atomically: true, encoding: .utf8)
+}
+
+func readScreenIndicatorState() -> (active: Bool, pid: pid_t)? {
+    guard let text = try? String(contentsOfFile: screenIndicatorStatePath, encoding: .utf8),
+          let data = text.data(using: .utf8),
+          let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+          let active = object["active"] as? Bool,
+          let pid = object["pid"] as? Int else { return nil }
+    return (active, pid_t(pid))
+}
+
+/// A live menu-bar pid is what makes the published state trustworthy: a crashed
+/// app leaves the file behind, and a stale "off" must not read as success.
+func liveMenuBarPid() -> pid_t? {
+    guard let state = readScreenIndicatorState(), state.pid > 0, kill(state.pid, 0) == 0 else {
+        return nil
+    }
+    return state.pid
+}
+
 func runScreenIndicator() -> Never {
     let on: Bool
     if let state = args["state"] {
@@ -2162,10 +2193,32 @@ func runScreenIndicator() -> Never {
     } else {
         on = !args.flag("off")
     }
+    // What the app had published *before* this change. A caller releasing the
+    // indicator at boot can then tell a real leak ("previous":"on") from a
+    // routine no-op, instead of reporting every clean start as a recovery.
+    let before = readScreenIndicatorState()
+    let previousOn = before.map { $0.active && $0.pid > 0 && kill($0.pid, 0) == 0 } ?? false
     DistributedNotificationCenter.default().post(
         name: NSNotification.Name("local.cu.screen-indicator"),
         object: nil, userInfo: ["active": on])
-    emit(["ok": true, "screenIndicator": on ? "on" : "off"])
+    // The menu-bar app owns the stream; posting the notification proves nothing
+    // on its own. When the app was not running, this command still answered
+    // {"ok":true,"screenIndicator":"off"} while no process listened at all — the
+    // plugin then believed it had released a stream that was never closed.
+    // Wait (bounded) for the app to publish the state it actually applied.
+    let deadline = Date().addingTimeInterval(0.4)
+    var applied = false
+    while Date() < deadline {
+        if let state = readScreenIndicatorState(), state.pid > 0, kill(state.pid, 0) == 0,
+           state.active == on {
+            applied = true
+            break
+        }
+        usleep(40_000)
+    }
+    emit(["ok": true, "screenIndicator": on ? "on" : "off", "applied": applied,
+          "previous": previousOn ? "on" : "off",
+          "listenerPid": Int(liveMenuBarPid() ?? 0)])
     exit(0)
 }
 
@@ -4810,7 +4863,16 @@ func runMenuBar(openSettings: Bool, openMenu: Bool = false, openConsole: Bool = 
             acquired = acquireMenuBarLock()
             attempt += 1
         }
-        guard acquired else { exit(0) }
+        guard acquired else {
+            // Exit cleanly (another instance owns the bar, so the LaunchAgent
+            // must stay dead), but never silently: a bare exit(0) here is
+            // indistinguishable from a healthy handover in launchd's state.
+            let holder = (try? String(contentsOfFile: NSString(string: "~/.cu/menubar.pid")
+                .expandingTildeInPath, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown"
+            NSLog("menu bar: lock still held (pid %@) after retries; exiting without a bar", holder)
+            exit(0)
+        }
     }
     let previous = frontmostBeforeLaunch()
     let app = NSApplication.shared
@@ -6244,8 +6306,12 @@ case "app":
             previous = pid
         }
         if let old = previous {
+            // `from` lets the receiver tell a real takeover from its own
+            // notification: delivery is asynchronous, so this process can still
+            // be starting up when the note it just posted comes back.
             DistributedNotificationCenter.default().postNotificationName(
-                NSNotification.Name("local.cu.handover"), object: nil, userInfo: nil,
+                NSNotification.Name("local.cu.handover"), object: nil,
+                userInfo: ["from": Int(getpid())],
                 deliverImmediately: true)
             for _ in 0..<30 {
                 if kill(old, 0) != 0 { break }

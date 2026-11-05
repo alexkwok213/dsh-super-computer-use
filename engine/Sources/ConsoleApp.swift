@@ -136,6 +136,11 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         buildConsole()
         rebuildMenu()
         refresh()
+        // Publish the starting state so `cu screen-indicator --state off` reads as
+        // applied even when the app was already idle: the stream dies with the
+        // previous process, and a listener that never wrote a file is
+        // indistinguishable from one that is not running at all.
+        writeScreenIndicatorState(active: screenIndicatorOn)
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.refresh()
         }
@@ -146,9 +151,17 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         }
         DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("local.cu.handover"), object: nil, queue: .main
-        ) { _ in
+        ) { note in
             // A freshly launched app copy takes over the menu bar; retire with a
             // clean exit so the LaunchAgent (KeepAlive on failures only) stays dead.
+            //
+            // Ignore our own take-over note: `cu app` posts it a few milliseconds
+            // before this observer exists, and distributed delivery is async, so a
+            // new instance could receive its own handover and exit(0) — leaving no
+            // menu bar at all, with nothing in the log to explain it.
+            let from = (note.userInfo?["from"] as? NSNumber)?.int32Value ?? 0
+            if from == getpid() { return }
+            NSLog("menu bar: retiring for a newer instance (handover from pid %d)", from)
             exit(0)
         }
         // Serve capture requests from the CLI/service: they run where ScreenCaptureKit
@@ -413,10 +426,16 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
                     DispatchQueue.main.async {
                         self?.screenIndicatorOn = false
                         self?.updateIcon()
+                        // Publish the real outcome: the CLI reads this file to
+                        // tell "the app closed the stream" from "nobody listened".
+                        writeScreenIndicatorState(active: false)
                     }
+                } else {
+                    DispatchQueue.main.async { writeScreenIndicatorState(active: true) }
                 }
             } else {
                 indicator.stop()
+                DispatchQueue.main.async { writeScreenIndicatorState(active: false) }
             }
         }
         updateIcon()
@@ -424,6 +443,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         screenIndicator.stop()
+        writeScreenIndicatorState(active: false)
     }
 
     private func updateIcon() {

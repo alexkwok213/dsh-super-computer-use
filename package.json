@@ -1,7 +1,7 @@
 {
   "name": "dsh-super-computer-use",
   "description": "Computer Use for DeepSeek Harness — a complete package: DSH Cordis plugin (13 cu_* tools, floating capsule, target halo, inline preview) plus the native macOS Swift engine (Accessibility, ScreenCaptureKit, CGEvent) it drives.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.mjs",
