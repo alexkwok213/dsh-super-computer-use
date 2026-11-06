@@ -31,3 +31,7 @@ zcode_install_thumbnail.jpg
 docs/demo/two-apps-background.mov
 docs/demo/zcode-claude-cu-demo.mov
 
+# Local release build artefacts (published to GitHub Releases, never committed)
+dsh-super-computer-use-*.tgz
+dist/
+

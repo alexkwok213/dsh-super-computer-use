@@ -11,9 +11,10 @@ npm run release -- patch|minor|major
 `scripts/release.mjs` 依次执行：
 
 1. 校验当前分支是 `main`，且存在 `origin`。
-2. 同步升级两个版本字段：
+2. 同步升级三个版本字段：
    - `package.json` → `version`
    - `client.js` → `CLIENT_VERSION`
+   - `lib/index.mjs` → `RELEASE_VERSION`（Host 模块内容必须变化，否则 DSH HMR 会认为无需重载，插件页仍显示旧版本）
 3. 运行 `npm run dev:sync`：
    - 完整隔离测试（临时 `CU_STATE_DIR`）
    - 必要时构建 universal helper
@@ -46,8 +47,15 @@ npm run release -- patch|minor|major
 npm run release -- --version 0.4.0     # 显式指定版本
 npm run release -- minor --dry-run     # 只打印版本变化，不写文件/不发布
 npm run release -- minor --no-watch    # 已推送但不在本地等待 Actions（仅排障）
+npm run release -- minor --local       # 跳过 Actions，本地打包并创建 Release
 npm run release -- minor --message "feat: ..."  # 自定义提交信息
 ```
+
+## Runner 兜底
+
+GitHub-hosted macOS runner 偶尔会在任务开始前被取消（run 显示 `cancelled`、0 个步骤、没有分配 runner）。脚本会自动识别这种“未真正开始”的情况，改为本地执行 `pnpm pack` + 标准 standalone zip，并用 `gh release create/upload` 创建同一 tag 的 Release 和同名资产，最后仍然输出 `[release] RELEASE OK <url>`。若改用 `--local`，则直接走该兜底路径。
+
+只有 workflow 真正跑了步骤并失败时，脚本才以 `FAILED` 退出，不会把 CI 失败伪装成本地成功。
 
 ## 注意
 

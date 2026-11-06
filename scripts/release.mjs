@@ -10,17 +10,22 @@
 //   3. commit every change, push main, create and push the vX.Y.Z tag,
 //   4. wait for the GitHub Actions release workflow and verify the Release.
 //
+// If GitHub-hosted macOS runners cannot start (a run is cancelled with zero
+// steps), the command falls back to packaging locally and creating the same
+// GitHub Release with the same assets. --local forces that path.
+//
 // Use --dry-run to preview the version bump without writing or publishing.
 // Use --no-watch only for diagnostics; it still pushes and tags.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_PATH = join(ROOT, "package.json");
 const CLIENT_PATH = join(ROOT, "client.js");
+const HOST_ENTRY_PATH = join(ROOT, "lib", "index.mjs");
 const RELEASE_WORKFLOW = "release.yml";
 
 export function parseVersion(value) {
@@ -44,8 +49,22 @@ export function setClientVersion(source, version) {
   return source.replace(pattern, `$1${version}$3`);
 }
 
+export function setHostReleaseVersion(source, version) {
+  const pattern = /(const RELEASE_VERSION = ")([^"]*)(";)/;
+  if (!pattern.test(source)) throw new Error("RELEASE_VERSION declaration not found in lib/index.mjs");
+  return source.replace(pattern, `$1${version}$3`);
+}
+
 export function tagMatchesVersion(tag, version) {
   return String(tag ?? "").replace(/^v/, "") === String(version ?? "");
+}
+
+export function releaseAssetNames(version) {
+  return [
+    `dsh-super-computer-use-${version}.tgz`,
+    "dsh-super-computer-use.tgz",
+    "dsh-super-computer-use-standalone.zip",
+  ];
 }
 
 function run(command, args, options = {}) {
@@ -56,6 +75,14 @@ function run(command, args, options = {}) {
     encoding: options.encoding ?? "utf8",
     timeout: options.timeout,
   });
+}
+
+function gh(args, options = {}) {
+  return run("gh", args, { encoding: "utf8", ...options });
+}
+
+function ghJson(args) {
+  return JSON.parse(gh(args));
 }
 
 function git(args, options = {}) {
@@ -78,16 +105,26 @@ function applyVersion(version) {
   const pkg = readJson(PACKAGE_PATH);
   pkg.version = version;
   writeJson(PACKAGE_PATH, pkg);
-  const source = readFileSync(CLIENT_PATH, "utf8");
-  writeFileSync(CLIENT_PATH, setClientVersion(source, version));
+  const clientSource = readFileSync(CLIENT_PATH, "utf8");
+  writeFileSync(CLIENT_PATH, setClientVersion(clientSource, version));
+  const hostSource = readFileSync(HOST_ENTRY_PATH, "utf8");
+  writeFileSync(HOST_ENTRY_PATH, setHostReleaseVersion(hostSource, version));
 }
 
 function parseArgs(argv) {
-  const args = { kind: null, version: null, dryRun: false, noWatch: false, message: null };
+  const args = {
+    kind: null,
+    version: null,
+    dryRun: false,
+    noWatch: false,
+    local: false,
+    message: null,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--dry-run") args.dryRun = true;
     else if (arg === "--no-watch") args.noWatch = true;
+    else if (arg === "--local") args.local = true;
     else if (arg === "--version") args.version = argv[++i];
     else if (arg === "--message") args.message = argv[++i];
     else if (["patch", "minor", "major"].includes(arg)) args.kind = arg;
@@ -96,46 +133,125 @@ function parseArgs(argv) {
   return args;
 }
 
-function requireCleanBranch() {
+function requireReleaseBranch() {
   const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim();
   if (branch !== "main") throw new Error(`release must run on main, not ${branch}`);
   const remotes = git(["remote"], { encoding: "utf8" });
   if (!/^origin$/m.test(remotes)) throw new Error("git remote origin is required");
 }
 
-function releaseRunForTag(tag, { timeoutMs = 120000, intervalMs = 5000 } = {}) {
+function repoSlug() {
+  return gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim();
+}
+
+function releaseRunForTag(tag, { timeoutMs = 60000, intervalMs = 5000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const raw = execFileSync("gh", [
+    const runs = ghJson([
       "run", "list", "--workflow", RELEASE_WORKFLOW, "--limit", "30",
       "--json", "databaseId,headBranch,status,conclusion,createdAt,url",
-    ], { cwd: ROOT, encoding: "utf8" });
-    const runs = JSON.parse(raw);
+    ]);
     const match = runs.find((entry) => entry.headBranch === tag);
     if (match) return match;
     execFileSync("sleep", ["5"], { cwd: ROOT });
+    if (Date.now() + intervalMs > deadline) break;
   }
   return null;
 }
 
-function verifyRelease(tag) {
+function runHasSteps(runId) {
+  try {
+    const raw = gh([
+      "api", `repos/${repoSlug()}/actions/runs/${runId}/jobs`,
+      "--jq", "[.jobs[].steps | length] | add // 0",
+    ]);
+    return Number(String(raw).trim()) > 0;
+  } catch {
+    return false;
+  }
+}
+
+function buildLocalAssets(version) {
+  console.log("[release] packaging release assets locally");
+  run("pnpm", ["pack"]);
+  const versioned = join(ROOT, `dsh-super-computer-use-${version}.tgz`);
+  if (!existsSync(versioned)) throw new Error(`pnpm pack did not produce ${versioned}`);
+  copyFileSync(versioned, join(ROOT, "dsh-super-computer-use.tgz"));
+  const dist = join(ROOT, "dist");
+  mkdirSync(dist, { recursive: true });
+  const standalone = join(dist, "dsh-super-computer-use-standalone.zip");
+  rmSync(standalone, { force: true });
+  run("zip", [
+    "-r", "-q", standalone,
+    "bin", "client.js", "lib", "locale", "skill",
+    "cordis.patch.yml", "assets", "package.json", "README.md", "LICENSE",
+  ]);
+  return [versioned, join(ROOT, "dsh-super-computer-use.tgz"), standalone];
+}
+
+function releaseExists(tag) {
+  try {
+    gh(["release", "view", tag, "--json", "tagName"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function verifyReleaseAssets(tag, version, label) {
+  const release = ghJson(["release", "view", tag, "--json", "tagName,name,url,assets"]);
+  const present = new Set((release.assets ?? []).map((asset) => asset.name));
+  for (const name of releaseAssetNames(version)) {
+    if (!present.has(name)) throw new Error(`release ${tag} is missing asset ${name}`);
+  }
+  console.log(`[release] RELEASE OK ${release.url}${label ? ` (${label})` : ""}`);
+  return release;
+}
+
+function ensureRelease(tag, version, { label = "" } = {}) {
+  if (!releaseExists(tag)) {
+    run("gh", ["release", "create", tag, "--title", `Release ${tag}`, "--generate-notes"], {
+      timeout: 120000,
+    });
+  }
+  const assets = buildLocalAssets(version);
+  for (const asset of assets) {
+    run("gh", ["release", "upload", tag, asset, "--clobber"], { timeout: 10 * 60 * 1000 });
+  }
+  return verifyReleaseAssets(tag, version, label);
+}
+
+function verifyRelease(tag, version, { local = false } = {}) {
+  if (local) {
+    console.log("[release] --local: skipping GitHub Actions and packaging locally");
+    return ensureRelease(tag, version, { label: "local packaging" });
+  }
+
   const runInfo = releaseRunForTag(tag);
-  if (!runInfo) throw new Error(`no GitHub Actions run found for tag ${tag}`);
+  if (!runInfo) {
+    console.log("[release] no GitHub Actions run appeared; falling back to local packaging");
+    return ensureRelease(tag, version, { label: "local fallback: no workflow run" });
+  }
   console.log(`[release] workflow run ${runInfo.databaseId} ${runInfo.url}`);
+
+  if (runInfo.status === "completed" && runInfo.conclusion === "cancelled" && !runHasSteps(runInfo.databaseId)) {
+    console.log("[release] GitHub-hosted runner was never assigned (cancelled with zero steps); falling back to local packaging");
+    return ensureRelease(tag, version, { label: "local fallback: runner unavailable" });
+  }
+
   try {
     run("gh", ["run", "watch", String(runInfo.databaseId), "--exit-status", "--interval", "10"], {
       timeout: 45 * 60 * 1000,
     });
   } catch (error) {
+    if (!runHasSteps(runInfo.databaseId)) {
+      console.log("[release] workflow ended before any step ran; falling back to local packaging");
+      return ensureRelease(tag, version, { label: "local fallback: runner unavailable" });
+    }
     throw new Error(`release workflow failed: ${runInfo.url}\n${error?.message ?? error}`);
   }
-  const raw = execFileSync("gh", [
-    "release", "view", tag, "--json", "tagName,name,url,assets",
-  ], { cwd: ROOT, encoding: "utf8" });
-  const release = JSON.parse(raw);
-  console.log(`[release] RELEASE OK ${release.url}`);
-  console.log(`[release] assets: ${(release.assets ?? []).map((asset) => asset.name).join(", ") || "(none)"}`);
-  return release;
+
+  return verifyReleaseAssets(tag, version, "workflow build");
 }
 
 async function main() {
@@ -147,30 +263,25 @@ async function main() {
     next = args.version;
   } else {
     if (!args.kind) {
-      throw new Error("usage: npm run release -- patch|minor|major [--dry-run] [--no-watch]");
+      throw new Error("usage: npm run release -- patch|minor|major [--dry-run] [--no-watch] [--local]");
     }
     next = bumpVersion(before, args.kind);
   }
 
   console.log(`[release] version ${before} -> ${next}`);
   if (args.dryRun) {
-    console.log("[release] dry run: no files written, dev:sync, commit or push performed");
+    console.log("[release] dry run: no files written, dev:sync, commit, push or release performed");
     return;
   }
 
-  requireCleanBranch();
+  requireReleaseBranch();
   applyVersion(next);
 
   console.log("[release] running dev:sync (tests -> build -> DSH reload -> runtime identity)");
   run("npm", ["run", "dev:sync"]);
 
-  if (args.message && args.message.trim()) {
-    git(["add", "-A"]);
-    git(["commit", "-m", args.message.trim()]);
-  } else {
-    git(["add", "-A"]);
-    git(["commit", "-m", `chore(release): v${next}`]);
-  }
+  git(["add", "-A"]);
+  git(["commit", "-m", args.message?.trim() || `chore(release): v${next}`]);
   git(["tag", "-a", `v${next}`, "-m", `v${next}`]);
   git(["push", "origin", "HEAD:main"]);
   git(["push", "origin", `v${next}`]);
@@ -180,7 +291,7 @@ async function main() {
     console.log(`[release] pushed; GitHub Actions not watched (--no-watch). Tag: v${next}`);
     return;
   }
-  verifyRelease(`v${next}`);
+  verifyRelease(`v${next}`, next, { local: args.local });
 }
 
 const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

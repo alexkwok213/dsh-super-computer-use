@@ -21,7 +21,7 @@ npm run release -- patch|minor|major
 
 它依次执行：
 
-1. 把 `package.json` 的 `version` 与 `client.js` 的 `CLIENT_VERSION` 同步升到新版本（两者必须一致）。
+1. 把 `package.json` 的 `version`、`client.js` 的 `CLIENT_VERSION`、`lib/index.mjs` 的 `RELEASE_VERSION` 同步升到新版本（三者必须一致；Host 模块内容必须变化，否则 DSH HMR 会拒绝重载）。
 2. 运行 `npm run dev:sync`：校验软链接、完整隔离测试、必要原生构建、DSH Host/Client 重载、helper 回收、真实运行版本核对。
 3. `git add -A` → commit → 推送 `main`。
 4. 创建并推送 `vX.Y.Z` tag，触发 `.github/workflows/release.yml`。

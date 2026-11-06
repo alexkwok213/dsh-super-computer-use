@@ -8,7 +8,9 @@ import assert from "node:assert/strict";
 import {
   bumpVersion,
   parseVersion,
+  releaseAssetNames,
   setClientVersion,
+  setHostReleaseVersion,
   tagMatchesVersion,
 } from "../scripts/release.mjs";
 
@@ -35,8 +37,24 @@ test("client.js CLIENT_VERSION is rewritten exactly once", () => {
   assert.throws(() => setClientVersion("const OTHER = 1;", "0.4.0"), /CLIENT_VERSION declaration not found/);
 });
 
+test("lib/index.mjs RELEASE_VERSION is rewritten so HMR sees a Host change", () => {
+  const source = 'const RELEASE_VERSION = "0.4.0";\n';
+  const next = setHostReleaseVersion(source, "0.4.1");
+  assert.match(next, /const RELEASE_VERSION = "0\.4\.1";/);
+  assert.throws(() => setHostReleaseVersion("const OTHER = 1;", "0.4.1"), /RELEASE_VERSION declaration not found/);
+});
+
 test("release tag must equal the package version", () => {
   assert.equal(tagMatchesVersion("v0.4.0", "0.4.0"), true);
   assert.equal(tagMatchesVersion("0.4.0", "0.4.0"), true);
   assert.equal(tagMatchesVersion("v0.3.0", "0.4.0"), false);
+});
+
+test("every release ships the npm tarball and standalone zip", () => {
+  const names = releaseAssetNames("0.4.1");
+  assert.deepEqual(names, [
+    "dsh-super-computer-use-0.4.1.tgz",
+    "dsh-super-computer-use.tgz",
+    "dsh-super-computer-use-standalone.zip",
+  ]);
 });
