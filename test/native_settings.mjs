@@ -266,6 +266,9 @@ test("client registers the sidebar entry, central panel and settings section", (
   assert.equal(section.options.id, "computer-use");
   assert.equal(typeof sidebar.options.label, "function");
   assert.equal(sidebar.options.label(), "Computer Use");
+  sandbox.navigator.language = "zh-CN";
+  assert.equal(sidebar.options.label(), "电脑控制", "Chinese shell must label the entry in Chinese");
+  sandbox.navigator.language = "en";
   assert.equal(typeof sidebar.component, "function");
   assert.equal(typeof main.component, "function");
   assert.equal(typeof section.component, "function");

@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } = React;
 
     const NS = "dsh-super-computer-use";
-    const CLIENT_VERSION = "0.5.0";
+    const CLIENT_VERSION = "0.5.1";
     const STATE_PATH = "/api/scu/state";
     const CONTROL_PATH = "/api/scu/control";
     const PREVIEW_PATH = "/api/scu/preview";
@@ -2493,9 +2493,26 @@ window.__ModuleLoader__.load({
     const SETTINGS_PATH = "/api/scu/settings";
     const NATIVE_POLL_MS = 5000;
 
+    function nativeIsChinese(localeId) {
+      const nav =
+        typeof navigator !== "undefined" ? String(navigator.language || "") : "";
+      const doc =
+        typeof document !== "undefined"
+          ? String(document.documentElement?.lang || "")
+          : "";
+      // The host's own UI may be Chinese even when the locale service exposes
+      // no getLocale() (or reports a neutral id). Any Chinese signal wins, so
+      // the native surfaces never silently fall back to English in a zh shell.
+      return [localeId, nav, doc].some((value) =>
+        String(value || "").toLowerCase().startsWith("zh"),
+      );
+    }
+
     function useNativeT() {
       const ctx = NativeUI.ctx ?? { get: () => null };
-      return useLocale(ctx).t;
+      const { id } = useLocale(ctx); // keeps the subscription for live switches
+      const zh = nativeIsChinese(id);
+      return (key, params) => tFor(zh ? "zh" : "en", key, params);
     }
 
     function useNativeSnapshot() {
@@ -2939,11 +2956,7 @@ window.__ModuleLoader__.load({
     }
 
     function nativeNavLabel() {
-      const lang =
-        typeof navigator !== "undefined" && typeof navigator.language === "string"
-          ? navigator.language
-          : "en";
-      return lang.toLowerCase().startsWith("zh") ? "电脑控制" : "Computer Use";
+      return nativeIsChinese("") ? "电脑控制" : "Computer Use";
     }
 
     // ---------------------------------------------------------------- plugin
