@@ -15,7 +15,7 @@ function harness() {
  const previews=new NativePreviews({launch:()=>{
   const child=spawn(process.execPath,['-e',fixture],{stdio:['pipe','pipe','ignore']});
   children.push(child); return child;
- },onEvent:(identity,event)=>events.push([identity,event])});
+ },onEvent:(identity,event)=>events.push([identity,event]),keepAlive:true});
  return {previews,events,children};
 }
 const wait = ms => new Promise(resolve=>setTimeout(resolve,ms));

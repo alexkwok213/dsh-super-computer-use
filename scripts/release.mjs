@@ -144,14 +144,16 @@ function repoSlug() {
   return gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim();
 }
 
-function releaseRunForTag(tag, { timeoutMs = 60000, intervalMs = 5000 } = {}) {
+function releaseRunForTag(tag, { timeoutMs = 60000, intervalMs = 5000, since = 0 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const runs = ghJson([
       "run", "list", "--workflow", RELEASE_WORKFLOW, "--limit", "30",
       "--json", "databaseId,headBranch,status,conclusion,createdAt,url",
     ]);
-    const match = runs.find((entry) => entry.headBranch === tag);
+    const match = runs.find(
+      (entry) => entry.headBranch === tag && Date.parse(entry.createdAt) >= since - 10000,
+    );
     if (match) return match;
     execFileSync("sleep", ["5"], { cwd: ROOT });
     if (Date.now() + intervalMs > deadline) break;
@@ -221,13 +223,13 @@ function ensureRelease(tag, version, { label = "" } = {}) {
   return verifyReleaseAssets(tag, version, label);
 }
 
-function verifyRelease(tag, version, { local = false } = {}) {
+function verifyRelease(tag, version, { local = false, since = 0 } = {}) {
   if (local) {
     console.log("[release] --local: skipping GitHub Actions and packaging locally");
     return ensureRelease(tag, version, { label: "local packaging" });
   }
 
-  const runInfo = releaseRunForTag(tag);
+  const runInfo = releaseRunForTag(tag, { since });
   if (!runInfo) {
     console.log("[release] no GitHub Actions run appeared; falling back to local packaging");
     return ensureRelease(tag, version, { label: "local fallback: no workflow run" });
@@ -284,6 +286,7 @@ async function main() {
   git(["commit", "-m", args.message?.trim() || `chore(release): v${next}`]);
   git(["tag", "-a", `v${next}`, "-m", `v${next}`]);
   git(["push", "origin", "HEAD:main"]);
+  const tagPushedAt = Date.now();
   git(["push", "origin", `v${next}`]);
   console.log(`[release] pushed main and tag v${next}`);
 
@@ -291,7 +294,7 @@ async function main() {
     console.log(`[release] pushed; GitHub Actions not watched (--no-watch). Tag: v${next}`);
     return;
   }
-  verifyRelease(`v${next}`, next, { local: args.local });
+  verifyRelease(`v${next}`, next, { local: args.local, since: tagPushedAt });
 }
 
 const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

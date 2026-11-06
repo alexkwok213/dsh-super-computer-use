@@ -176,7 +176,10 @@ test("sniffImageMediaType detects PNG and JPEG headers", () => {
   assert.equal(sniffImageMediaType(jpg), "image/jpeg");
 });
 
-test("live CU service roundtrip (windows listing, frontmost, screens, screenshot)", async () => {
+test(
+  "live CU service roundtrip (windows listing, frontmost, screens, screenshot)",
+  { skip: process.env.CI ? "needs a logged-in macOS GUI, WindowServer and TCC grants" : false },
+  async () => {
   // This test needs a real helper (TCC, WindowServer), but not the user's
   // helper: boot a private one from a throwaway state directory and reclaim it.
   const isolatedDir = mkdtempSync(join(tmpdir(), "cu-live-"));
