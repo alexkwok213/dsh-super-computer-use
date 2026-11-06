@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import {
   CuSessionManager,
   buildCommandArgv,
@@ -12,6 +12,9 @@ import {
 } from "../lib/core.mjs";
 import { apply, registerCuTools } from "../lib/index.mjs";
 
+if (!process.env.CU_STATE_DIR) {
+  throw new Error("Run native tests through scripts/test-isolated.mjs; CU_STATE_DIR is required.");
+}
 process.env.CU_NO_USER_PAUSE = "1";
 
 test("renderNodeLine formats snapshot nodes compactly", () => {
@@ -221,7 +224,22 @@ test("live CU service roundtrip (windows listing, frontmost, screens, screenshot
   }
 });
 
-test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, and capsule session", async () => {
+test("DSH plugin apply() registers 14 cu_* tools, skill, inline image preview, and capsule session", async (t) => {
+  // Own the target instead of racing whichever user window happens to be first.
+  const fixtureDir = mkdtempSync(join(tmpdir(), "cu-plugin-fixture-"));
+  t.after(() => rmSync(fixtureDir, { recursive: true, force: true }));
+  const fixtureBin = join(fixtureDir, "target");
+  execFileSync("swiftc", ["-swift-version", "5", "-target",
+    `${process.arch === "arm64" ? "arm64" : "x86_64"}-apple-macos14.0`,
+    "-framework", "AppKit", new URL("../engine/tests/fixtures/acceptance_target.swift", import.meta.url).pathname,
+    "-o", fixtureBin], { timeout: 60000, stdio: "pipe" });
+  const fixture = spawn(fixtureBin, [], { stdio: "ignore", env: { ...process.env, CU_ACCEPT_LABEL: "Plugin Test" } });
+  t.after(async () => {
+    if (fixture.exitCode !== null || fixture.signalCode !== null) return;
+    const exited = new Promise(resolve => fixture.once("exit", resolve));
+    fixture.kill("SIGTERM");
+    await exited;
+  });
   const registeredTools = new Map();
   const registeredSkills = [];
   const effects = [];
@@ -279,7 +297,7 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
   };
 
   await apply(mockCtx, { autoDockDsh: false, previewBudgetMs: 2000 });
-  assert.equal(registeredTools.size, 13);
+  assert.equal(registeredTools.size, 14);
   const skillNames = registeredSkills.map((s) => s.name).sort();
   assert.deepEqual(skillNames, ["dsh-super-computer-use"]);
 
@@ -296,7 +314,14 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
     const winOut = await registeredTools.get("cu_windows").execute({}, mockExec);
     assert.equal(winOut.ok, true);
     assert.ok(Array.isArray(winOut.windows) && winOut.windows.length > 0, "should find on-screen windows");
-    const targetWin = winOut.windows[0];
+    let targetWin = winOut.windows.find(window => window.pid === fixture.pid);
+    const deadline = Date.now() + 4000;
+    while (!targetWin && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 80));
+      const windows = await registeredTools.get("cu_windows").execute({}, mockExec);
+      targetWin = windows.windows?.find(window => window.pid === fixture.pid);
+    }
+    assert.ok(targetWin, "the owned native fixture must expose a window");
 
     // Start visual session (spawns capsule + captures inline preview)
     const sessionTool = registeredTools.get("cu_session");
@@ -307,6 +332,7 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
         pid: targetWin.pid,
         appName: targetWin.app || "Desktop Window",
         dockDsh: false,
+        nativePreview: false, // Native window controls have their own live acceptance.
         preview: true,
       },
       mockExec
@@ -318,7 +344,7 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
     const snapVal = await registeredTools
       .get("cu_snapshot")
       .execute({ pid: targetWin.pid, windowId: targetWin.windowId, full: true }, mockExec);
-    assert.equal(snapVal.ok, true);
+    assert.equal(snapVal.ok, true, JSON.stringify(snapVal));
 
     // Stop visual session and clean up
     const stopVal = await sessionTool.execute({ action: "stop" }, mockExec);
@@ -329,7 +355,7 @@ test("DSH plugin apply() registers 13 cu_* tools, skill, inline image preview, a
   }
 });
 
-test("visual session docks DSH by default and restores it on stop", async () => {
+test("explicit dockDsh + splitScreen docks DSH and restores it on stop", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "cu-layout-"));
   const calls = [];
   const manager = new CuSessionManager({ stateDir });
@@ -367,8 +393,10 @@ test("visual session docks DSH by default and restores it on stop", async () => 
   assert.ok(targetMove, "target window should take the left side");
   assert.equal(flag(targetMove, "--x"), "0");
   assert.equal(flag(targetMove, "--w"), "1152");
+  // Docking opens a native preview, and the capture that preview needs is what
+  // raises the indicator. A session that never captures does not (next test).
   assert.ok(calls.some((a) => a[0] === "screen-indicator" && a[2] === "on"),
-    "session should raise the menu-bar screen-recording indicator");
+    "a session that captures raises the menu-bar screen-recording indicator");
 
   await manager.stopVisualSession();
   const dshRestore = calls.filter((a) => a[0] === "movewindow" && a[2] === "11").pop();
@@ -520,5 +548,29 @@ test("a missing menu-bar listener is reported without failing the release", asyn
   assert.equal(await manager.stopScreenIndicator(), true);
   assert.equal(manager.screenIndicatorListenerMissing, false);
   assert.equal(manager.screenIndicatorWasOn, true);
+  rmSync(stateDir, { recursive: true, force: true });
+});
+
+test("a control-only session never opens a ScreenCaptureKit stream", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "cu-indicator-"));
+  const calls = [];
+  const manager = new CuSessionManager({ stateDir });
+  manager.resolveBinaryPath = () => "/nonexistent/cu";
+  manager.exec = async (argv) => { calls.push(argv); return { ok: true }; };
+  manager.warmCaptureDaemon = () => {};
+
+  await manager.startVisualSession({
+    windowId: 22, pid: 2, appName: "Safari", dockDsh: false, splitScreen: false,
+    halo: false, cursor: false, nativePreview: false, seconds: 60,
+  });
+  // macOS 15 shows its "bypass the private window picker" capture consent dialog
+  // for every process that opens a stream. AX-only work must not open one.
+  assert.ok(!calls.some((a) => a[0] === "screen-indicator" && a[2] === "on"),
+    "no capture stream before any frame is needed");
+
+  manager.ensureScreenIndicator();
+  assert.ok(calls.some((a) => a[0] === "screen-indicator" && a[2] === "on"),
+    "the first capture raises it");
+  await manager.stopVisualSession();
   rmSync(stateDir, { recursive: true, force: true });
 });

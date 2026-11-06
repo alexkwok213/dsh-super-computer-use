@@ -11,24 +11,32 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
 
 0. **Ask `cu_status` Once, Then Stop Repeating Yourself**
    - `cu_status` reports `vision.supported` (`true`/`false`/`null` with a `reason`) and `lastImage` (what the last capture actually delivered). `false` or `null` means a screenshot is a file path, not evidence: do not reason about pixels, use `cu_find`/`cu_expect`/`cu_snapshot` instead.
-   - While a session is running, `pid` and `windowId` may be omitted: actions, snapshots and screenshots fall back to the session's target. Pass them explicitly only to act on a different window.
+   - `cu_status.targets` lists every target in this chat (`targetId`, pid, windowId, appName). Pass `targetId` to keep observations, actions, previews and stops on one window; a chat may own several targets concurrently.
+   - Omitting a target uses the chat's current target, not the only target. Never infer that another target's ref belongs here.
 
 
 1. **Background First (Never Steal the User's Pointer or Focus by Default)**
    - `cu_click`, `cu_type`, `cu_key`, and `cu_scroll` default to `foreground: false` (background execution via `AXPress` or PID-targeted events).
-   - Only set `foreground: true` when an app's custom canvas or modal sheet explicitly requires foreground delivery, and ask/warn before taking foreground focus.
+   - A foreground action takes focus and real keyboard/mouse input. It runs only with BOTH `foreground: true` and `authorizeForeground: true`; the latter means the user explicitly agreed to the interruption. Otherwise the tool refuses before sending input.
+   - A background operation that needs foreground capability reports `capability: "background_unavailable"` / `requiresForeground`; do not retry it or silently promote it.
+   - `cu_launch` defaults to `background:true`: it can create an app window without taking focus. Use `background:false` plus `authorizeForeground:true` only when the user explicitly wants the app brought forward.
 
-2. **Session Visibility & Target Preview (Claude + Codex Hybrid UX)**
+2. **Session Visibility & Target Preview**
    - Before operating on a target window, call `cu_session` with `action: "start"`, passing `windowId`, `pid`, `appName`, and `preview: true`.
-   - This displays the non-activating top-right status capsule (`cu capsule`) and window border halo (`cu halo`) with a user Stop button, and returns an inline thumbnail preview of the target window in the chat.
-   - By default the DSH window shrinks to the right third and the target window takes the left, so the user can watch the work. `cu_click`'s first automatic session also shrinks DSH (but never moves the target, because the click coordinates are already resolved). Pass `dockDsh: false` to leave the desktop untouched.
-   - While a session is active the menu bar shows `● CU · REC` and macOS raises its screen-recording privacy indicator. Always call `cu_session` with `action: "stop"` when done: it restores both window frames and clears the indicator. A 15-minute safety timer does the same if the session is abandoned.
+   - This starts a non-activating, draggable native picture preview and a per-target halo, and returns an inline image. `nativePreview:false` disables the native picture preview. In an embedded client the Control Deck supplies status controls; the separate native capsule is opt-in. It does **not** activate, move, dock or stage anything. `dockDsh`, `splitScreen` and `bringOnStage` are explicit opt-ins; use `dockDsh:false` (or omit) while the user is working elsewhere.
+   - Starting a second target in the same chat keeps the first target and its halo/preview alive. Use `targetId` from the start result for all subsequent calls.
+   - In embedded mode the Control Deck follows active targets. Its live thumbnails open only when the user expands/chooses Watch; do not open a second continuous capture just to duplicate an already visible native preview.
+   - To identify a native preview, read `cu_status.targets[].nativePreview`: `windowId` is the preview panel identity, `frame` is its current rectangle in `screen-points-top-left` logical coordinates, and `visible`/`status` distinguish a live panel from a closed or unavailable one. The target's own `windowId` remains the controlled application window. Do not confuse these identities.
+   - `cu_windows` normally lists ordinary application windows; a floating preview may be absent, while a `cu` halo can appear. Never treat a halo window as the preview or start a control target on a feedback helper. Never guess drag coordinates from a resized screenshot when exact preview geometry is available. If metadata is absent, confirm the actual panel visually before input.
+   - Dragging/clicking native preview controls uses real mouse input. Do it only when the user requested that interaction and foreground authorization is available; it is not a background AX test. Re-read the current panel geometry before input, then verify movement or disappearance from fresh status and the real UI.
+   - Hover reveals Stop and Close (×). Close removes that target's preview/capture while background control can continue; Stop closes that target's input gate and resources. A closed preview reports `status:"closed"` and `visible:false`; do not click its last known coordinates. Reopen it with an explicit `cu_session start` for the same target when requested.
+   - While a session is active the menu bar may show the recording indicator. Call `cu_session` with `action: "stop"` and `targetId` to stop one target, or omit `targetId` to stop all. A per-target stop does not latch the session-wide pause; stop-all does.
 
 3. **AX Snapshot & Delta Observation First, Screenshot/OCR When Needed**
    - Start with `cu_windows` to find the target `pid` and `windowId`.
    - Call `cu_snapshot` (`pid`, `windowId`) to obtain element refs (`e1`, `e2`, ...).
    - Mutating tools (`cu_click`, `cu_type`, `cu_key`) support `observe: true` (enabled by default when `pid` is provided), which returns the AX delta (`+` added, `-` removed, `~` changed) in the same call.
-   - Never assume `ok: true` means the business action succeeded—verify from the returned `observation` delta or a follow-up `cu_find` / `cu_screenshot` / `cu_expect`.
+   - Never assume `ok: true` means the business action succeeded. A raw PID event without an explicit `expect` is returned as `ok:false, error:"effect_not_verified"`; do not replay it. Prefer AXPress / setvalue plus a concrete `expect`.
    - For canvas-heavy apps (such as video timelines or custom panels without AX nodes), use `cu_find` (`mode: "auto"` or `"ocr"`) or `cu_screenshot`.
 
 4. **Respect User Pause / Stop**
@@ -64,3 +72,9 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
     - `restoredTarget: false` means the target window was not restored; `cleanupState: "unknown"` means cleanup is unknown. Never describe either as "restored" or "cleaned up".
     - A screenshot path, a successful click and a model's summary are not proof of the business result. Quote the verified field (`verified`, `expect` match, before/after text) or state that it is unverified.
     - A snapshot from another chat is never your baseline: the first `cu_snapshot` in each chat returns `mode: "full"`. If you receive a delta you did not build on, re-observe with `full: true`.
+    - A snapshot from target A is never target B's baseline, even when both windows belong to the same pid. Use the `targetId` and `snapshotId` returned with the observation.
+
+11. **Multiple Targets in One Chat**
+    - Treat `targetId` as the handle for one window incarnation. Window close/reopen or app restart changes its generation; old refs/snapshotIds must be re-observed.
+    - Different targets can be observed and previewed concurrently. Same-target operations stay ordered. Never send global keyboard/mouse/clipboard input concurrently to fake parallel control of several apps.
+    - Stopping A leaves B alive. After stop-all, no queued input may run and no late result may reopen a target.

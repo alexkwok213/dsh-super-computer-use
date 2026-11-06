@@ -302,6 +302,6 @@ test('R10: a plain single left click on a retained token still dispatches AXPres
   const calls = [];
   m.axClick = async (...args) => { calls.push(args); return { ok: true }; };
   const res = await call('cu_click', { pid: 42, windowId: 7, ref: REF, button: 'left', count: 1, observe: false });
-  assert.deepEqual(calls, [['token-for-A', 'AXPress']]);
+  assert.deepEqual(calls.map((args) => args.slice(0, 2)), [['token-for-A', 'AXPress']]);
   assert.equal(res.ok, true);
 });

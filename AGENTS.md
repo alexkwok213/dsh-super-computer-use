@@ -7,27 +7,29 @@
 - 这是一个 **DSH（DeepSeek Harness）Host 插件 + Web Client + macOS 原生 helper**。
 - 桌面 profile 通过软链接加载本仓库，文件同步不等于运行版本同步。
 - 不修改 DSH 的 `app.asar`；不新增无认证控制端口；不依赖 Node 私有缓存清理；不启动脱离插件管理的临时常驻服务来“救活”验收。
-- GitHub 提交、推送、Release 是独立操作，**不绑定到 `dev:sync`，也不由本命令自动执行**。
+- GitHub 提交、推送、Release 是每轮收尾的强制组成部分；由 `npm run release` 统一执行，不由 `dev:sync` 隐式执行。
 
 ## 每轮开发的强制收尾
 
-> 每轮代码修改完成后，必须运行项目开发更新命令，完成测试、必要构建、DSH 重载和真实运行版本核验。未经运行版本核验，不得宣称修改已在 DSH 生效。若有活跃任务、权限限制或宿主能力限制，明确报告阻碍，不强制重启、不临时启动常驻服务绕过。
+> 每轮代码修改（功能、修复、UI、文档）完成后，必须同时完成 **版本升级、测试、DSH 重载、GitHub 提交/推送/Release**。任何一项缺失，本轮不得宣称完成。未经运行版本核验，不得宣称修改已在 DSH 生效。
 
 对应命令：
 
 ```bash
-npm run dev:sync
+npm run release -- patch|minor|major
 ```
 
-它默认依次执行：
+它依次执行：
 
-1. 校验 `~/.dsh/profiles/desktop/node_modules/dsh-super-computer-use` 仍指向当前仓库。
-2. 运行完整测试套件（隔离 `CU_STATE_DIR`，串行执行，单测试 120s 上限，失败后重试一次）。
-3. 仅当 `engine/Sources/*.swift` 或 `scripts/build-universal.sh` 变化，或 `bin/` 与构建记录不一致时构建 universal helper。
-4. 通过运行中插件官方暴露的 `ctx.hmr.runExclusive` + `reconcileProfile` 重载 Host 模块；客户端走 DSH 自带 Client HMR；原生 helper 由插件回收并重启。
-5. 在真实 DSH 中核对 Host `sourceHash`、Client 实际执行的 bundle `rev`、原生 helper `buildId`，并确认旧 helper 退出、没有本次流程遗留的进程。
+1. 把 `package.json` 的 `version` 与 `client.js` 的 `CLIENT_VERSION` 同步升到新版本（两者必须一致）。
+2. 运行 `npm run dev:sync`：校验软链接、完整隔离测试、必要原生构建、DSH Host/Client 重载、helper 回收、真实运行版本核对。
+3. `git add -A` → commit → 推送 `main`。
+4. 创建并推送 `vX.Y.Z` tag，触发 `.github/workflows/release.yml`。
+5. `gh run watch` 等待构建/测试/打包完成，并核对 GitHub Release 的 tag 与资产。
 
-**只有命令以退出码 0 结束，并且输出 `OK`，才能说“已在 DSH 生效”。** 退出码 3 表示被活跃 CU 会话、页面未连接、HMR 不可用或需要重启阻塞；如实报告，不伪造成功。
+**只有命令输出 `[release] RELEASE OK <url>` 且退出码为 0，才能说本轮完成并在 GitHub 上发布了新版本。** 若 GitHub Actions 失败，必须修复后重新发版，不能只推 tag 了事。
+
+版本选择：修复用 `patch`，功能/优化用 `minor`，破坏性变更或里程碑用 `major`。禁止无版本变更的“只提交代码”。
 
 不要采用“保存即重载”。这是操控电脑的插件，逐行保存会打断正在执行的操作；统一在测试和必要构建完成后更新。
 
@@ -44,8 +46,9 @@ npm run dev:sync
 ## 常用命令
 
 ```bash
+npm run release -- patch|minor|major       # 强制收尾：升版本 -> dev:sync -> commit/push -> tag -> Release 核验
 npm test                                  # 完整隔离测试
-npm run dev:sync                          # 测试 -> 必要构建 -> 重载 -> 真实核验
+npm run dev:sync                          # 内部步骤：测试 -> 必要构建 -> 重载 -> 真实核验
 npm run dev:sync -- --check-only          # 只检查链接、运行版本与计划，不改动
 npm run dev:sync -- --wait-idle=30        # 最多等 30s 空闲 CU
 npm run dev:sync -- --skip-tests          # 仅限明确不需要测试的排障；不得声称测试通过

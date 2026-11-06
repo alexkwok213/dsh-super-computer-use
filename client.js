@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } = React;
 
     const NS = "dsh-super-computer-use";
-    const CLIENT_VERSION = "0.3.0";
+    const CLIENT_VERSION = "0.4.0";
     const STATE_PATH = "/api/scu/state";
     const CONTROL_PATH = "/api/scu/control";
     const PREVIEW_PATH = "/api/scu/preview";
@@ -87,6 +87,16 @@ window.__ModuleLoader__.load({
         "card.details": "Details",
         "card.stop": "Stop",
         "card.stopping": "Stopping…",
+        "card.stopAll": "Stop all",
+        "card.stoppingAll": "Stopping all…",
+        "card.targets": "{count} targets",
+        "card.targetCount": "{count} active",
+        "deck.title": "DSH is controlling",
+        "deck.background": "Background · focus unchanged",
+        "deck.expand": "Expand",
+        "deck.collapse": "Collapse",
+        "deck.close": "Hide deck",
+        "deck.show": "Deck",
         "card.target": "Target",
         "card.noTarget": "Choosing a window",
         "card.frameAge": "Frame {seconds}s ago",
@@ -143,6 +153,16 @@ window.__ModuleLoader__.load({
         "card.details": "详情",
         "card.stop": "停止",
         "card.stopping": "正在停止…",
+        "card.stopAll": "全部停止",
+        "card.stoppingAll": "正在全部停止…",
+        "card.targets": "{count} 个目标",
+        "card.targetCount": "{count} 个运行中",
+        "deck.title": "DSH 正在操控",
+        "deck.background": "后台执行 · 焦点未改变",
+        "deck.expand": "展开",
+        "deck.collapse": "收起",
+        "deck.close": "隐藏控制台",
+        "deck.show": "控制台",
         "card.target": "目标",
         "card.noTarget": "正在选择窗口",
         "card.frameAge": "画面 {seconds}s 前",
@@ -293,8 +313,9 @@ window.__ModuleLoader__.load({
     }
 
     class PreviewController {
-      constructor(store) {
+      constructor(store, targetId = null) {
         this.store = store;
+        this.targetId = targetId;
         this.abort = null;
         this.reader = null;
         // The card and the expanded panel can be mounted at the same time.
@@ -337,8 +358,39 @@ window.__ModuleLoader__.load({
           a &&
             b &&
             a.cuSessionId === b.cuSessionId &&
-            a.targetGeneration === b.targetGeneration,
+            a.targetGeneration === b.targetGeneration &&
+            (a.targetId ?? null) === (b.targetId ?? null),
         );
+      }
+
+      /** The host state this stream must match before a frame may paint. */
+      identitySnapshot() {
+        const snapshot = this.store.getSnapshot();
+        if (!snapshot) return null;
+        if (!this.targetId) {
+          return {
+            cuSessionId: snapshot.cuSessionId,
+            targetGeneration: snapshot.targetGeneration,
+            targetId: snapshot.target?.targetId ?? null,
+            state: snapshot.state,
+            active: ACTIVE_STATES.has(snapshot.state),
+          };
+        }
+        const target = (snapshot.targets ?? []).find((item) => item.targetId === this.targetId);
+        if (!target) return null;
+        return {
+          cuSessionId: snapshot.cuSessionId,
+          targetGeneration: target.targetGeneration,
+          targetId: target.targetId,
+          state: target.state,
+          active: target.active === true && ACTIVE_STATES.has(target.state),
+          windowId: target.windowId,
+        };
+      }
+
+      setStatus(info) {
+        if (this.targetId) this.store.setPreview(info, this.targetId);
+        else this.store.setPreview(info);
       }
 
       clearCanvas() {
@@ -366,11 +418,17 @@ window.__ModuleLoader__.load({
         const snapshot = this.store.getSnapshot();
         if (!this.store.active) return;
         if (!snapshot?.cuSessionId || this.running || this.opening) return;
-        if (!ACTIVE_STATES.has(snapshot.state)) return;
-        if (this.store.expanded === false && this.store.previewWanted === false) return;
+        const live = this.identitySnapshot();
+        if (!live?.active) return;
+        if (
+          this.store.expanded === false &&
+          this.store.previewWanted === false &&
+          this.store.deckVisible === false
+        ) return;
         const identity = {
           cuSessionId: snapshot.cuSessionId,
-          targetGeneration: snapshot.targetGeneration,
+          targetGeneration: live.targetGeneration,
+          targetId: live.targetId,
         };
         if (PreviewController.sameIdentity(this.blockedIdentity, identity)) return;
         // A failed attempt (409 before a target exists, child crash) must not
@@ -391,7 +449,7 @@ window.__ModuleLoader__.load({
         this.opening = true;
         this.abort = new AbortController();
         this.startedAt = now;
-        this.store.setPreview({ status: "connecting", fps: 0, frameAgeMs: null, reason: null });
+        this.setStatus({ status: "connecting", fps: 0, frameAgeMs: null, reason: null });
         this.firstFrameTimer = setTimeout(() => {
           if (token !== this.token || !this.running || this.frames > 0) return;
           this.degradeNoFirstFrame(token, identity);
@@ -400,7 +458,8 @@ window.__ModuleLoader__.load({
         const url =
           `${PREVIEW_PATH}?hostSessionId=${encodeURIComponent(this.store.hostSessionId)}` +
           `&cuSessionId=${encodeURIComponent(identity.cuSessionId)}` +
-          `&generation=${encodeURIComponent(identity.targetGeneration)}`;
+          `&generation=${encodeURIComponent(identity.targetGeneration)}` +
+          (identity.targetId ? `&targetId=${encodeURIComponent(identity.targetId)}` : "");
 
         try {
           const response = await fetch(url, {
@@ -410,7 +469,7 @@ window.__ModuleLoader__.load({
           });
           if (!response.ok || !response.body) {
             if (token === this.token && this.running) {
-              this.store.setPreview({ status: "unavailable", reason: `http_${response.status}` });
+              this.setStatus({ status: "unavailable", reason: `http_${response.status}` });
             }
             return;
           }
@@ -432,11 +491,11 @@ window.__ModuleLoader__.load({
             }
           }
           if (token === this.token && this.running && !this.abort.signal.aborted) {
-            this.store.setPreview({ status: "stale", reason: this.invalid ?? "stream_ended" });
+            this.setStatus({ status: "stale", reason: this.invalid ?? "stream_ended" });
           }
         } catch (error) {
           if (token === this.token && error?.name !== "AbortError" && this.running) {
-            this.store.setPreview({ status: "stale", reason: "stream_error" });
+            this.setStatus({ status: "stale", reason: "stream_error" });
           }
         } finally {
           // A superseded stream must not reset the live one's flags or reader:
@@ -485,7 +544,7 @@ window.__ModuleLoader__.load({
         }
         this.reader = null;
         this.decoding = false;
-        this.store.setPreview({
+        this.setStatus({
           status: "stale",
           reason: "first_frame_timeout",
           fps: 0,
@@ -508,11 +567,13 @@ window.__ModuleLoader__.load({
           this.dropped += 1;
           return;
         }
-        const current = this.store.getSnapshot();
+        const current = this.identitySnapshot();
         if (
           !current ||
+          !current.active ||
           current.cuSessionId !== identity.cuSessionId ||
-          current.targetGeneration !== identity.targetGeneration
+          current.targetGeneration !== identity.targetGeneration ||
+          (current.targetId ?? null) !== (identity.targetId ?? null)
         ) {
           this.dropped += 1;
           return;
@@ -537,11 +598,13 @@ window.__ModuleLoader__.load({
               bitmap.close?.();
               return;
             }
-            const latest = this.store.getSnapshot();
+            const latest = this.identitySnapshot();
             if (
               !latest ||
+              !latest.active ||
               latest.cuSessionId !== identity.cuSessionId ||
-              latest.targetGeneration !== identity.targetGeneration
+              latest.targetGeneration !== identity.targetGeneration ||
+              (latest.targetId ?? null) !== (identity.targetId ?? null)
             ) {
               bitmap.close?.();
               this.dropped += 1;
@@ -564,7 +627,7 @@ window.__ModuleLoader__.load({
             this.fpsWindow.push(now);
             while (this.fpsWindow.length > 0 && now - this.fpsWindow[0] > 1000) this.fpsWindow.shift();
             this.fps = this.fpsWindow.length;
-            this.store.setPreview({
+            this.setStatus({
               status: "live",
               fps: this.fps,
               frameAgeMs: 0,
@@ -585,7 +648,7 @@ window.__ModuleLoader__.load({
                 this.lastFrameAt &&
                 performance.now() - this.lastFrameAt > 2000
               ) {
-                this.store.setPreview({ status: "stale", reason: "no_frames" });
+                this.setStatus({ status: "stale", reason: "no_frames" });
               }
             }, 2000);
           })
@@ -625,7 +688,7 @@ window.__ModuleLoader__.load({
         this.lastAttemptAt = 0;
         this.blockedIdentity = null;
         if (this.frames > 0) {
-          this.store.setPreview({ status: "unavailable", fps: 0, frameAgeMs: null, reason: "closed" });
+          this.setStatus({ status: "unavailable", fps: 0, frameAgeMs: null, reason: "closed" });
         }
       }
     }
@@ -657,8 +720,16 @@ window.__ModuleLoader__.load({
         // stays a ~40 px strip until this is true.
         this.watching = false;
         this.previewWanted = false;
-        this.preview = new PreviewController(this);
+        this.deckVisible = false;
+        this.deckCollapsed = false;
+        this.deckHiddenSignature = null;
+        this.hiddenTargets = new Set();
+        this.expandedTargets = new Set();
+        this.previews = new Map();
+        this.previewInfos = new Map();
+        this.preview = this.previewFor(null);
         this.previewInfo = { status: "unavailable", fps: 0, frameAgeMs: null };
+        this.selectedTargetId = null;
         this.probe = null;
         this.timer = null;
         this.abort = null;
@@ -670,6 +741,8 @@ window.__ModuleLoader__.load({
         this.lifecycleEpoch = 0;
         this.inflightEpoch = 0;
         this.stopping = false;
+        this.stoppingAll = false;
+        this.stoppingTargets = new Set();
         this.stoppedAt = null;
         this.pollInterval = 1000;
         this.visibilityHandler = null;
@@ -682,16 +755,136 @@ window.__ModuleLoader__.load({
        * getSnapshot() returning the identical object, so previewInfo,
        * connection and stopping changes were invisible until the next poll.
        */
+      previewFor(targetId = null) {
+        const key = targetId ?? "__primary__";
+        let controller = this.previews.get(key);
+        if (!controller) {
+          controller = new PreviewController(this, targetId ?? null);
+          this.previews.set(key, controller);
+        }
+        return controller;
+      }
+
+      targets() {
+        return Array.isArray(this.snapshot?.targets) ? this.snapshot.targets : [];
+      }
+
+      primaryTarget() {
+        const targets = this.targets();
+        return (
+          targets.find((target) => target.targetId === this.snapshot?.target?.targetId) ??
+          targets.find((target) => target.active) ??
+          targets[0] ??
+          null
+        );
+      }
+
+      selectTarget(targetId) {
+        this.selectedTargetId = targetId ?? null;
+        this.notify();
+      }
+
+      deckSignature() {
+        return `${this.snapshot?.cuSessionId ?? ""}:${this.targets()
+          .map((target) => target.targetId)
+          .join(",")}`;
+      }
+
+      dismissDeck() {
+        for (const target of this.targets()) this.hiddenTargets.add(target.targetId);
+        this.deckVisible = false;
+        this.deckHiddenSignature = this.deckSignature();
+        // Closing the deck must release its preview children, unless the user
+        // separately chose Watch or has the enlarged overlay open.
+        if (!this.watching && !this.expanded) this.closePreviews();
+        this.notify();
+      }
+
+      dismissTargetPanel(targetId) {
+        if (!targetId) return;
+        this.hiddenTargets.add(targetId);
+        this.expandedTargets.delete(targetId);
+        const active = this.targets().filter(
+          (target) => target.active === true && ACTIVE_STATES.has(target.state),
+        );
+        if (active.length > 0 && active.every((target) => this.hiddenTargets.has(target.targetId))) {
+          this.deckVisible = false;
+          this.deckHiddenSignature = this.deckSignature();
+        }
+        this.notify();
+      }
+
+      showDeck() {
+        this.deckVisible = true;
+        this.deckHiddenSignature = null;
+        this.hiddenTargets.clear();
+        this.notify();
+        this.openPreviews();
+      }
+
+      toggleTargetCollapsed(targetId) {
+        if (!targetId) return;
+        if (this.expandedTargets.has(targetId)) {
+          this.expandedTargets.delete(targetId);
+          // Collapsing drops the capture with it: no hidden stream keeps the
+          // screen-record indicator on.
+          this.previewFor(targetId).close();
+        } else {
+          this.expandedTargets.add(targetId);
+          this.openPreviews();
+        }
+        this.notify();
+      }
+
+      toggleDeckCollapsed() {
+        this.deckCollapsed = !this.deckCollapsed;
+        this.notify();
+      }
+
+      openPreviews() {
+        if (!this.active) return;
+        // Control-only deck: a visible deck is not a reason to capture. Frames
+        // start only for a card the user expanded, for Watch, or for the big
+        // panel. Otherwise every automatic deck show would open a ScreenCaptureKit
+        // stream on the targets and re-trigger the system capture consent.
+        const wantsAll = this.expanded === true || this.previewWanted === true;
+        if (!wantsAll && this.expandedTargets.size === 0) return;
+        const targets = this.targets();
+        if (targets.length === 0) {
+          this.preview.open();
+          return;
+        }
+        for (const target of targets) {
+          if (target.active !== true || !ACTIVE_STATES.has(target.state)) continue;
+          if (!wantsAll && !this.expandedTargets.has(target.targetId)) continue;
+          this.previewFor(target.targetId).open();
+        }
+        // A target can finish between the two polls; keep the legacy primary
+        // path alive only when the host has not published target rows at all.
+      }
+
+      closePreviews() {
+        for (const controller of this.previews.values()) controller.close();
+      }
+
       rebuildView() {
         this.view = {
           ...this.snapshot,
           previewInfo: this.previewInfo,
+          targetPreviews: Object.fromEntries(this.previewInfos),
+          selectedTargetId: this.selectedTargetId,
           connection: this.connection,
           lastError: this.lastError,
           stopping: this.stopping === true,
+          stoppingAll: this.stoppingAll === true,
+          stoppingTargets: [...this.stoppingTargets],
           expanded: this.expanded,
           watching: this.watching,
           previewWanted: this.previewWanted,
+          deckVisible: this.deckVisible,
+          deckCollapsed: this.deckCollapsed,
+          hiddenTargetIds: [...this.hiddenTargets],
+          expandedTargetIds: [...this.expandedTargets],
           stoppedAt: this.stoppedAt,
           probe: this.probe,
         };
@@ -747,10 +940,10 @@ window.__ModuleLoader__.load({
         if (typeof document !== "undefined") {
           this.visibilityHandler = () => {
             if (document.visibilityState === "hidden") {
-              this.preview.close();
+              this.closePreviews();
             } else {
               this.pollNow(true);
-              if (this.expanded || this.previewWanted) this.preview.open();
+              if (this.expanded || this.previewWanted) this.openPreviews();
             }
           };
           document.addEventListener("visibilitychange", this.visibilityHandler);
@@ -772,7 +965,8 @@ window.__ModuleLoader__.load({
         } catch {
           // ignore
         }
-        this.preview.close();
+        this.closePreviews();
+        this.deckVisible = false;
         if (typeof document !== "undefined" && this.visibilityHandler) {
           document.removeEventListener("visibilitychange", this.visibilityHandler);
           this.visibilityHandler = null;
@@ -834,28 +1028,97 @@ window.__ModuleLoader__.load({
         if (!next || typeof next !== "object") return;
         if (!Number.isInteger(next.revision)) return;
         if (this.snapshot.revision > next.revision) return; // never regress
-        const wasActive = ACTIVE_STATES.has(this.snapshot.state);
+        const previous = this.snapshot;
+        const previousTargets = new Map(
+          (Array.isArray(previous.targets) ? previous.targets : []).map((target) => [
+            target.targetId,
+            target,
+          ]),
+        );
+        const wasActive = ACTIVE_STATES.has(previous.state);
         const becameActive = ACTIVE_STATES.has(next.state);
-        const wasFinal = FINAL_STATES.has(this.snapshot.state);
-        const previousGeneration = this.snapshot.targetGeneration;
-        const previousCuSessionId = this.snapshot.cuSessionId;
+        const wasFinal = FINAL_STATES.has(previous.state);
         this.snapshot = next;
-        if (
-          previousGeneration !== next.targetGeneration ||
-          previousCuSessionId !== next.cuSessionId
-        ) {
-          // A target switch or a new CU session retires the old stream before a
-          // new first frame; otherwise the old canvas keeps painting a window
-          // that is no longer owned.
+        const targets = Array.isArray(next.targets) ? next.targets : [];
+        if (previous.cuSessionId !== next.cuSessionId) this.closePreviews();
+        if (targets.length > 0) {
+          // The legacy single-target controller is not used once the host has
+          // published target rows; close it so no orphan stream survives the
+          // transition.
           this.preview.close();
+          // A target's stream is retired when its window incarnation changes,
+          // when it is stopped, or when the whole target disappears. A sibling
+          // target's stream is untouched.
+          for (const [targetId, old] of previousTargets) {
+            const current = targets.find((target) => target.targetId === targetId);
+            if (
+              !current ||
+              current.active !== true ||
+              Number(current.targetGeneration) !== Number(old.targetGeneration) ||
+              !ACTIVE_STATES.has(current.state)
+            ) {
+              this.previewFor(targetId).close();
+            }
+            if (current && Number(current.targetGeneration) !== Number(old.targetGeneration)) {
+              this.hiddenTargets.delete(targetId);
+              this.expandedTargets.delete(targetId);
+            }
+          }
+          for (const key of [...this.previews.keys()]) {
+            if (key === "__primary__") continue;
+            if (!targets.some((target) => target.targetId === key)) {
+              this.previewFor(key).close();
+              this.previews.delete(key);
+              this.previewInfos.delete(key);
+            }
+          }
+          const selected = targets.find((target) => target.targetId === this.selectedTargetId);
+          if (!selected || selected.active !== true || !ACTIVE_STATES.has(selected.state)) {
+            this.selectedTargetId =
+              targets.find((target) => target.active === true && ACTIVE_STATES.has(target.state))?.targetId ??
+              next.target?.targetId ??
+              targets[0]?.targetId ??
+              null;
+          }
+        } else {
+          // Legacy single-target snapshots keep their original identity logic.
+          if (
+            previous.targetGeneration !== next.targetGeneration ||
+            previous.cuSessionId !== next.cuSessionId
+          ) {
+            this.preview.close();
+          }
         }
-        if (FINAL_STATES.has(next.state)) {
+        const hasActiveTarget = targets.some(
+          (target) => target.active === true && ACTIVE_STATES.has(target.state),
+        );
+        const sessionFinal =
+          FINAL_STATES.has(next.state) && (targets.length === 0 || !hasActiveTarget);
+        const knownTargets = new Set(targets.map((target) => target.targetId));
+        for (const targetId of [...this.hiddenTargets]) {
+          if (!knownTargets.has(targetId)) this.hiddenTargets.delete(targetId);
+        }
+        for (const targetId of [...this.expandedTargets]) {
+          if (!knownTargets.has(targetId)) this.expandedTargets.delete(targetId);
+        }
+        const signature = `${next.cuSessionId ?? ""}:${targets.map((target) => target.targetId).join(",")}`;
+        if (hasActiveTarget && this.deckHiddenSignature !== signature) {
+          this.deckVisible = true;
+          this.deckCollapsed = false;
+        }
+        if (!hasActiveTarget) {
+          this.deckVisible = false;
+          this.deckHiddenSignature = null;
+          this.hiddenTargets.clear();
+          this.expandedTargets.clear();
+        }
+        if (sessionFinal) {
           this.stoppedAt = this.stoppedAt ?? Date.now();
           // A finished session keeps no live view; the last frame is already
           // on screen and the card says it is stopped.
           this.watching = false;
           this.previewWanted = false;
-          this.preview.close();
+          this.closePreviews();
         }
         this.notify();
         if (becameActive && !wasActive) {
@@ -868,27 +1131,37 @@ window.__ModuleLoader__.load({
           this.watching = false;
           this.previewWanted = false;
         }
-        if (ACTIVE_STATES.has(next.state) && (this.expanded || this.previewWanted)) {
+        const wantsFrames = this.expanded || this.previewWanted || this.expandedTargets.size > 0;
+        if (wantsFrames && hasActiveTarget) {
+          this.openPreviews();
+        } else if (wantsFrames && targets.length === 0) {
           this.preview.open();
         }
       }
 
-      setPreview(info) {
-        this.previewInfo = { ...this.previewInfo, ...info };
+      setPreview(info, targetId = null) {
+        if (targetId) {
+          this.previewInfos.set(targetId, {
+            ...(this.previewInfos.get(targetId) ?? {}),
+            ...info,
+          });
+        } else {
+          this.previewInfo = { ...this.previewInfo, ...info };
+        }
         this.notify();
       }
 
       toggleWatch() {
-        if (FINAL_STATES.has(this.snapshot.state)) return;
+        if (FINAL_STATES.has(this.snapshot.state) && this.targets().every((target) => !target.active)) return;
         if (this.watching) {
           this.watching = false;
           this.previewWanted = false;
-          this.preview.close();
+          this.closePreviews();
         } else {
           this.watching = true;
           this.previewWanted = true;
           this.pollNow(true);
-          this.preview.open();
+          this.openPreviews();
         }
         this.notify();
       }
@@ -899,13 +1172,13 @@ window.__ModuleLoader__.load({
           this.previewWanted = true;
           expansion.set(this.hostSessionId);
           this.pollNow(true);
-          this.preview.open();
+          this.openPreviews();
         } else {
           expansion.set(null);
           // Collapsing the big panel returns to the card the user was already
           // watching; it never starts a preview they did not ask for.
           this.previewWanted = this.watching === true;
-          if (!this.previewWanted) this.preview.close();
+          if (!this.previewWanted) this.closePreviews();
         }
         this.notify();
       }
@@ -915,7 +1188,7 @@ window.__ModuleLoader__.load({
         this.expanded = false;
         expansion.set(null);
         this.previewWanted = this.watching === true;
-        if (!this.previewWanted) this.preview.close();
+        if (!this.previewWanted) this.closePreviews();
         this.notify();
       }
 
@@ -925,19 +1198,31 @@ window.__ModuleLoader__.load({
         this.notify();
       }
 
-      async stopControl(command = "stop") {
-        if (this.stopping) return;
+      async stopControl(command = "stop", targetId = null) {
+        if (targetId) {
+          if (this.stoppingTargets.has(targetId)) return;
+          if (this.stoppingAll) return;
+        } else if (this.stopping || this.stoppingAll) {
+          return;
+        }
         const epoch = this.lifecycleEpoch;
-        this.stopping = true;
+        if (targetId) this.stoppingTargets.add(targetId);
+        else {
+          this.stopping = true;
+          this.stoppingAll = true;
+        }
         this.notify();
         try {
           // STOP is identity-based: the server ignores ordinary state revisions
           // so a click between two polls still stops. Sending expectedRevision
-          // here would reintroduce exactly the 409 this fixes.
+          // here would reintroduce exactly the 409 this fixes. A target stop
+          // does not request a session-wide pause; only stop-all does.
           const data = await postJson(CONTROL_PATH, {
             hostSessionId: this.hostSessionId,
             cuSessionId: this.snapshot.cuSessionId,
             command,
+            ...(targetId ? { targetId } : {}),
+            pause: targetId ? false : true,
           });
           if (!this.active || epoch !== this.lifecycleEpoch) return;
           // Prefer the host's authoritative snapshot. Never fabricate
@@ -954,8 +1239,12 @@ window.__ModuleLoader__.load({
             this.notify();
           }
           this.lastError = null;
-          this.stoppedAt = Date.now();
-          this.preview.close();
+          if (targetId) {
+            this.previewFor(targetId).close();
+          } else {
+            this.stoppedAt = Date.now();
+            this.closePreviews();
+          }
           this.pollNow(true, epoch);
         } catch (error) {
           if (!this.active || epoch !== this.lifecycleEpoch) return;
@@ -966,7 +1255,11 @@ window.__ModuleLoader__.load({
           this.pollNow(true, epoch);
         } finally {
           if (epoch === this.lifecycleEpoch) {
-            this.stopping = false;
+            if (targetId) this.stoppingTargets.delete(targetId);
+            else {
+              this.stopping = false;
+              this.stoppingAll = false;
+            }
             this.notify();
           }
         }
@@ -1056,6 +1349,26 @@ window.__ModuleLoader__.load({
       },
     };
 
+    // The floating Control Deck is a root overlay with no owner props. Track
+    // the conversation whose composer card is currently mounted; that is the
+    // chat whose targets the deck must show.
+    const activeDeckSession = {
+      value: null,
+      listeners: new Set(),
+      subscribe(fn) {
+        activeDeckSession.listeners.add(fn);
+        return () => activeDeckSession.listeners.delete(fn);
+      },
+      get() {
+        return activeDeckSession.value;
+      },
+      set(value) {
+        if (activeDeckSession.value === value) return;
+        activeDeckSession.value = value;
+        for (const fn of [...activeDeckSession.listeners]) fn();
+      },
+    };
+
     const stores = new Map();
     function storeFor(hostSessionId) {
       let store = stores.get(hostSessionId);
@@ -1069,29 +1382,115 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------- styles
 
     const CSS = `
-.scu-root { pointer-events: auto; --scu-radius: 12px; --scu-fg: var(--dsw-alias-label-primary); --scu-fg2: var(--dsw-alias-label-secondary);
+.scu-root { pointer-events: auto; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased; --scu-radius: 16px; --scu-fg: var(--dsw-alias-label-primary); --scu-fg2: var(--dsw-alias-label-secondary);
   --scu-line: var(--dsw-alias-border-l1); --scu-line2: var(--dsw-alias-border-l2);
   --scu-surface: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 78%, transparent);
   --scu-accent: var(--dsw-alias-brand-primary); --scu-ok: var(--dsw-alias-state-success-primary);
   --scu-warn: var(--dsw-alias-state-warn-primary); --scu-err: var(--dsw-alias-state-error-primary);
   color: var(--scu-fg); font-size: 12px; line-height: 1.35; }
-.scu-card { box-sizing: border-box; width: min(320px, 100%); margin: 6px auto 2px; border-radius: var(--scu-radius);
-  border: 1px solid var(--scu-line); background: var(--scu-surface);
-  -webkit-backdrop-filter: blur(18px) saturate(1.35); backdrop-filter: blur(18px) saturate(1.35);
-  box-shadow: 0 8px 28px rgba(0,0,0,.16), 0 1px 0 rgba(255,255,255,.06) inset;
-  padding: 8px 9px 9px; overflow: hidden; animation: scu-in 120ms ease-out both; }
-.scu-strip { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 5px 9px; }
+.scu-float-stack { position: fixed; right: 20px; bottom: 96px; z-index: 80; pointer-events: none;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  max-height: calc(100vh - 128px); overflow-y: auto; overflow-x: visible; padding: 4px 2px 4px 10px; }
+.scu-float-stack::-webkit-scrollbar { width: 0; height: 0; }
+.scu-float { pointer-events: auto; position: relative; box-sizing: border-box;
+  width: min(284px, calc(100vw - 40px));
+  border-radius: 16px; overflow: hidden; color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  background: rgba(22, 22, 24, .74);
+  -webkit-backdrop-filter: blur(34px) saturate(180%); backdrop-filter: blur(34px) saturate(180%);
+  border: .5px solid rgba(255, 255, 255, .14);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .34), 0 2px 6px rgba(0, 0, 0, .18), 0 0 0 .5px rgba(0, 0, 0, .22),
+    inset 0 .5px 0 rgba(255, 255, 255, .10);
+  transition: transform 240ms cubic-bezier(.22, 1, .36, 1), box-shadow 240ms ease;
+  animation: scu-float-in 380ms cubic-bezier(.22, 1, .36, 1) both;
+  animation-delay: calc(var(--scu-float-index, 0) * 45ms); }
+.scu-float.is-expanded { width: min(332px, calc(100vw - 40px)); }
+.scu-float:hover { transform: translateY(-1px);
+  box-shadow: 0 22px 52px rgba(0, 0, 0, .36), 0 2px 8px rgba(0, 0, 0, .18), 0 0 0 .5px rgba(0, 0, 0, .20); }
+.scu-float-head { display: flex; align-items: center; gap: 9px; padding: 9px 8px 9px 12px; min-height: 38px; }
+.scu-float-orb { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #0a84ff;
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, .16);
+  transition: background 180ms ease, box-shadow 180ms ease; }
+.scu-float-orb[data-state="verified"], .scu-float-state-dot[data-state="verified"] { background: #30d158; }
+.scu-float-orb[data-state="unverified"], .scu-float-state-dot[data-state="unverified"] { background: #ffd60a; }
+.scu-float-orb[data-state="failed"], .scu-float-state-dot[data-state="failed"] { background: #ff453a; }
+.scu-float-orb[data-state="waiting"], .scu-float-state-dot[data-state="waiting"] { animation: scu-pulse 1.6s ease-in-out infinite; }
+.scu-float-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.scu-float-app { font-size: 12.5px; font-weight: 590; letter-spacing: -.01em; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scu-float-sub { font-size: 10.5px; color: rgba(255, 255, 255, .56);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scu-float-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.scu-float-icon { appearance: none; border: 0; width: 22px; height: 22px; padding: 0; border-radius: 50%;
+  display: grid; place-items: center; background: transparent; color: rgba(255, 255, 255, .52); cursor: pointer;
+  font-size: 13px; line-height: 1; transition: background 140ms ease, color 140ms ease, transform 140ms ease, opacity 160ms ease; }
+.scu-float-icon:hover { background: rgba(255, 255, 255, .13); color: #fff; }
+.scu-float-icon:active { transform: scale(.92); }
+.scu-float-close:hover { color: #ff6b60; background: rgba(255, 69, 58, .18); }
+.scu-float-glyph { transform: translateY(-.5px); }
+.scu-float-reveal { opacity: 0; }
+.scu-float:hover .scu-float-reveal, .scu-float:focus-within .scu-float-reveal { opacity: 1; }
+.scu-float-preview { position: relative; margin: 0 8px 8px; border-radius: 12px; overflow: hidden;
+  background: #000; aspect-ratio: 16 / 10;
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .10); }
+.scu-float-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.scu-float-vignette { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(180deg, rgba(0, 0, 0, .14), transparent 22% 66%, rgba(0, 0, 0, .42)); }
+.scu-float-live { position: absolute; left: 7px; top: 7px; z-index: 2; display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px; border-radius: 999px; font-size: 9px; font-weight: 620; letter-spacing: .07em;
+  color: rgba(255, 255, 255, .92); background: rgba(20, 20, 22, .50);
+  border: .5px solid rgba(255, 255, 255, .14);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+.scu-float-live::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #30d158;
+  box-shadow: 0 0 8px rgba(48, 209, 88, .75); }
+.scu-float-live[data-status="stale"]::before { background: #ffd60a; box-shadow: 0 0 8px rgba(255, 214, 10, .65); }
+.scu-float-window { position: absolute; right: 7px; top: 7px; z-index: 2; padding: 2px 7px; border-radius: 999px;
+  font-size: 9px; color: rgba(255, 255, 255, .62); background: rgba(20, 20, 22, .46);
+  border: .5px solid rgba(255, 255, 255, .10);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+.scu-float-wait { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center;
+  color: rgba(255, 255, 255, .48); font-size: 10.5px; letter-spacing: .01em; }
+.scu-float .scu-stop { appearance: none; border: 0; border-radius: 999px; padding: 3px 9px;
+  font-size: 10.5px; font-weight: 590; cursor: pointer; flex: 0 0 auto;
+  color: #ff6b60; background: rgba(255, 69, 58, .16);
+  transition: background 150ms ease, transform 150ms ease; }
+.scu-float .scu-stop:hover { background: rgba(255, 69, 58, .28); }
+.scu-float .scu-stop:active { transform: scale(.96); }
+.scu-float .scu-stop:disabled { opacity: .5; cursor: default; }
+@media (max-width: 720px) {
+  .scu-float-stack { right: 8px; bottom: 76px; max-height: calc(100vh - 96px); }
+  .scu-float, .scu-float.is-expanded { width: calc(100vw - 16px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scu-float { animation: none !important; transition: none !important; }
+  .scu-float:hover { transform: none; }
+}
+@keyframes scu-float-in {
+  from { opacity: 0; transform: translateY(14px) scale(.965); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.scu-card { box-sizing: border-box; width: min(320px, 100%); margin: 7px auto 3px; border-radius: var(--scu-radius);
+  border: 1px solid color-mix(in srgb, #fff 10%, var(--scu-line));
+  background: linear-gradient(180deg, color-mix(in srgb, #fff 7%, transparent), transparent 32%),
+    color-mix(in srgb, var(--scu-surface) 90%, transparent);
+  -webkit-backdrop-filter: blur(28px) saturate(1.55); backdrop-filter: blur(28px) saturate(1.55);
+  box-shadow: 0 12px 32px rgba(0,0,0,.18), 0 1px 0 rgba(255,255,255,.12) inset;
+  padding: 9px 11px 10px; overflow: hidden; animation: scu-in 240ms cubic-bezier(.22,1,.36,1) both; }
+.scu-strip { display: flex; align-items: center; gap: 9px; min-height: 44px; padding: 6px 9px; }
 .scu-strip .scu-head { flex: 1 1 auto; min-height: 0; }
 .scu-strip .scu-app { font-size: 11.5px; }
 .scu-strip .scu-sub { font-size: 10.5px; }
-.scu-watch { appearance: none; border: 1px solid color-mix(in srgb, var(--scu-accent) 45%, var(--scu-line));
-  background: color-mix(in srgb, var(--scu-accent) 10%, transparent); color: var(--scu-accent);
-  border-radius: 8px; padding: 4px 9px; font-size: 11px; font-weight: 600; cursor: pointer; flex: 0 0 auto; }
+.scu-watch { appearance: none; border: 1px solid color-mix(in srgb, var(--scu-accent) 38%, var(--scu-line));
+  background: color-mix(in srgb, var(--scu-accent) 9%, transparent); color: var(--scu-accent);
+  border-radius: 999px; padding: 4px 10px; font-size: 10.5px; font-weight: 600; cursor: pointer; flex: 0 0 auto;
+  transition: background 150ms ease, transform 150ms ease; }
+.scu-watch:active { transform: scale(.96); }
 .scu-watch:hover { background: color-mix(in srgb, var(--scu-accent) 18%, transparent); }
 .scu-watch:focus-visible { outline: 2px solid var(--scu-accent); outline-offset: 1px; }
 .scu-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
 .scu-dot { width: 8px; height: 8px; border-radius: 99px; flex: 0 0 auto; background: var(--scu-fg2);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--scu-fg2) 18%, transparent); }
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--scu-fg2) 16%, transparent); transition: background 180ms ease, box-shadow 180ms ease; }
 .scu-dot[data-state="running"], .scu-dot[data-state="claimed"] { background: var(--scu-accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--scu-accent) 22%, transparent); animation: scu-pulse 1.4s ease-in-out infinite; }
 .scu-dot[data-state="verified"] { background: var(--scu-ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--scu-ok) 20%, transparent); }
@@ -1115,27 +1514,49 @@ window.__ModuleLoader__.load({
 .scu-badge[data-status="stale"] { background: color-mix(in srgb, var(--scu-warn) 82%, transparent); color: #1b1300; }
 .scu-foot { display: flex; align-items: center; gap: 8px; margin-top: 7px; min-height: 24px; }
 .scu-meta { color: var(--scu-fg2); font-size: 10.5px; flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-.scu-stop { appearance: none; border: 1px solid color-mix(in srgb, var(--scu-err) 45%, var(--scu-line));
-  background: color-mix(in srgb, var(--scu-err) 12%, transparent); color: var(--scu-err);
-  border-radius: 8px; padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: pointer; flex: 0 0 auto; }
+.scu-stop { appearance: none; border: 1px solid color-mix(in srgb, var(--scu-err) 36%, var(--scu-line));
+  background: color-mix(in srgb, var(--scu-err) 9%, transparent); color: var(--scu-err);
+  border-radius: 999px; padding: 4px 11px; font-size: 10.5px; font-weight: 600; cursor: pointer; flex: 0 0 auto;
+  transition: background 150ms ease, transform 150ms ease; }
+.scu-stop:active { transform: scale(.96); }
 .scu-stop:hover { background: color-mix(in srgb, var(--scu-err) 20%, transparent); }
 .scu-stop:disabled { opacity: .55; cursor: default; }
 .scu-stop:focus-visible { outline: 2px solid var(--scu-err); outline-offset: 1px; }
 .scu-error { margin-top: 6px; color: var(--scu-err); font-size: 10.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .scu-perm-btn { appearance: none; border: 1px solid var(--scu-line2); background: color-mix(in srgb, var(--dsw-alias-primary, #4b70e2) 18%, transparent); color: var(--scu-fg); border-radius: 6px; padding: 2px 8px; font-size: 10.5px; font-weight: 550; cursor: pointer; }
 .scu-perm-btn:hover { background: color-mix(in srgb, var(--dsw-alias-primary, #4b70e2) 32%, transparent); }
-.scu-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(8,10,14,.42);
-  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); display: grid; place-items: center; padding: 24px;
-  animation: scu-fade 180ms ease-out both; }
-.scu-panel { width: min(860px, 94vw); max-height: min(78vh, 760px); border-radius: 16px; overflow: hidden;
-  background: color-mix(in srgb, var(--dsw-alias-bg-overlay) 92%, transparent);
-  border: 1px solid var(--scu-line2); box-shadow: 0 28px 80px rgba(0,0,0,.42);
-  display: flex; flex-direction: column; animation: scu-rise 180ms cubic-bezier(.2,.7,.3,1) both; }
-.scu-panel-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--scu-line); }
-.scu-panel-title { font-weight: 650; font-size: 13px; }
+.scu-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(6,8,12,.34);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1); backdrop-filter: blur(18px) saturate(1.1);
+  display: grid; place-items: center; padding: 24px; animation: scu-fade 220ms ease-out both; }
+.scu-panel { width: min(880px, 94vw); max-height: min(78vh, 760px); border-radius: 24px; overflow: hidden;
+  background: linear-gradient(180deg, color-mix(in srgb, #fff 7%, transparent), transparent 30%),
+    color-mix(in srgb, var(--dsw-alias-bg-overlay) 88%, transparent);
+  border: 1px solid color-mix(in srgb, #fff 13%, var(--scu-line2));
+  box-shadow: 0 38px 100px rgba(0,0,0,.48), 0 2px 0 rgba(255,255,255,.1) inset;
+  -webkit-backdrop-filter: blur(34px) saturate(1.6); backdrop-filter: blur(34px) saturate(1.6);
+  display: flex; flex-direction: column; animation: scu-rise 280ms cubic-bezier(.22,1,.36,1) both; }
+.scu-panel-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--scu-line); }
+.scu-panel-title { font-weight: 650; font-size: 13.5px; letter-spacing: -.01em; }
 .scu-panel-sub { color: var(--scu-fg2); font-size: 11px; flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.scu-panel-body { position: relative; flex: 1 1 auto; min-height: 240px; background: #05070a; display: grid; place-items: center; }
+.scu-panel-body { position: relative; flex: 1 1 auto; min-height: 240px; margin: 8px; border-radius: 16px; overflow: hidden;
+  background: #05070a; display: grid; place-items: center; border: 1px solid color-mix(in srgb, #fff 8%, transparent); }
 .scu-panel-canvas { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; display: block; }
+.scu-multi { width: min(640px, 100%); }
+.scu-targets { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 7px; margin-top: 7px; }
+.scu-target { min-width: 0; border: 1px solid var(--scu-line); border-radius: 9px; padding: 6px; background: color-mix(in srgb, var(--scu-fg) 3%, transparent); }
+.scu-target[data-state="stopped"], .scu-target[data-state="cleanup_unknown"] { opacity: .68; }
+.scu-target-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.scu-target-head .scu-stop { padding: 2px 6px; font-size: 10px; }
+.scu-target-body { position: relative; margin-top: 5px; border-radius: 6px; overflow: hidden; background: #07090c; aspect-ratio: 16 / 10; }
+.scu-target-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.scu-target-foot { display: flex; margin-top: 4px; min-height: 14px; }
+.scu-target-foot .scu-meta { font-size: 10px; }
+.scu-tabs { display: flex; gap: 4px; padding: 7px 12px 0; overflow-x: auto; border-bottom: 1px solid var(--scu-line); }
+.scu-tab { appearance: none; border: 1px solid var(--scu-line); border-bottom: none; border-radius: 7px 7px 0 0;
+  background: transparent; color: var(--scu-fg2); padding: 4px 9px; font-size: 11px; cursor: pointer; white-space: nowrap; }
+.scu-tab[aria-selected="true"] { background: color-mix(in srgb, var(--scu-accent) 13%, transparent); color: var(--scu-fg); border-color: var(--scu-accent); }
+.scu-tab[data-state="failed"] { color: var(--scu-err); }
+.scu-stop-all { border-color: color-mix(in srgb, var(--scu-err) 65%, var(--scu-line)); }
 .scu-panel-foot { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--scu-line); flex-wrap: wrap; }
 .scu-diag { border-top: 1px dashed var(--scu-line); color: var(--scu-fg2); font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .scu-diag > summary { cursor: pointer; padding: 6px 12px; list-style: none; user-select: none; }
@@ -1196,44 +1617,270 @@ window.__ModuleLoader__.load({
       return app || `window ${target.windowId ?? "?"}`;
     }
 
+    function targetLabel(target, t) {
+      if (!target) return t("card.noTarget");
+      const app = target.appName || (target.pid ? `pid ${target.pid}` : "");
+      return app || `window ${target.windowId ?? "?"}`;
+    }
+
+    function targetStateText(t, target) {
+      if (target.nativePreview?.status === "unavailable") return t("card.noPreview");
+      if (target.state === "running" || target.state === "claimed") {
+        const action = target.action?.kind;
+        return action ? t(`action.${action}`) : t(`state.${target.state}`);
+      }
+      return t(`state.${target.state}`);
+    }
+
     function ageText(ms, t) {
       if (ms === null || ms === undefined) return t("meta.none");
       return t("card.frameAge", { seconds: (ms / 1000).toFixed(1) });
     }
 
-    function StopButton({ store, snapshot, t }) {
-      const stopping = snapshot.state === "stopping" || snapshot.stopping === true;
+    function StopButton({ store, snapshot, t, targetId = null, all = false }) {
+      const stopping = all
+        ? snapshot.stoppingAll === true || snapshot.stopping === true
+        : targetId
+          ? (snapshot.stoppingTargets ?? []).includes(targetId)
+          : snapshot.state === "stopping" || snapshot.stopping === true;
+      const label = stopping
+        ? all
+          ? t("card.stoppingAll")
+          : t("card.stopping")
+        : all
+          ? t("card.stopAll")
+          : t("card.stop");
       return h(
         "button",
         {
           type: "button",
-          className: "scu-stop",
+          className: all ? "scu-stop scu-stop-all" : "scu-stop",
           disabled: stopping,
           // One activation path: click (also produced by keyboard and AXPress).
           // A pointerdown+click pair relied on the stopping flag/time to hide a
           // double trigger instead of having only one semantic trigger.
-          onClick: () => store.stopControl("stop"),
-          title: t("card.stop"),
+          onClick: () => store.stopControl("stop", targetId),
+          title: label,
         },
-        stopping ? t("card.stopping") : t("card.stop"),
+        label,
       );
     }
 
-    function PreviewCanvas({ store, className, compact }) {
+    function PreviewCanvas({ store, preview = null, className, compact }) {
       const canvasRef = useRef(null);
+      const controller = preview ?? store.preview;
       useEffect(() => {
-        store.preview.attach(canvasRef.current);
-        const wants = store.expanded || store.previewWanted;
-        if (wants) store.preview.open();
+        controller.attach(canvasRef.current);
+        const wants = store.expanded || store.previewWanted || store.deckVisible;
+        if (wants) controller.open();
         const attached = canvasRef.current;
-        return () => store.preview.detach(attached);
-      }, [store]);
+        return () => controller.detach(attached);
+      }, [controller, store]);
       return h("canvas", {
         ref: canvasRef,
         className,
         "aria-hidden": true,
         "data-compact": compact ? "1" : "0",
       });
+    }
+
+    function TargetTile({ store, target, snapshot, t }) {
+      const preview = store.previewFor(target.targetId);
+      const info = snapshot.targetPreviews?.[target.targetId] ?? {
+        status: target.previewStatus ?? "unavailable",
+        fps: 0,
+        frameAgeMs: null,
+      };
+      const hasFrame = preview.frames > 0;
+      return h(
+        "div",
+        { className: "scu-target", "data-state": target.state, "data-target-id": target.targetId },
+        h(
+          "div",
+          { className: "scu-target-head" },
+          h("span", { className: "scu-dot", "data-state": target.state, "aria-hidden": true }),
+          h(
+            "div",
+            { className: "scu-titles" },
+            h("span", { className: "scu-app", title: targetLabel(target, t) }, targetLabel(target, t)),
+            h("span", { className: "scu-sub" }, targetStateText(t, target)),
+          ),
+          target.active ? h(StopButton, { store, snapshot, t, targetId: target.targetId }) : null,
+        ),
+        h(
+          "div",
+          { className: "scu-target-body" },
+          h(PreviewCanvas, { store, preview, className: "scu-target-canvas", compact: true }),
+          !hasFrame
+            ? h(
+                "div",
+                { className: "scu-empty" },
+                info.status === "unavailable" ? t("card.noPreview") : t("card.waitingForFrame"),
+              )
+            : null,
+          info.status === "live" || info.status === "stale"
+            ? h("span", { className: "scu-badge", "data-status": info.status },
+                info.status === "live" ? t("card.fresh") : t("card.stale"))
+            : null,
+        ),
+        h(
+          "div",
+          { className: "scu-target-foot" },
+          h("span", { className: "scu-meta" },
+            info.status === "live"
+              ? t("meta.fps", { fps: info.fps || 0 })
+              : `${target.windowId ? `#${target.windowId}` : ""} ${ageText(info.frameAgeMs, t)}`.trim()),
+        ),
+      );
+    }
+
+    function TargetFloat({ store, target, snapshot, t, index }) {
+      const preview = store.previewFor(target.targetId);
+      const info = snapshot.targetPreviews?.[target.targetId] ?? {
+        status: target.previewStatus ?? "unavailable",
+        fps: 0,
+        frameAgeMs: null,
+      };
+      // Control-only by default: the resting state is one slim row of chrome.
+      // The live thumbnail is opt-in, so an ambient target never parks a large
+      // opaque card over the page it is driving.
+      const expandedCard = (snapshot.expandedTargetIds ?? []).includes(target.targetId);
+      const hasFrame = preview.frames > 0;
+      const live = info.status === "live";
+      const stateText = targetStateText(t, target);
+      const action = target.action?.kind ? t(`action.${target.action.kind}`) : "";
+      return h(
+        "article",
+        {
+          className: `scu-float${expandedCard ? " is-expanded" : ""}`,
+          "data-state": target.state,
+          "data-target-id": target.targetId,
+          style: { "--scu-float-index": String(index) },
+        },
+        h(
+          "header",
+          { className: "scu-float-head" },
+          h("span", { className: "scu-float-orb", "data-state": target.state, "aria-hidden": true }),
+          h(
+            "div",
+            { className: "scu-float-titles" },
+            h("span", { className: "scu-float-app", title: targetLabel(target, t) },
+              targetLabel(target, t)),
+            h("span", { className: "scu-float-sub" }, action || stateText),
+          ),
+          h(
+            "div",
+            { className: "scu-float-actions" },
+            h(StopButton, { store, snapshot, t, targetId: target.targetId }),
+            h(
+              "button",
+              {
+                type: "button", className: "scu-float-icon",
+                "aria-label": expandedCard ? t("deck.collapse") : t("deck.expand"),
+                title: expandedCard ? t("deck.collapse") : t("deck.expand"),
+                "aria-expanded": expandedCard,
+                onClick: () => store.toggleTargetCollapsed(target.targetId),
+              },
+              h("span", { className: "scu-float-glyph" }, expandedCard ? "\u2303" : "\u2304"),
+            ),
+            h(
+              "button",
+              {
+                type: "button", className: "scu-float-icon scu-float-reveal",
+                "aria-label": t("deck.expand"), title: t("deck.expand"),
+                onClick: () => {
+                  store.selectTarget(target.targetId);
+                  store.toggleExpanded();
+                },
+              },
+              h("span", { className: "scu-float-glyph" }, "\u2197"),
+            ),
+            h(
+              "button",
+              {
+                type: "button", className: "scu-float-icon scu-float-close scu-float-reveal",
+                "aria-label": t("deck.close"), title: t("deck.close"),
+                onClick: () => store.dismissTargetPanel(target.targetId),
+              },
+              h("span", { className: "scu-float-glyph" }, "\u00d7"),
+            ),
+          ),
+        ),
+        expandedCard
+          ? h(
+              "div",
+              { className: "scu-float-preview" },
+              h(PreviewCanvas, { store, preview, className: "scu-float-canvas", compact: true }),
+              h("div", { className: "scu-float-vignette", "aria-hidden": true }),
+              hasFrame
+                ? h("span", { className: "scu-float-live", "data-status": info.status },
+                    live ? "LIVE" : t("card.stale"))
+                : h("span", { className: "scu-float-wait" }, t("card.waitingForFrame")),
+              h("span", { className: "scu-float-window" },
+                target.windowId ? `#${target.windowId}` : "app"),
+            )
+          : null,
+      );
+    }
+
+    function ControlDeck() {
+      const ctx = ControlDeck.ctx;
+      const { t } = useLocale(ctx);
+      const sessionId = useSyncExternalStore(
+        activeDeckSession.subscribe,
+        activeDeckSession.get,
+        activeDeckSession.get,
+      );
+      const store = useMemo(() => (sessionId ? storeFor(sessionId) : null), [sessionId]);
+      const fallback = useMemo(
+        () => ({ version: 1, revision: -1, state: "idle", target: null, targets: [], deckVisible: false }),
+        [],
+      );
+      const fallbackGet = useMemo(() => () => fallback, [fallback]);
+      const snapshot = useSyncExternalStore(
+        store ? store.subscribe : NOOP_SUBSCRIBE,
+        store ? store.getSnapshot : fallbackGet,
+        store ? store.getSnapshot : fallbackGet,
+      );
+
+      useEffect(() => {
+        if (!store) return undefined;
+        return store.mount();
+      }, [store]);
+
+      useEffect(() => {
+        if (!store || snapshot.deckVisible !== true) return undefined;
+        // The deck itself is control-only; it opens frames only for cards the
+        // user expanded (or for Watch / the big panel).
+        store.openPreviews();
+        return undefined;
+      }, [
+        store, sessionId, snapshot.deckVisible, snapshot.state,
+        snapshot.targets?.length, (snapshot.expandedTargetIds ?? []).join(","),
+      ]);
+
+      if (!store || snapshot.deckVisible !== true || snapshot.expanded === true) return null;
+      const targets = Array.isArray(snapshot.targets) ? snapshot.targets : [];
+      const hidden = new Set(snapshot.hiddenTargetIds ?? []);
+      const visible = targets.filter(
+        (target) =>
+          target.active === true &&
+          ACTIVE_STATES.has(target.state) &&
+          !hidden.has(target.targetId),
+      );
+      // Codex-style: a target that already owns a native preview window needs
+      // no duplicate page float. Keep a float only as a fallback for targets
+      // whose native preview is missing or was closed.
+      const uncovered = visible.filter((target) => target.nativePreview?.visible !== true);
+      if (uncovered.length === 0) return null;
+      return h(
+        "div",
+        { className: "scu-root scu-float-stack", "data-scu-deck": sessionId },
+        uncovered.map((target, index) =>
+          h(TargetFloat, {
+            key: target.targetId, store, target, snapshot, t, index,
+          })),
+      );
     }
 
     function CuCard({ sessionId }) {
@@ -1258,6 +1905,14 @@ window.__ModuleLoader__.load({
       }, [store]);
 
       useEffect(() => {
+        if (!hostSessionId) return undefined;
+        activeDeckSession.set(hostSessionId);
+        return () => {
+          if (activeDeckSession.get() === hostSessionId) activeDeckSession.set(null);
+        };
+      }, [hostSessionId]);
+
+      useEffect(() => {
         if (!store) return undefined;
         if (FINAL_STATES.has(snapshot.state)) {
           const timer = setTimeout(() => store.dismiss(), 7000);
@@ -1270,7 +1925,7 @@ window.__ModuleLoader__.load({
         if (!store) return undefined;
         if (store.expanded) {
           store.pollNow(true);
-          store.preview.open();
+          store.openPreviews();
         }
         return undefined;
       }, [store, snapshot.state, snapshot.targetGeneration]);
@@ -1286,8 +1941,28 @@ window.__ModuleLoader__.load({
       const watching = snapshot.watching === true || snapshot.expanded === true;
       const badge =
         info.status === "live" ? t("card.fresh") : info.status === "stale" ? t("card.stale") : null;
+      const targets = Array.isArray(snapshot.targets) ? snapshot.targets : [];
+      const multi = targets.length > 0;
+      const activeTargets = targets.filter(
+        (target) => target.active === true && ACTIVE_STATES.has(target.state),
+      );
+      // Codex-style: a visible native preview window IS the viewer for that
+      // target. The in-chat card is duplicate chrome in that state and only
+      // remains as the fallback surface when a preview is unavailable or the
+      // user closed it.
+      const nativePreviewCoversTargets =
+        activeTargets.length > 0 &&
+        activeTargets.every((target) => target.nativePreview?.visible === true);
+      if (nativePreviewCoversTargets && !watching) return null;
+      const activeCount = activeTargets.length;
+      const hiddenPanels = activeTargets.filter((target) =>
+        (snapshot.hiddenTargetIds ?? []).includes(target.targetId)).length;
+      const primaryName = targetName(snapshot, t);
+      const titleText = multi
+        ? `${primaryName} · ${t("card.targets", { count: targets.length })}`
+        : primaryName;
 
-      const stop = h(StopButton, { store, snapshot, t });
+      const stop = h(StopButton, { store, snapshot, t, all: multi });
       const isPermError =
         snapshot.lastError &&
         /permission|authorized|accessibility|screencapture|privacy/i.test(snapshot.lastError);
@@ -1324,15 +1999,89 @@ window.__ModuleLoader__.load({
             h(
               "div",
               { className: "scu-titles" },
-              h("span", { className: "scu-app", title: targetName(snapshot, t) }, targetName(snapshot, t)),
-              h("span", { className: "scu-sub" }, stateText(t, snapshot)),
+              h("span", { className: "scu-app", title: titleText }, titleText),
+              h("span", { className: "scu-sub" },
+                multi
+                  ? `${stateText(t, snapshot)} · ${t("card.targetCount", { count: activeCount })}`
+                  : stateText(t, snapshot)),
             ),
+            activeCount > 0 && (!snapshot.deckVisible || hiddenPanels > 0)
+              ? h(
+                  "button",
+                  { type: "button", className: "scu-watch", onClick: () => store.showDeck() },
+                  t("deck.show"),
+                )
+              : null,
             h(
               "button",
               { type: "button", className: "scu-watch", onClick: () => store.toggleWatch() },
               t("card.watch"),
             ),
             stop,
+            error,
+          ),
+        );
+      }
+
+      if (multi) {
+        return h(
+          "div",
+          { className: "scu-root", "data-scu-card": hostSessionId },
+          h(
+            "div",
+            { className: "scu-card scu-multi", "data-state": snapshot.state },
+            h(
+              "div",
+              { className: "scu-head" },
+              h("span", { className: "scu-dot", "data-state": snapshot.state, "aria-hidden": true }),
+              h(
+                "div",
+                { className: "scu-titles" },
+                h("span", { className: "scu-app", title: titleText }, titleText),
+                h("span", { className: "scu-sub" },
+                  `${stateText(t, snapshot)} · ${t("card.targetCount", { count: activeCount })}`),
+              ),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "scu-icon",
+                  "aria-expanded": snapshot.expanded ? "true" : "false",
+                  "aria-label": snapshot.expanded ? t("card.collapse") : t("card.expand"),
+                  title: snapshot.expanded ? t("card.collapse") : t("card.expand"),
+                  onClick: () => store.toggleExpanded(),
+                },
+                h(
+                  "svg",
+                  { width: 14, height: 14, viewBox: "0 0 16 16", fill: "none", "aria-hidden": true },
+                  h("path", {
+                    d: snapshot.expanded ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4",
+                    stroke: "currentColor",
+                    "stroke-width": 1.6,
+                    "stroke-linecap": "round",
+                    "stroke-linejoin": "round",
+                  }),
+                ),
+              ),
+            ),
+            h(
+              "div",
+              { className: "scu-targets" },
+              targets.map((target) =>
+                h(TargetTile, { key: target.targetId, store, target, snapshot, t })),
+            ),
+            h(
+              "div",
+              { className: "scu-foot" },
+              h("span", { className: "scu-meta" },
+                t("card.targets", { count: targets.length })),
+              h(
+                "button",
+                { type: "button", className: "scu-watch", onClick: () => store.toggleWatch() },
+                t("card.hidePreview"),
+              ),
+              stop,
+            ),
             error,
           ),
         );
@@ -1481,15 +2230,29 @@ window.__ModuleLoader__.load({
         store.expanded = true;
         store.previewWanted = true;
         store.pollNow(true);
-        store.preview.open();
+        store.openPreviews();
         return undefined;
       }, [expandedSession, store]);
 
       if (!expandedSession || !store) return null;
       if (FINAL_STATES.has(snapshot.state) && store.stoppedAt && Date.now() - store.stoppedAt > 60000) return null;
 
-      const info = snapshot.previewInfo ?? store.previewInfo;
-      const target = targetName(snapshot, t);
+      const targets = Array.isArray(snapshot.targets) ? snapshot.targets : [];
+      const selected =
+        targets.find((item) => item.targetId === snapshot.selectedTargetId) ??
+        targets.find((item) => item.active === true) ??
+        targets[0] ??
+        null;
+      const selectedPreview = selected ? store.previewFor(selected.targetId) : store.preview;
+      const info = selected
+        ? snapshot.targetPreviews?.[selected.targetId] ?? {
+            status: selected.previewStatus ?? "unavailable",
+            fps: 0,
+            frameAgeMs: null,
+          }
+        : snapshot.previewInfo ?? store.previewInfo;
+      const target = selected ? targetLabel(selected, t) : targetName(snapshot, t);
+      const stateForHeader = selected ? targetStateText(t, selected) : stateText(t, snapshot);
       return h(
         "div",
         { className: "scu-root" },
@@ -1542,11 +2305,32 @@ window.__ModuleLoader__.load({
                 ),
               ),
             ),
+            targets.length > 1
+              ? h(
+                  "div",
+                  { className: "scu-tabs", role: "tablist", "aria-label": t("card.targets", { count: targets.length }) },
+                  targets.map((item) =>
+                    h(
+                      "button",
+                      {
+                        key: item.targetId,
+                        type: "button",
+                        role: "tab",
+                        className: "scu-tab",
+                        "aria-selected": item.targetId === selected?.targetId ? "true" : "false",
+                        "data-state": item.state,
+                        onClick: () => store.selectTarget(item.targetId),
+                      },
+                      targetLabel(item, t),
+                    ),
+                  ),
+                )
+              : null,
             h(
               "div",
               { className: "scu-panel-body" },
-              h(PreviewCanvas, { store, className: "scu-panel-canvas", compact: false }),
-              store.preview.frames === 0
+              h(PreviewCanvas, { store, preview: selectedPreview, className: "scu-panel-canvas", compact: false }),
+              selectedPreview.frames === 0
                 ? h(
                     "div",
                     { className: "scu-empty" },
@@ -1567,7 +2351,8 @@ window.__ModuleLoader__.load({
                 { className: "scu-meta", style: { flex: "0 0 auto" } },
                 info.status === "live" ? t("meta.fps", { fps: info.fps || 0 }) : t("meta.none"),
               ),
-              h(StopButton, { store, snapshot, t }),
+              h(StopButton, { store, snapshot, t, targetId: selected?.targetId ?? null }),
+              selected ? h(StopButton, { store, snapshot, t, all: true }) : null,
             ),
             h(
               "details",
@@ -1576,12 +2361,13 @@ window.__ModuleLoader__.load({
               h(
                 "div",
                 { className: "scu-diag-grid" },
-                h("span", null, h("b", null, t("diag.generation")), ` ${snapshot.targetGeneration ?? "—"}`),
+                h("span", null, h("b", null, t("diag.generation")),
+                  ` ${selected?.targetGeneration ?? snapshot.targetGeneration ?? "—"}`),
                 h(
                   "span",
                   null,
                   h("b", null, t("diag.frames")),
-                  ` ${store.preview.frames}${store.preview.dropped ? ` / dropped ${store.preview.dropped}` : ""}${info.decodeMs ? ` / ${info.decodeMs}ms` : ""}`,
+                  ` ${selectedPreview.frames}${selectedPreview.dropped ? ` / dropped ${selectedPreview.dropped}` : ""}${info.decodeMs ? ` / ${info.decodeMs}ms` : ""}`,
                 ),
               ),
             ),
@@ -1597,10 +2383,14 @@ window.__ModuleLoader__.load({
       // The Harness module table only needs inject/apply. The test runner loads
       // this same factory and drives the real classes; keeping the hook here is
       // cheaper and more honest than a second copy of the lifecycle logic.
-      __test: { SessionStore, PreviewController, CuCard, Overlay, storeFor, expansion },
+      __test: {
+        SessionStore, PreviewController, CuCard, Overlay, ControlDeck,
+        storeFor, expansion, activeDeckSession,
+      },
       apply(ctx) {
         CuCard.ctx = ctx;
         Overlay.ctx = ctx;
+        ControlDeck.ctx = ctx;
 
         const locale = ctx.get("locale");
         if (locale && typeof locale.register === "function") {
@@ -1640,9 +2430,20 @@ window.__ModuleLoader__.load({
             CuCard,
           ),
         );
-        ctx.slots.inject("shell.overlay", () =>
-          ctx.slots.register({ name: "shell.overlay", id: "super-computer-use", order: 40 }, Overlay),
-        );
+        ctx.slots.inject("shell.overlay", () => {
+          const disposeDeck = ctx.slots.register(
+            { name: "shell.overlay", id: "super-computer-use-deck", order: 39 },
+            ControlDeck,
+          );
+          const disposeOverlay = ctx.slots.register(
+            { name: "shell.overlay", id: "super-computer-use", order: 40 },
+            Overlay,
+          );
+          return () => {
+            try { disposeDeck?.(); } catch { /* teardown continues */ }
+            try { disposeOverlay?.(); } catch { /* teardown continues */ }
+          };
+        });
 
         if (typeof window !== "undefined") {
           window.__SCU_CLIENT__ = {

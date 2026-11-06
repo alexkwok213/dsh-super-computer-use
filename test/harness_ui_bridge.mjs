@@ -204,3 +204,68 @@ test("probe delivers the first chunk before the second and is removed by config"
   assert.equal(routes2.has("POST /api/scu/state"), true);
   bridge2.dispose();
 });
+
+test("bridge waits for the async connection service instead of disabling the UI forever", async () => {
+  const routes = new Map();
+  let injected = null;
+  let liveConnection = null;
+  const liveCtx = {
+    get(name) {
+      return name === "connection" ? liveConnection : undefined;
+    },
+  };
+  const ctx = {
+    get() {
+      return undefined;
+    },
+    inject(names, callback) {
+      assert.deepEqual(names, ["connection"]);
+      injected = callback;
+    },
+  };
+  const manager = {
+    activeSession: null,
+    sessionId: null,
+    sessionGeneration: 0,
+    async stopVisualSession() {
+      return { ok: true, cleanupState: "unknown" };
+    },
+    cancelInFlight() {
+      return 0;
+    },
+  };
+  const registry = createCuUiRegistry({ manager });
+  const bridge = installHarnessUiBridge(ctx, {
+    registry,
+    manager,
+    config: { uiProbe: false },
+    log: () => {},
+  });
+  assert.equal(bridge.available, false);
+  assert.equal(bridge.deferred, true);
+  assert.equal(routes.size, 0);
+  assert.equal(typeof injected, "function");
+
+  liveConnection = {
+    fetch: {
+      register(route) {
+        routes.set(`${route.methods.join(",")} ${route.path}`, route);
+        return () => routes.delete(`${route.methods.join(",")} ${route.path}`);
+      },
+    },
+  };
+  const disposeInjected = injected(liveCtx);
+  assert.equal(bridge.available, true, "the bridge installs once connection is ready");
+  assert.ok(routes.has("POST /api/scu/state"));
+  assert.ok(routes.has("POST /api/scu/hello") === false);
+  assert.ok(routes.has("POST /api/scu/client-hello"));
+  assert.ok(routes.has("POST /api/scu/control"));
+  assert.ok(routes.has("GET /api/scu/preview"));
+  bridge.noteClient("chat-a");
+  assert.equal(bridge.clientPresent("chat-a"), true);
+
+  disposeInjected();
+  assert.equal(bridge.available, false);
+  assert.equal(routes.size, 0);
+  bridge.dispose();
+});

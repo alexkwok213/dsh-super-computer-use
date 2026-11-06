@@ -27,3 +27,7 @@ video_build/
 zcode_install_github.mp4
 zcode_install_thumbnail.jpg
 
+# Large local demo recordings (exceed GitHub's per-file limit)
+docs/demo/two-apps-background.mov
+docs/demo/zcode-claude-cu-demo.mov
+

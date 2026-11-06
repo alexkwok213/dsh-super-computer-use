@@ -44,3 +44,12 @@ test("no test spawns the helper without CU_STATE_DIR or opens System Settings", 
   }
   assert.deepEqual(violations, []);
 });
+
+test("native tests execute an unchanged private helper copy", () => {
+  const manager = new CuSessionManager();
+  const binary = manager.resolveBinaryPath();
+  assert.ok(resolve(binary).startsWith(resolve(manager.stateDir) + '/'),
+    'native tests must not execute the same on-disk helper path as live DSH');
+  assert.ok(process.env.CU_TEST_SOURCE_BIN);
+  assert.deepEqual(readFileSync(binary), readFileSync(process.env.CU_TEST_SOURCE_BIN));
+});

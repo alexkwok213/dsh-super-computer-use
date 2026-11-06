@@ -77,7 +77,7 @@ npm run dev:sync -- --json             # 输出机器可读结果
 - **页面必须打开**：Client 更新依赖页面的 `dsh-client-hmr` SSE 连接。若连接已关闭，命令会以 `needs_client` 退出 3；刷新 DSH 页面后重跑。当前实现不会自动刷新页面，也不会把“文件已写”当成“浏览器已执行”。
 - **Client bundle 必须可重复执行**：`client.js` 外层使用 IIFE。Client HMR 会在同一个全局词法环境再次执行 classic script；顶层 `const` 会触发 `Identifier has already been declared`，导致第二次 swap 静默失败。
 - **活跃 CU 会话不强制**：插件检查 `manager.activeSession`、在飞工具和最近 1.5 秒的 mutating 工具活动。忙时写 `deferred`，CLI 以退出码 3 报告；不会杀会话或强重启。
-- **HMR 能力**：当前桌面版 0.2.2-rc.1 已验证存在 `ctx.hmr.runExclusive/watchConfig/reconcileProfile`。若宿主的 `runtime.hmr.available` 为 false，命令退出 3，不伪造重载。
+- **HMR 能力因宿主版本而异**：某些桌面版已验证存在 `ctx.hmr.runExclusive/watchConfig/reconcileProfile`；若当前宿主没有这些 API（`runtime.hmr.available` 为 false，常见于本次验收环境），命令会退出 3 并要求正常重启 DSH。不得伪造同进程重载。
 - **原生构建**：需要 Xcode Command Line Tools（`swiftc`、`lipo`）和可用签名身份（`engine/signing-identity`，或 ad-hoc）。构建产物写在仓库 `bin/`，构建记录在 `~/.cu/dev-sync/<repo-key>/build.json`。
 - **测试抖动**：套件在系统高负载下出现过 helper 启停竞态。`dev:sync` 已改为串行、单测 120s 上限、失败重试一次；若两次都失败，仍应视为失败并排查，而不是跳过。
 - **状态目录**：开发控制文件在 `~/.cu/dev-sync/<repo-key>/`（runtime/status/client/request/build）。若设置了 `CU_STATE_DIR`，Host 和 CLI 必须使用同一个值。
@@ -87,4 +87,4 @@ npm run dev:sync -- --json             # 输出机器可读结果
 - 不做“保存即重载”；只在测试和必要构建完成后统一更新。
 - 不修改 `app.asar`，不新开控制端口，不依赖私有缓存清理。
 - 不启动脱离插件管理的临时常驻服务。
-- 不提交、不推送、不发布；这些是独立操作。
+- `dev:sync` 本身不提交、不推送、不发布；每轮强制发布由 `npm run release -- patch|minor|major` 完成，见 [`release.md`](release.md)。

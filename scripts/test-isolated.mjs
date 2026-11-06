@@ -14,7 +14,7 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, mkdirSync, chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -44,6 +44,20 @@ const files = requested.length
       .sort()
       .map((name) => join("test", name));
 
+// A separate pathname also isolates native application/process registration.
+// Executing concurrent tests from the live helper path caused SIGTERM during
+// AppKit cleanup on this host, even with separate state and ports.
+const testBinDir = join(stateDir, "bin");
+mkdirSync(testBinDir);
+const serviceSource = process.env.CU_BIN && existsSync(process.env.CU_BIN)
+  ? resolve(process.env.CU_BIN) : join(ROOT, "bin", "cu");
+const previewSource = process.env.CU_PREVIEW_BIN && existsSync(process.env.CU_PREVIEW_BIN)
+  ? resolve(process.env.CU_PREVIEW_BIN) : join(ROOT, "bin", "cu-preview");
+for (const [source, name] of [[serviceSource, "cu"], [previewSource, "cu-preview"]]) {
+  copyFileSync(source, join(testBinDir, name));
+  chmodSync(join(testBinDir, name), 0o755);
+}
+
 let exitCode = 1;
 let suiteOutput = "";
 try {
@@ -57,6 +71,9 @@ try {
       env: {
         ...process.env,
         CU_STATE_DIR: stateDir,
+        CU_BIN: join(testBinDir, "cu"),
+        CU_PREVIEW_BIN: join(testBinDir, "cu-preview"),
+        CU_TEST_SOURCE_BIN: serviceSource,
         // The real pause latch lives in the real state dir; tests may still
         // exercise pause explicitly through their own temporary directory.
         CU_NO_USER_PAUSE: "1",

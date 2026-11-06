@@ -2,8 +2,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CuSessionManager } from '../lib/core.mjs';
 
+// These tests exercise layout decisions against fake window ids. They must
+// never open native windows against unrelated real WindowServer ids.
+function managerHarness() {
+  const manager = new CuSessionManager();
+  manager.resolveBinaryPath = () => '/nonexistent/cu';
+  return manager;
+}
+
 test('batch clamps a trailing wait to the remaining deadline', async () => {
-  const m = new CuSessionManager();
+  const m = managerHarness();
   const t0 = Date.now();
   const res = await m.executeBatch({
     steps: [{ action: 'wait', ms: 5000 }],
@@ -17,7 +25,7 @@ test('batch clamps a trailing wait to the remaining deadline', async () => {
 });
 
 test('batch reports a step that exceeded the deadline as outcome unknown', async () => {
-  const m = new CuSessionManager();
+  const m = managerHarness();
   m.exec = async () => {
     await new Promise((r) => setTimeout(r, 400));
     return { ok: true };
@@ -32,8 +40,8 @@ test('batch reports a step that exceeded the deadline as outcome unknown', async
   assert.equal(res.outcomeUnknown, true);
 });
 
-test('dockDsh defaults to true: DSH shrinks right and the target takes the left', async () => {
-  const m = new CuSessionManager();
+test('an explicit dockDsh + splitScreen docks DSH and moves the target left', async () => {
+  const m = managerHarness();
   const calls = [];
   m.exec = async (argv) => {
     calls.push(argv);
@@ -50,9 +58,9 @@ test('dockDsh defaults to true: DSH shrinks right and the target takes the left'
   m.clearPauseLatch = () => {};
   m.stopVisualIndicatorsOnly = async () => {};
   m.warmCaptureDaemon = () => {};
-  // dockDsh omitted -> the documented default is to dock: a target window
-  // narrower than the display would otherwise sit under the DSH panel.
-  await m.startVisualSession({ windowId: 7 });
+  // Layout is opt-in: start alone must leave the desktop alone, and these
+  // explicit flags are the only path that may move windows.
+  await m.startVisualSession({ windowId: 7, dockDsh: true, splitScreen: true });
 
   const moves = calls.filter((argv) => argv[0] === 'movewindow');
   const arg = (argv, flag) => Number(argv[argv.indexOf(flag) + 1]);
@@ -77,7 +85,7 @@ test('dockDsh defaults to true: DSH shrinks right and the target takes the left'
 });
 
 test('repeated same-target start is idempotent (no redundant resume/move)', async () => {
-  const m = new CuSessionManager();
+  const m = managerHarness();
   const calls = [];
   m.exec = async (argv) => {
     calls.push(argv[0]);
@@ -105,7 +113,7 @@ test('repeated same-target start is idempotent (no redundant resume/move)', asyn
 });
 
 test('the split follows the display that holds the target, including negative origins', async () => {
-  const m = new CuSessionManager();
+  const m = managerHarness();
   const calls = [];
   m.exec = async (argv) => {
     calls.push(argv);
@@ -134,7 +142,7 @@ test('the split follows the display that holds the target, including negative or
   m.stopVisualIndicatorsOnly = async () => {};
   m.warmCaptureDaemon = () => {};
 
-  await m.startVisualSession({ windowId: 7 });
+  await m.startVisualSession({ windowId: 7, dockDsh: true, splitScreen: true });
 
   const arg = (argv, flag) => Number(argv[argv.indexOf(flag) + 1]);
   const moves = calls.filter((argv) => argv[0] === 'movewindow');
@@ -153,7 +161,7 @@ test('the split follows the display that holds the target, including negative or
 });
 
 test('a single-step batch that overshoots its budget says so', async () => {
-  const m = new CuSessionManager();
+  const m = managerHarness();
   m.exec = async () => {
     await new Promise((r) => setTimeout(r, 80));
     return { ok: true };
@@ -171,7 +179,7 @@ test('a single-step batch that overshoots its budget says so', async () => {
 });
 
 test('a batch inside its budget carries no budget flag', async () => {
-  const m = new CuSessionManager();
+  const m = managerHarness();
   m.exec = async () => ({ ok: true });
   const res = await m.executeBatch({ pid: 1, steps: [{ action: 'key', name: 'tab' }], timeoutMs: 5000 });
   assert.equal(res.budgetExceeded, undefined);
@@ -179,7 +187,7 @@ test('a batch inside its budget carries no budget flag', async () => {
 });
 
 test('an expect step is a checkpoint: the batch stops when the app never gets there', async () => {
-  const m = new CuSessionManager();
+  const m = managerHarness();
   const calls = [];
   m.exec = async (argv) => {
     calls.push(argv[0]);
@@ -206,7 +214,7 @@ test('an expect step is a checkpoint: the batch stops when the app never gets th
 });
 
 test('timings attribute the batch budget to settle, work and overhead', async () => {
-  const m = new CuSessionManager();
+  const m = managerHarness();
   m.exec = async () => {
     await new Promise((r) => setTimeout(r, 10));
     return { ok: true };
@@ -223,7 +231,7 @@ test('timings attribute the batch budget to settle, work and overhead', async ()
 });
 
 test('a same-target continuation never clears a user-triggered pause', async () => {
-  const m = new CuSessionManager();
+  const m = managerHarness();
   const calls = [];
   m.exec = async (argv) => {
     calls.push(argv[0]);

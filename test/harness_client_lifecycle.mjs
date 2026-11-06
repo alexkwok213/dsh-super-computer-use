@@ -84,6 +84,9 @@ function loadClient(fetchImpl) {
   if (module.__test.Overlay) {
     module.__test.Overlay.ctx = { get: () => undefined };
   }
+  if (module.__test.ControlDeck) {
+    module.__test.ControlDeck.ctx = { get: () => undefined };
+  }
   const expandVNodes = (node, out = []) => {
     if (node === null || node === undefined || node === false) return out;
     if (Array.isArray(node)) {
@@ -103,6 +106,8 @@ function loadClient(fetchImpl) {
     PreviewController: module.__test.PreviewController,
     CuCard: module.__test.CuCard,
     Overlay: module.__test.Overlay,
+    ControlDeck: module.__test.ControlDeck,
+    activeDeckSession: module.__test.activeDeckSession,
     storeFor: module.__test.storeFor,
     expansion: module.__test.expansion,
     render: (node) => renderNode(node),
@@ -458,7 +463,9 @@ test("previewInfo, connection and stopping are visible through one React snapsho
   assert.notEqual(duringStop, afterConnection);
   assert.equal(duringStop.stopping, true);
 
-  const control = network.pending.find((entry) => entry.url.includes("/api/scu/control"));
+  const control = network.pending.find(
+    (entry) => entry.url.includes("/api/scu/control") && entry.settled !== true,
+  );
   assert.ok(control, "stopControl posted to the control route");
   control.resolve({
     ok: true,
@@ -601,5 +608,229 @@ test("card and overlay canvases both paint; detaching one leaves the other", asy
   await h.flush();
   assert.equal(card.draws, 2, "closing the overlay must not stop the card canvas");
   assert.equal(overlay.draws, 1);
+  store.stop();
+});
+
+test("two targets own separate preview streams; stopping A leaves B live", async () => {
+  const network = abortablePending();
+  const streams = [];
+  const fetch = (url, options = {}) => {
+    if (url.includes("/api/scu/preview")) {
+      const stream = previewStream();
+      streams.push({ stream, url });
+      return Promise.resolve(stream.response);
+    }
+    return network.fetch(url, options);
+  };
+  const h = loadClient(fetch);
+  const store = h.storeFor("chat-a");
+  store.active = true;
+  store.previewWanted = true;
+  const targets = [
+    {
+      targetId: "101:11", pid: 101, windowId: 11, appName: "Alpha", state: "running",
+      label: "click", action: { tool: "cu_click", kind: "click" }, previewStatus: "unavailable",
+      cleanupState: "clean", active: true, targetGeneration: 4,
+    },
+    {
+      targetId: "202:22", pid: 202, windowId: 22, appName: "Beta", state: "running",
+      label: "click", action: { tool: "cu_click", kind: "click" }, previewStatus: "unavailable",
+      cleanupState: "clean", active: true, targetGeneration: 7,
+    },
+  ];
+  store.applySnapshot(snapshot({
+    revision: 1,
+    targetGeneration: 4,
+    target: { targetId: "101:11", pid: 101, windowId: 11, appName: "Alpha" },
+    targets,
+  }));
+  store.watching = true;
+  store.previewWanted = true;
+  store.notify();
+  store.openPreviews();
+  await h.flush();
+  assert.equal(streams.length, 2, "each target gets its own preview stream");
+  assert.ok(streams[0].url.includes("targetId=101%3A11"), streams[0].url);
+  assert.ok(streams[1].url.includes("targetId=202%3A22"), streams[1].url);
+
+  const view = store.getSnapshot();
+  assert.equal(view.targets.length, 2);
+  assert.equal(view.targets.find((target) => target.targetId === "101:11").active, true);
+  const card = h.render({ type: h.CuCard, props: { sessionId: "chat-a" }, children: [] });
+  assert.match(card, /Alpha/);
+  assert.match(card, /Beta/);
+  assert.match(card, /Stop all|全部停止/);
+
+  // User stops A through the per-target button.
+  const stopping = store.stopControl("stop", "101:11");
+  const control = network.pending.find(
+    (entry) => entry.url.includes("/api/scu/control") && entry.settled !== true,
+  );
+  assert.ok(control, "per-target stop posted to the control route");
+  const body = JSON.parse(control.options.body);
+  assert.equal(body.targetId, "101:11");
+  assert.equal(body.pause, false);
+  control.resolve({
+    ok: true,
+    status: 200,
+    text: async () =>
+      JSON.stringify({
+        ok: true,
+        state: "running",
+        cleanupState: "unknown",
+        snapshot: snapshot({
+          revision: 2,
+          targetGeneration: 7,
+          target: { targetId: "202:22", pid: 202, windowId: 22, appName: "Beta" },
+          targets: [
+            { ...targets[0], state: "stopped", active: false, cleanupState: "unknown" },
+            targets[1],
+          ],
+        }),
+      }),
+  });
+  await stopping;
+  await h.flush();
+  assert.equal(store.previewFor("101:11").running, false, "A's stream is closed");
+  assert.equal(store.previewFor("202:22").running, true, "B's stream is untouched");
+  assert.equal(store.getSnapshot().targets.find((target) => target.targetId === "101:11").active, false);
+
+  // Stop-all closes the remaining stream and freezes both targets.
+  const all = store.stopControl("stop", null);
+  const allControl = network.pending.find(
+    (entry) => entry.url.includes("/api/scu/control") && entry.settled !== true,
+  );
+  const allBody = JSON.parse(allControl.options.body);
+  assert.equal(allBody.targetId, undefined);
+  assert.equal(allBody.pause, true);
+  allControl.resolve({
+    ok: true,
+    status: 200,
+    text: async () =>
+      JSON.stringify({
+        ok: true,
+        state: "cleanup_unknown",
+        cleanupState: "unknown",
+        snapshot: snapshot({
+          revision: 3,
+          state: "cleanup_unknown",
+          target: null,
+          targetGeneration: 0,
+          targets: [
+            { ...targets[0], state: "cleanup_unknown", active: false },
+            { ...targets[1], state: "cleanup_unknown", active: false },
+          ],
+        }),
+      }),
+  });
+  await all;
+  await h.flush();
+  assert.equal(store.previewFor("202:22").running, false);
+  assert.equal(store.getSnapshot().state, "cleanup_unknown");
+  store.stop();
+});
+
+test("the DSH Control Deck appears automatically and binds to the active conversation", () => {
+  const h = loadClient(abortablePending().fetch);
+  const store = h.storeFor("chat-deck");
+  store.active = true;
+  const targets = [
+    {
+      targetId: "a:7", pid: 1, windowId: 7, appName: "Alpha", state: "running",
+      active: true, targetGeneration: 1, action: { kind: "click" }, previewStatus: "unavailable",
+    },
+    {
+      targetId: "b:8", pid: 2, windowId: 8, appName: "Beta", state: "waiting",
+      active: true, targetGeneration: 1, action: { kind: "type" }, previewStatus: "unavailable",
+    },
+  ];
+  store.applySnapshot(snapshot({
+    revision: 1,
+    targetGeneration: 1,
+    target: { targetId: "a:7", pid: 1, windowId: 7, appName: "Alpha" },
+    targets,
+  }));
+  assert.equal(store.getSnapshot().deckVisible, true, "an active session opens the deck without Watch");
+  h.activeDeckSession.set("chat-deck");
+  const deckNode = { type: h.ControlDeck, props: {}, children: [] };
+  const deck = h.render(deckNode);
+  assert.match(deck, /Alpha/);
+  assert.match(deck, /Beta/);
+  // Control-only deck: one float per target, and no aggregate pill repeating the
+  // composer card's "Stop all" (three boxes for two targets read as clutter).
+  assert.doesNotMatch(deck, /2 targets/);
+  assert.doesNotMatch(deck, /Stop all/);
+  const floats = h.findVNodes(
+    deckNode,
+    (node) => typeof node.type === "string" && /scu-float/.test(node.props?.className ?? "") &&
+      node.type === "article",
+  );
+  assert.equal(floats.length, 2, "one floating panel per target, not one shared deck");
+
+  // Closing one target's float must leave the sibling float alive.
+  store.dismissTargetPanel("a:7");
+  const afterOneClose = h.render(deckNode);
+  assert.doesNotMatch(afterOneClose, /Alpha/);
+  assert.match(afterOneClose, /Beta/);
+  assert.equal(store.getSnapshot().hiddenTargetIds.includes("a:7"), true);
+
+  // Reopen all, then hide the whole stack.
+  store.showDeck();
+  store.dismissDeck();
+  assert.equal(store.getSnapshot().deckVisible, false);
+  h.activeDeckSession.set(null);
+  store.stop();
+});
+
+test("a visible native preview is the only surface: no composer card, no duplicate float", () => {
+  const h = loadClient(abortablePending().fetch);
+  const store = h.storeFor("chat-native");
+  store.active = true;
+  const targets = [
+    {
+      targetId: "a:7", pid: 1, windowId: 7, appName: "Alpha", state: "running",
+      active: true, targetGeneration: 1, action: { kind: "click" },
+      previewStatus: "live",
+      nativePreview: { status: "live", visible: true, windowId: 9001 },
+    },
+  ];
+  store.applySnapshot(snapshot({
+    revision: 1,
+    targetGeneration: 1,
+    target: { targetId: "a:7", pid: 1, windowId: 7, appName: "Alpha" },
+    targets,
+  }));
+  const card = h.render({ type: h.CuCard, props: { sessionId: "chat-native" }, children: [] });
+  assert.equal(card.trim(), "", "the native preview window replaces the in-chat card");
+
+  h.activeDeckSession.set("chat-native");
+  const deck = h.render({ type: h.ControlDeck, props: {}, children: [] });
+  assert.equal(deck.trim(), "", "no per-target page float when the native preview exists");
+  h.activeDeckSession.set(null);
+  store.stop();
+});
+
+test("closing the native preview restores the in-chat fallback control", () => {
+  const h = loadClient(abortablePending().fetch);
+  const store = h.storeFor("chat-native-closed");
+  store.active = true;
+  const targets = [
+    {
+      targetId: "a:7", pid: 1, windowId: 7, appName: "Alpha", state: "running",
+      active: true, targetGeneration: 1, action: { kind: "click" },
+      previewStatus: "closed",
+      nativePreview: { status: "closed", visible: false, windowId: 9001 },
+    },
+  ];
+  store.applySnapshot(snapshot({
+    revision: 1,
+    targetGeneration: 1,
+    target: { targetId: "a:7", pid: 1, windowId: 7, appName: "Alpha" },
+    targets,
+  }));
+  const card = h.render({ type: h.CuCard, props: { sessionId: "chat-native-closed" }, children: [] });
+  assert.match(card, /Alpha/);
+  assert.match(card, /Watch/);
+  assert.match(card, /Stop all|全部停止/);
   store.stop();
 });

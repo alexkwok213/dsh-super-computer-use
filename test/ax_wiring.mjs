@@ -117,7 +117,7 @@ test('the resident AX worker is bound to one target; a switch must not reuse it'
   assert.equal(manager._axWorkerTargetMatches(42, 9), false, 'different window must not reuse');
 });
 
-test('starting a new target session drops the old AX worker', async () => {
+test('starting a sibling target keeps the existing visual session and worker', async () => {
   const m = new CuSessionManager();
   let stopped = 0;
   m.stopAXWorker = () => { stopped += 1; };
@@ -130,7 +130,8 @@ test('starting a new target session drops the old AX worker', async () => {
   m.startCursorOverlay = () => null;
   m.setAgentAura = () => {};
   m.exec = async (argv) => (argv[0] === "windows" ? { ok: true, windows: [] } : { ok: true });
-  m.activeSession = { windowId: 7, pid: 5 };
-  await m.startVisualSession({ windowId: 9, pid: 6 }); // different target
-  assert.equal(stopped >= 1, true, 'a target switch must stop the old AX worker');
+  await m.startVisualSession({ windowId: 7, pid: 5, halo: false, capsule: false, cursor: false });
+  await m.startVisualSession({ windowId: 9, pid: 6, halo: false, capsule: false, cursor: false }); // sibling target
+  assert.equal(stopped, 0, 'a second target must not tear down the first target\'s session');
+  assert.equal(m.activeTargets().length, 2, 'both targets remain addressable');
 });

@@ -44,6 +44,7 @@ import {
   hashEngineSources,
   hashHostSources,
   listEngineSourceFiles,
+  nativeReplacementRequired,
   parseClientVersion,
   pidAlive,
   probeHelper,
@@ -832,9 +833,7 @@ async function run(options) {
     }
 
     const oldHelper = await probeHelper(resolveStateDir());
-    const requireNative =
-      plan.nativeChanged ||
-      Boolean(oldHelper?.buildId && oldHelper.buildId !== source.native.serviceBuildId);
+    const requireNative = nativeReplacementRequired(oldHelper, source.native.serviceBuildId);
     const requireClient = plan.clientChanged;
     const requestStartedAt = Date.now();
     const expected = {

@@ -191,3 +191,10 @@ test('plan treats a live helper mismatch or missing helper as a native change', 
   assert.equal(missing.nativeChanged, true);
   assert.equal(missing.anyChange, true);
 });
+
+test('native replacement depends on the actual helper, not an earlier Host disk identity', async () => {
+  const { nativeReplacementRequired } = await import('../lib/dev-sync.mjs');
+  assert.equal(nativeReplacementRequired({ok:true,buildId:'current'}, 'current'), false);
+  assert.equal(nativeReplacementRequired({ok:true,buildId:'old'}, 'current'), true);
+  assert.equal(nativeReplacementRequired(null, 'current'), true);
+});

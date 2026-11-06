@@ -38,6 +38,26 @@ enum PreviewWindowState: String {
 }
 
 enum PreviewGeometry {
+    static func feedbackPoint(global: CGPoint, observed: CGRect, captured: CGRect,
+                              current: CGRect, container: CGSize,
+                              sourcePixels: CGSize? = nil, sourceContent: CGRect? = nil) -> CGPoint? {
+        guard observed == captured, captured == current, current.contains(global),
+              current.width > 0, current.height > 0 else { return nil }
+        let pixels = sourcePixels ?? current.size
+        let content = sourceContent ?? CGRect(origin: .zero, size: pixels)
+        let fitted = fitRect(source: pixels, container: container)
+        let scale = fitScale(source: pixels, container: container)
+        let x = content.minX + (global.x - current.minX) / current.width * content.width
+        let y = content.minY + (global.y - current.minY) / current.height * content.height
+        return CGPoint(x: fitted.minX + x * scale, y: fitted.maxY - y * scale)
+    }
+
+    static func constrainCard(_ frame: CGRect, to visible: CGRect) -> CGRect {
+        CGRect(x: min(max(frame.minX, visible.minX), max(visible.minX, visible.maxX - frame.width)),
+               y: min(max(frame.minY, visible.minY), max(visible.minY, visible.maxY - frame.height)),
+               width: frame.width, height: frame.height)
+    }
+
     /// Equal-aspect fit scale for a source frame inside a container (letterbox).
     static func fitScale(source: CGSize, container: CGSize) -> CGFloat {
         guard source.width > 0, source.height > 0, container.width > 0, container.height > 0 else {

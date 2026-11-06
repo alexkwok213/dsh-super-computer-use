@@ -73,12 +73,28 @@ test('failed launch propagates failure and does not activate a window afterwards
   assert.deepEqual(dispatched, ['launch']);
 });
 
-test('failed window activation propagates failure', async t => {
+test('failed window activation propagates failure only after explicit foreground authorization', async t => {
   const { manager, run } = setup(t);
   manager._execRequest = async () => ({ ok: false, error: 'window_not_found' });
-  const result = await run('cu_launch', { windowId: 123 });
+  const result = await run('cu_launch', {
+    windowId: 123, background: false, authorizeForeground: true,
+  });
   assert.equal(result.ok, false);
   assert.equal(result.error, 'window_not_found');
+});
+
+test('windowId stays in the background by default and never activates', async t => {
+  const { manager, run } = setup(t);
+  const dispatched = [];
+  manager._execRequest = async (argv) => {
+    dispatched.push(argv[0]);
+    return { ok: true };
+  };
+  const result = await run('cu_launch', { windowId: 123 });
+  assert.equal(result.ok, true);
+  assert.equal(result.background, true);
+  assert.equal(result.window.keptInBackground, true);
+  assert.deepEqual(dispatched, [], 'no launch or activate command runs for a background window hint');
 });
 
 test('status identifies the loaded plugin separately from the native service', async t => {

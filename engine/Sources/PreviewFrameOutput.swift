@@ -45,6 +45,7 @@ private func nowNs() -> UInt64 {
 final class PreviewFrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     private let sessionId: String
     private let generation: Int
+    private let targetId: String
     private let geometryVersion: Int
     private let contentRect: CGRect
     private let maxDimension: Int
@@ -67,10 +68,12 @@ final class PreviewFrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Called on the main queue exactly once, after the first successful write.
     var onFirstFrame: (() -> Void)?
 
-    init(sessionId: String, generation: Int, geometryVersion: Int, contentRect: CGRect,
+    init(sessionId: String, generation: Int, targetId: String = "",
+         geometryVersion: Int, contentRect: CGRect,
          maxDimension: Int, fps: Double) {
         self.sessionId = sessionId
         self.generation = generation
+        self.targetId = targetId
         self.geometryVersion = geometryVersion
         self.contentRect = contentRect
         self.maxDimension = maxDimension
@@ -202,6 +205,7 @@ final class PreviewFrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
             "frameId": String(seq),
             "cuSessionId": sessionId,
             "targetGeneration": generation,
+            "targetId": targetId,
             "geometryVersion": geometryVersion,
             "capturedAtNs": nowNs(),
             "pixelWidth": cgImage.width,
@@ -261,7 +265,7 @@ final class PreviewFrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
 }
 
 func runPreviewStream(windowId: CGWindowID, sessionId: String, generation: Int,
-                      seconds: Int, fps: Double, maxDimension: Int,
+                      targetId: String = "", seconds: Int, fps: Double, maxDimension: Int,
                       watchParentStdin: Bool) -> Never {
     // A closed stdout must surface as a write error, not a signal that kills the
     // process before it can close the stream cleanly.
@@ -330,6 +334,7 @@ func runPreviewStream(windowId: CGWindowID, sessionId: String, generation: Int,
     let output = PreviewFrameOutput(
         sessionId: sessionId,
         generation: generation,
+        targetId: targetId,
         geometryVersion: 1,
         contentRect: frame,
         maxDimension: maxDimension,

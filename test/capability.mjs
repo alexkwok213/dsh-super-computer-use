@@ -158,10 +158,11 @@ test('an active session supplies the target so calls stop repeating it', async (
 
 test('without a session the target is still required', async () => {
   const { call } = harness({});
-  // The adapter must not invent a pid; the engine argv builder refuses instead.
-  await assert.rejects(async () => {
-    await call('cu_snapshot', {});
-  }, /snapshot requires pid/);
+  // The adapter must not invent a pid. It now answers with a structured refusal
+  // instead of throwing before the host can render the reason.
+  const snap = await call('cu_snapshot', {});
+  assert.equal(snap.ok, false);
+  assert.equal(snap.error, 'target_required');
 });
 
 test('an explicit target still wins over the session', async () => {
@@ -175,4 +176,18 @@ test('an explicit target still wins over the session', async () => {
   manager.activeSession = { windowId: 7, pid: 42 };
   await call('cu_screenshot', { windowId: 99, screen: true });
   assert.ok(seen[0].includes('--screen'), seen[0]);
+});
+
+test('cu_status reports the helper identity that is actually running', async () => {
+  const { manager, call } = harness();
+  manager.getStatus = async () => ({
+    ok: true,
+    service: 'cu',
+    buildId: 'native-running-build',
+    pid: 4321,
+    paused: false,
+  });
+  const status = await call('cu_status', {});
+  assert.equal(status.plugin.native.runningServiceBuildId, 'native-running-build');
+  assert.equal(status.plugin.native.runningPid, 4321);
 });

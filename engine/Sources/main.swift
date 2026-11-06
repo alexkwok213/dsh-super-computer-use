@@ -185,13 +185,13 @@ func onScreenWindows() -> [WindowInfo] {
     return result
 }
 
-func describe(_ window: WindowInfo) -> [String: Any] {
+func describe(_ window: WindowInfo, frontPid: pid_t? = nil) -> [String: Any] {
     var object: [String: Any] = [
         "windowId": Int(window.id), "pid": Int(window.pid), "app": window.app,
         "title": window.title,
         "bounds": ["x": window.bounds.origin.x, "y": window.bounds.origin.y,
                    "width": window.bounds.width, "height": window.bounds.height]]
-    if let front = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+    if let front = frontPid ?? NSWorkspace.shared.frontmostApplication?.processIdentifier {
         object["frontmost"] = front == window.pid
     }
     return object
@@ -239,7 +239,7 @@ func axWindowInfos(pid: pid_t) -> [(title: String, role: String, bounds: CGRect)
 /// reports no title (or a different one), so comparing titles would list the
 /// same window twice. Sheets sharing the parent's exact frame are the one case
 /// this can drop; sheets that matter (a progress dialog) are inset.
-func axOnlyWindows(scanPids: [pid_t], known: [WindowInfo]) -> [[String: Any]] {
+func axOnlyWindows(scanPids: [pid_t], known: [WindowInfo], frontPid: pid_t? = nil) -> [[String: Any]] {
     var result: [[String: Any]] = []
     for pid in scanPids {
         guard let running = NSRunningApplication(processIdentifier: pid) else { continue }
@@ -259,7 +259,7 @@ func axOnlyWindows(scanPids: [pid_t], known: [WindowInfo]) -> [[String: Any]] {
                 "title": info.title, "role": info.role, "axOnly": true,
                 "bounds": ["x": info.bounds.origin.x, "y": info.bounds.origin.y,
                            "width": info.bounds.width, "height": info.bounds.height]]
-            if let front = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+            if let front = frontPid ?? NSWorkspace.shared.frontmostApplication?.processIdentifier {
                 object["frontmost"] = front == pid
             }
             result.append(object)
@@ -290,6 +290,14 @@ func offStageIds(_ windows: [WindowInfo]) -> Set<CGWindowID> {
 // MARK: - focus
 
 func frontmost() -> (pid: pid_t, app: String) {
+    // A background service's NSWorkspace.frontmostApplication can be stale: it
+    // reported DeepSeek Harness while the actual frontmost app was TextEdit.
+    // The topmost normal window is the same signal a person sees, and it stays
+    // live in this process. Fall back to NSWorkspace when no normal window is
+    // on screen (menu-bar-only apps).
+    if let top = onScreenWindows().first {
+        return (top.pid, top.app)
+    }
     guard let app = NSWorkspace.shared.frontmostApplication else { return (0, "") }
     return (app.processIdentifier, app.localizedName ?? "")
 }
@@ -1737,7 +1745,8 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
     panel.isOpaque = false
     panel.backgroundColor = .clear
     panel.hasShadow = false
-    panel.level = .statusBar
+    panel.hidesOnDeactivate = false
+    panel.level = .normal
     panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications,
                                 .fullScreenAuxiliary, .stationary]
     panel.ignoresMouseEvents = true
@@ -1754,18 +1763,20 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
     control.isOpaque = false
     control.backgroundColor = .clear
     control.hasShadow = false
-    control.level = .statusBar
+    control.hidesOnDeactivate = false
+    control.level = .normal
     control.collectionBehavior = panel.collectionBehavior
     let view = HaloStopView(frame: NSRect(origin: .zero, size: control.frame.size))
     view.label = label.isEmpty ? window.app : label
     view.onStop = {
-        markPause()
-        emit(["ok": true, "halo": "stopped", "windowId": Int(windowId), "paused": true])
+        let scoped = ProcessInfo.processInfo.environment["CU_INDICATOR_TARGET_SCOPED"] == "1"
+        if !scoped { markPause() }
+        emit(["ok": true, "halo": "stopped", "windowId": Int(windowId), "paused": !scoped])
         exit(0)
     }
     control.contentView = view
-    panel.orderFrontRegardless()
-    control.orderFrontRegardless()
+    panel.order(.above, relativeTo: Int(windowId))
+    control.order(.above, relativeTo: panel.windowNumber)
     stayInBackground(previous)
 
     let activity = Timer(timeInterval: 0.3, repeats: true) { _ in
@@ -1781,18 +1792,33 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
 
     // Query only the target: no window titles, app lookups or full desktop sweep.
     // Geometry follows at 30 Hz; breathing remains render-server driven.
+    var targetVisible = true
     let follow = Timer(timeInterval: 1.0 / 30.0, repeats: true) { _ in
         guard let rows = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowId)
                 as? [[String: Any]],
               let row = rows.first,
-              row[kCGWindowIsOnscreen as String] as? Bool == true,
-              (row[kCGWindowAlpha as String] as? Double ?? 1) > 0.01,
               (row[kCGWindowLayer as String] as? Int ?? 0) == 0,
               let rawBounds = row[kCGWindowBounds as String] as? NSDictionary,
               let bounds = CGRect(dictionaryRepresentation: rawBounds),
               bounds.width >= 40, bounds.height >= 40 else {
-            emit(["ok": true, "halo": "window_gone", "windowId": Int(windowId)])
-            exit(0)
+            targetVisible = false
+            panel.orderOut(nil)
+            control.orderOut(nil)
+            // Ordered-out/minimized windows can disappear from the CG list.
+            // Keep this bounded session alive so returning windows regain their
+            // halo; the owning Host retires it when the target is closed.
+            if kill(window.pid, 0) != 0 {
+                emit(["ok": true, "halo": "window_gone", "windowId": Int(windowId)])
+                exit(0)
+            }
+            return
+        }
+        targetVisible = row[kCGWindowIsOnscreen as String] as? Bool == true
+            && (row[kCGWindowAlpha as String] as? Double ?? 1) > 0.01
+        if !targetVisible {
+            panel.orderOut(nil)
+            control.orderOut(nil)
+            return
         }
         let next = cocoaFrame(for: bounds).insetBy(dx: -12, dy: -12)
         if next != panel.frame {
@@ -1803,6 +1829,15 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
         }
     }
     RunLoop.main.add(follow, forMode: .common)
+
+    // Raising the target can move it above our independent windows. Keep both
+    // panels immediately above the target, but below windows covering it.
+    let ordering = Timer(timeInterval: 0.25, repeats: true) { _ in
+        guard targetVisible else { return }
+        panel.order(.above, relativeTo: Int(windowId))
+        control.order(.above, relativeTo: panel.windowNumber)
+    }
+    RunLoop.main.add(ordering, forMode: .common)
 
     emit(["ok": true, "halo": "shown", "windowId": Int(windowId),
           "app": window.app, "title": window.title])
@@ -3083,13 +3118,15 @@ func appURL(for spec: String) -> URL? {
     return nil
 }
 
-func launchApp(_ spec: String) {
+func launchApp(_ spec: String, background: Bool = false) {
     guard let url = appURL(for: spec) else {
         fail("app_not_found", "no application matches \(spec)",
              ["hint": "pass a bundle id, an app name, or a full .app path"])
     }
     let configuration = NSWorkspace.OpenConfiguration()
-    configuration.activates = true
+    // Background launch is the default for agent control: the app may create
+    // its windows without taking focus from the person using another app.
+    configuration.activates = !background
     // This shell (and therefore the launchd service) can carry ELECTRON_RUN_AS_NODE,
     // which makes any Electron app launched from it exit immediately.
     var environment = ProcessInfo.processInfo.environment
@@ -3103,7 +3140,8 @@ func launchApp(_ spec: String) {
     }
     semaphore.wait()
     emit(["ok": pid != 0, "action": "launch", "pid": Int(pid),
-          "path": url.path, "frontmost": frontmost().app])
+          "path": url.path, "background": background,
+          "frontmost": frontmost().app])
 }
 
 // MARK: - paste
@@ -3492,7 +3530,7 @@ func windowsPayload(explicitPid: Int? = nil) -> [String: Any] {
     let offStage = offStageIds(raw)
     let front = frontmost()
     var windows = raw.map { window -> [String: Any] in
-        var object = describe(window)
+        var object = describe(window, frontPid: front.pid)
         if offStage.contains(window.id) { object["offStage"] = true }
         return object
     }
@@ -3504,7 +3542,7 @@ func windowsPayload(explicitPid: Int? = nil) -> [String: Any] {
     if let explicit = explicitPid, explicit > 0, pid_t(explicit) != front.pid {
         scanPids.append(pid_t(explicit))
     }
-    windows.append(contentsOf: axOnlyWindows(scanPids: scanPids, known: raw))
+    windows.append(contentsOf: axOnlyWindows(scanPids: scanPids, known: raw, frontPid: front.pid))
     return ["ok": true, "count": windows.count, "frontmost": ["pid": Int(front.pid), "app": front.app],
             "windows": windows]
 }
@@ -3768,6 +3806,38 @@ func serviceStatus(_ config: ServiceConfig) -> [String: Any] {
     return payload
 }
 
+/// Classify an executable request into a per-target lane.
+///
+/// Only operations that are safe to run beside another app share a lane:
+/// read-only observations/captures and background AX/PID input. Foreground
+/// input, window layout, clipboard/paste and screen-wide captures stay on the
+/// global serial action queue. The key is the owning pid whenever one is named,
+/// so two windows of the same process still serialize.
+func serviceTargetLaneKey(path: String, body: Data) -> String? {
+    guard path == "/v1/exec" else { return nil }
+    guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+          let argv = object["argv"] as? [String],
+          let command = argv.first else { return nil }
+    let reads: Set<String> = ["snapshot", "shot", "ocr", "findtext", "readtext", "ax", "expect"]
+    let backgroundInput: Set<String> = ["click", "double_click", "type", "key", "scroll", "drag"]
+    let axActions: Set<String> = ["setvalue", "action", "menu"]
+    var parallel = reads.contains(command) || axActions.contains(command)
+    if backgroundInput.contains(command), argv.contains("--background") { parallel = true }
+    guard parallel else { return nil }
+    if let index = argv.firstIndex(of: "--pid"), index + 1 < argv.count,
+       Int(argv[index + 1]) != nil {
+        return "pid:\(argv[index + 1])"
+    }
+    if let index = argv.firstIndex(of: "--window"), index + 1 < argv.count,
+       let windowId = Int(argv[index + 1]) {
+        // A screenshot/OCR of a window does not touch the app; a mutating
+        // command without an explicit pid is kept on the global queue because
+        // resolving the owner here could race a window replacement.
+        if reads.contains(command) { return "window:\(windowId)" }
+    }
+    return nil
+}
+
 func serve(_ config: ServiceConfig) -> Never {
     _ = engineBuildID
     let fd = socket(AF_INET, SOCK_STREAM, 0)
@@ -3804,9 +3874,25 @@ func serve(_ config: ServiceConfig) -> Never {
     // F2: reading and classifying a request must NOT happen on the action
     // queue. A 2.4 s expect used to block the read of the next status query,
     // which then queued behind the whole action.
-    let actionQueue = DispatchQueue(label: "cu.service.action")                            // serial: input work only
+    let actionQueue = DispatchQueue(label: "cu.service.action")                            // serial: global/focus work
     let controlQueue = DispatchQueue(label: "cu.service.control", attributes: .concurrent)  // status/pause/resume
     let readQueue = DispatchQueue(label: "cu.service.read", attributes: .concurrent)
+    // One serial lane per target pid/window. Different targets may read and
+    // perform verified background work concurrently; a lane keeps a single
+    // target's operations ordered. Lanes are capped so a long-lived service
+    // cannot accumulate unbounded queues; past the cap, work falls back to the
+    // global serial queue (correct, just less parallel).
+    let laneLock = NSLock()
+    var targetLanes: [String: DispatchQueue] = [:]
+    func targetLane(_ key: String) -> DispatchQueue {
+        laneLock.lock()
+        defer { laneLock.unlock() }
+        if let existing = targetLanes[key] { return existing }
+        if targetLanes.count >= 64 { return actionQueue }
+        let queue = DispatchQueue(label: "cu.service.target.\(targetLanes.count)")
+        targetLanes[key] = queue
+        return queue
+    }
     // Bound how many requests may be mid-read; the slot is released the moment a
     // request is classified, before it joins the action queue.
     let readGate = DispatchSemaphore(value: 8)
@@ -3997,7 +4083,12 @@ func serve(_ config: ServiceConfig) -> Never {
             let isWork = request.method == "POST" &&
                 ["/v1/exec", "/v1/call", "/v1/ocr", "/v1/agents/connect"].contains(request.path)
             if isWork {
-                actionQueue.async(execute: handle)
+                if request.method == "POST", request.path == "/v1/exec",
+                   let laneKey = serviceTargetLaneKey(path: request.path, body: request.body) {
+                    targetLane(laneKey).async(execute: handle)
+                } else {
+                    actionQueue.async(execute: handle)
+                }
             } else {
                 controlQueue.async(execute: handle)
             }
@@ -4730,7 +4821,7 @@ case "apps":
 
 case "launch":
     guard let spec = args["app"] else { fail("missing_app", "pass --app <bundle id | path>") }
-    launchApp(spec)
+    launchApp(spec, background: args.flag("background"))
 
 case "snapshot":
     let snapshotPair = resolveTargetPair(pid: args.int("pid"), window: args.int("window"), action: "snapshot")
@@ -5648,10 +5739,12 @@ case "preview-stream":
     }
     let streamSession = args["session"] ?? "no-session"
     let streamGeneration = args.int("generation") ?? 0
+    let streamTargetId = args["target-id"] ?? ""
     let streamFps = args.double("fps") ?? 10
     let streamMaxDim = args.int("max-dim") ?? 960
     runPreviewStream(windowId: CGWindowID(streamWindow), sessionId: streamSession,
-                     generation: streamGeneration, seconds: args.int("seconds") ?? 900,
+                     generation: streamGeneration, targetId: streamTargetId,
+                     seconds: args.int("seconds") ?? 900,
                      fps: streamFps, maxDimension: streamMaxDim,
                      watchParentStdin: args.flag("watch-parent"))
 

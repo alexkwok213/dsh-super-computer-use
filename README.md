@@ -31,16 +31,14 @@ DeepSeek Harness 宿主
 
 ## Harness 内嵌观看
 
-插件同时提供 Host 半与 Client 半。Client 在**当前聊天**的输入框上方注册一张卡片；
-展开后使用 Harness 的 `shell.overlay` 显示实时窗口画面。画面来自已有的
-ScreenCaptureKit 常驻捕获路径，经本机认证的 `/api/scu/preview` 以有界 JPEG 帧流送到
-浏览器 canvas；它不是高频截图轮询，也不进入模型上下文。
+插件同时提供 Host 半与 Client 半。每个活动目标默认由**原生预览浮窗**呈现（Codex 风格：只显示被控窗口画面，可拖动，悬停才出现 Stop/Close）；Client 半只在原生预览不可用、捕获失败或用户手动关闭预览时，于当前聊天输入框上方显示一条最小兜底状态卡。需要在大画布中查看时，兜底卡仍可展开使用 Harness 的 `shell.overlay` 实时画面。画面来自已有的 ScreenCaptureKit 常驻捕获路径，经本机认证的 `/api/scu/preview` 以有界 JPEG 帧流送到浏览器 canvas；它不是高频截图轮询，也不进入模型上下文。
 
-- `viewerMode: auto`（默认）：当前聊天有客户端连接时用内嵌观看，其他客户端仍走原生预览。
-- `viewerMode: native`：强制保留原来的悬浮预览窗口。
-- `viewerMode: embedded`：强制内嵌（本机验收用）。
+- `viewerMode: auto`（默认）：目标使用原生预览浮窗；本聊天 Client 已连接时，仅在原生预览不可用时显示兜底卡。
+- `viewerMode: native`：不使用聊天内兜底卡，完全走原生预览/状态胶囊（外部客户端行为）。
+- `viewerMode: embedded`：强制允许聊天内兜底卡（本机验收用）。
 - 停止走同一条 `CuSessionManager` 停止闸门：先关输入闸门，再清理；`cleanupState` 未知时如实显示。
 - 一个桌面同时只有一个 owner；另一个聊天只能看到“忙”，不能停或接管。
+- owner 聊天内部可同时持有多个目标（应用 + 窗口）；每个目标有自己的 `targetId`、代次、快照/引用、执行队列、预览与停止闸门。`cu_session stop` 带 `targetId` 只停一个，不带则全部停止。
 
 验收与回滚记录见 `docs/reviews/2026-11-04-harness-integrated-cu-acceptance.md`。
 
@@ -72,33 +70,35 @@ git clone https://github.com/alexkwok213/dsh-super-computer-use.git
 
 ### 开发者说明（源码二次开发）
 
-修改 Host JS、Client 或 Swift 后，统一运行：
+修改 Host JS、Client 或 Swift 后，统一运行强制发布命令：
 
 ```bash
-npm run dev:sync
+npm run release -- patch|minor|major
 ```
 
-它会依次确认软链接仍指向本仓库、运行隔离测试、只在原生源码变化时重建 universal helper、通过运行中 DSH 的官方 HMR 接口重载 Host/Client、回收并重启 helper，最后在真实运行版本上核对三部分身份。成功时必须看到 `OK` 且退出码为 0；退出码 3 表示被活跃 CU 会话、页面未连接、HMR 不可用或重启需求阻塞，不能算成功。只改 JS/Client 不会重复编译 Swift。
+它会把 `package.json` 与 `client.js` 的版本同步升级，随后依次执行完整隔离测试、必要原生构建、通过运行中 DSH 的官方 HMR 接口重载 Host/Client、回收并重启 helper，并在真实运行版本上核对三部分身份；通过后提交全部改动、推送 `main`、创建并推送 `vX.Y.Z` tag，等待 GitHub Actions 完成 Release 构建与发布。成功时必须看到 `[release] RELEASE OK <url>` 且退出码为 0。
 
 ```bash
+npm run dev:sync                      # 内部步骤：仅测试 -> 构建 -> 重载 -> 真实核验（不提交、不发布）
 npm run dev:sync -- --check-only      # 只检查链接、运行版本与更新计划
 npm run dev:sync -- --wait-idle=30    # 活跃 CU 会话时最多等待 30 秒
 ```
 
-完整说明、退出码与限制见 [`docs/dev-sync.md`](docs/dev-sync.md)。发版时仍按独立流程推送 tag（例如 `git tag v0.3.0 && git push origin v0.3.0`），GitHub Actions 会自动编译并打包 Release；`dev:sync` 不提交、不推送、不发布。
+完整说明、退出码与限制见 [`docs/dev-sync.md`](docs/dev-sync.md)。发版流程见 [`docs/release.md`](docs/release.md)。`dev:sync` 本身不提交、不推送、不发布；`npm run release` 才是每轮强制的完整收尾。
 
 ## 能力
 
-**插件工具（13）**
-`cu_status` `cu_windows` `cu_launch` `cu_snapshot` `cu_expect` `cu_click` `cu_type`
-`cu_key` `cu_scroll` `cu_screenshot` `cu_session` `cu_find` `cu_batch`
+**插件工具（14）**
+`cu_status` `cu_windows` `cu_launch` `cu_snapshot` `cu_expect` `cu_click` `cu_click_text`
+`cu_type` `cu_key` `cu_scroll` `cu_screenshot` `cu_session` `cu_find` `cu_batch`
 
 **视觉反馈**
 - 边缘呼吸光：只在 agent 真正操作时出现的屏幕四边窄光带（蓝→青→紫，约 72pt），停手约 2 秒后自动淡出
-- 渐变光环：跟随目标窗口，独立停止面板
+- 渐变光环：每个目标一个，绑定自己的窗口；停止单目标只移除它
 - 毛玻璃 HUD：实时动作文本 + 计时器 + 脉冲状态灯
 - 光标层：虚拟箭头滑向目标、动作标签、点击涟漪（不移动真实鼠标）
-- DSH 内嵌观看卡片：会话期间输入框上方实时显示工作状态、目标应用名称、停止按钮与实时画面流
+- DSH 内嵌观看卡片：输入框上方显示目标列表、各自实时画面、单目标停止与全部停止
+- 默认不激活、不移动、不 dock、不 `stage` 目标窗口；`dockDsh` / `splitScreen` / `bringOnStage` 只有显式传入才执行
 
 **引擎命令**（供插件底层调用，也可本地 CLI 直接调试）
 
@@ -135,19 +135,22 @@ cu service [--port 47777]                         # 本地 HTTP 引擎后端
 
 ## 设计要点
 
-- **后台优先**：默认通过 AX / `CGEventPostToPid` 操作，不抢焦点、不移动真实鼠标
+- **后台优先，但不夸大**：默认通过 AXPress / AXSetValue / PID 事件操作，不抢焦点、不移动真实鼠标；无 AXPress 的自绘画布可能只支持观察，工具会如实返回能力边界或 `effect_not_verified`
+- **派发不等于成功**：只有显式 `expect` 命中，或 AX 写回读值一致，才算 `verified:true`；原始 PID 事件没有显式后置条件时返回 `ok:false, error:"effect_not_verified"`，并标记不可盲目重放
+- **前台需授权**：`foreground:true` 必须同时带 `authorizeForeground:true`；否则在发送任何输入前拒绝，并说明会抢占焦点/真实键鼠/剪贴板
 - **常驻抓屏**：`capture-daemon` 复用 `SCShareableContent` 缓存，按目标尺寸直接出图
-- **失败不重放**：动作已派发但观察失败时，保留动作结果并标记 `actionReplaySafe: false`
 - **截断可见**：快照超过节点预算时返回 `truncated: true` + `limit`，可用 `maxNodes` 提高
 - **观察有节律**：动作后的观察在树没变化时按预算重读（默认 300 ms），并报告 `changed` / `waitedMs` / `reads`；"树动了" 只是重新观察的信号，不等于业务成功
 - **后置条件优先**：动作可带 `expect`（或单独调 `cu_expect`），由引擎轮询到条件成立；`cu_batch` 里的 `expect` 步骤就是检查点
-- **目标有身份**：每次观察带 `snapshotId`，ref 点击可带上它，快照过期时返回 `stale_snapshot` 而不是命中同名控件
+- **目标有身份**：`targetId` = pid + window + 代次；每次观察带 `snapshotId`，ref 点击可带上它，窗口重建/快照过期返回 `stale_snapshot` / `target_closed`，不会命中同名控件
+- **目标级并发**：Host 按目标排队，原生服务按目标 PID 分 lane；不同 PID 的读取/截图/安全后台操作可并行，同一 PID（包括同进程多窗口）和焦点/全局键鼠/剪贴板/窗口布局仍串行
+- **单目标停止**：停止 A 只关闭 A 的闸门、取消 A 的在飞快照/行为和预览；B 继续。全部停止会关闭全局闸门并清空所有队列，迟到结果不能复活
 - **坐标有出处**：`cu screens` 给真实显示器可用区域，截图带 `capturedAt` / `displayId`，窗口移动后按实时 bounds 计算 origin
-- **用户可中断**：胶囊与光环上的停止键会写入暂停标记，所有变更类动作随即被拦截
-- **会话侧栏布局**：进入操作会话时 DSH 窗口缩到右侧三分之一、目标窗口占左侧，结束时自动还原；首次点击也会缩窗但不动目标窗口（避免点击坐标失效）
+- **用户可中断**：胶囊与每个目标光环上的停止键会写入暂停标记，所有变更类动作随即被拦截
+- **默认不改布局**：启动观察/预览/后台动作不会缩窗、移动或激活目标；需要并排观看时显式传 `dockDsh`/`splitScreen`
 - **录屏有提醒**：会话期间 DSH 内嵌卡片显示实时录制与操作状态，同时 macOS 升起系统屏幕录制安全指示；结束时自动释放
 - **无感生命周期**：原生 Helper 仅在执行期间运行，DSH 退出或插件停用时秒级回收，不留孤儿进程
-- **完整回归测试**：内置 239 项自动化回归测试，覆盖生命周期、认证隔离、权限指引和无障碍操控
+- **完整回归测试**：内置 253 项自动化回归测试，覆盖生命周期、认证隔离、权限指引、多目标隔离、受控并发和无障碍操控
 - **光效不常驻**：边缘呼吸光只在动作时亮起；overlay 进程 2 小时无活动自动退出，不会遗留常驻光斑
 - **授权可自愈**：缺权限时给系统设置深链 + 可拖拽应用卡片的引导浮窗；失效授权只在日志有证据且确实缺权限时才重置
 
@@ -155,7 +158,7 @@ cu service [--port 47777]                         # 本地 HTTP 引擎后端
 
 **源码已更新，但 DSH 仍表现得像旧版本？**
 
-先运行 `npm run dev:sync`，不要靠反复重启或从 GitHub 重装。当前桌面版 DSH 0.2.2-rc.1 已实测支持同一 Host 进程内的 Host 插件重载（官方 `ctx.hmr.runExclusive` + `reconcileProfile`），Client 由 `dsh-client-hmr` 换包，原生 helper 由插件回收重启。`dev:sync` 只有在真实运行版本核对通过时才返回 0。
+先运行 `npm run dev:sync`，不要靠反复重启或从 GitHub 重装。若当前桌面版暴露官方 `ctx.hmr.runExclusive` + `reconcileProfile`，Host 可在同一进程重载，Client 由 `dsh-client-hmr` 换包，原生 helper 由插件回收重启；若宿主没有这些 API，命令会以退出码 3 明确报告“需要正常重启 DSH”，不得把它当成成功。`dev:sync` 只有在真实运行版本核对通过时才返回 0。
 
 用 `cu_status.plugin` 区分三部分：
 

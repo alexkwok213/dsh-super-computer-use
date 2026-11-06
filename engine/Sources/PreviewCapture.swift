@@ -17,6 +17,8 @@ final class PreviewCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Called (on main) exactly once, when the first frame arrives — used to fade
     /// the card in over 120 ms instead of popping.
     var onFirstFrame: (() -> Void)?
+    var onFrame: ((CGSize, CGRect?, CGRect?, CGFloat) -> Void)?
+    var onIdle: (() -> Void)?
     private(set) var frames = 0
     private(set) var firstFrameAt: Date?
     private var lastFrameAt: Date?
@@ -24,7 +26,27 @@ final class PreviewCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
                 of type: SCStreamOutputType) {
-        guard type == .screen else { return }
+        guard type == .screen,
+              let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+                as? [[SCStreamFrameInfo: Any]],
+              let metadata = attachments.first,
+              let status = metadata[.status] as? Int else { return }
+        if status == SCFrameStatus.idle.rawValue {
+            DispatchQueue.main.async { self.onIdle?() }
+            return
+        }
+        guard status == SCFrameStatus.complete.rawValue,
+              CMSampleBufferDataIsReady(sampleBuffer),
+              let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let size = CGSize(width: CVPixelBufferGetWidth(pixels), height: CVPixelBufferGetHeight(pixels))
+        guard size.width > 1, size.height > 1 else { return }
+        func rect(_ key: SCStreamFrameInfo) -> CGRect? {
+            guard let raw = metadata[key] as? NSDictionary else { return nil }
+            return CGRect(dictionaryRepresentation: raw)
+        }
+        let screenRect = rect(.screenRect)
+        let contentRect = rect(.contentRect)
+        let scale = (metadata[.scaleFactor] as? NSNumber)?.doubleValue ?? 1
         let now = Date()
         if let last = lastFrameAt {
             maxGapMs = max(maxGapMs, Int(now.timeIntervalSince(last) * 1000))
@@ -40,6 +62,7 @@ final class PreviewCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             DispatchQueue.main.async {
                 if layer.status == .failed { layer.flush() }
                 layer.enqueue(sampleBuffer)
+                self.onFrame?(size, screenRect, contentRect, CGFloat(scale))
             }
         }
     }
@@ -130,12 +153,19 @@ func runPreviewProbe(windowId: CGWindowID?, seconds: Int) -> Never {
 
 // MARK: - visible preview card (Task 7)
 
-/// A card that shows live frames in an AVSampleBufferDisplayLayer, with a bright
-/// border so the panel is unmistakably on screen (and easy to locate in a capture).
+/// Picture-only native preview. The whole image is a drag surface.
 final class PreviewCardView: NSView {
     let displayLayer = AVSampleBufferDisplayLayer()
     let staticLayer = CALayer()   // static-frame fallback when no live first frame
     private let border = CALayer()
+    private let controls = NSView()
+    private var hoverArea: NSTrackingArea?
+    private let statusText = CATextLayer()
+    private let pointer = CAShapeLayer()
+    private let clickRing = CAShapeLayer()
+    private var hideFeedback: DispatchWorkItem?
+    var onMoved: ((NSRect) -> Void)?
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -144,12 +174,109 @@ final class PreviewCardView: NSView {
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = NSColor.black.cgColor
         layer?.addSublayer(displayLayer)
-        border.borderColor = NSColor(srgbRed: 1, green: 0.1, blue: 0.8, alpha: 1).cgColor
-        border.borderWidth = 3
+        layer?.cornerRadius = 10
+        layer?.masksToBounds = true
+        border.cornerRadius = 10
+        border.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        border.borderWidth = 0.5
         border.backgroundColor = NSColor.clear.cgColor
         layer?.addSublayer(border)
+        statusText.fontSize = 11
+        statusText.alignmentMode = .center
+        statusText.foregroundColor = NSColor.white.cgColor
+        statusText.backgroundColor = NSColor.black.withAlphaComponent(0.75).cgColor
+        statusText.contentsScale = 2
+        statusText.isHidden = true
+        layer?.addSublayer(statusText)
+        pointer.fillColor = NSColor.white.cgColor
+        pointer.strokeColor = NSColor.black.cgColor
+        pointer.lineWidth = 1
+        pointer.opacity = 0
+        clickRing.fillColor = nil
+        clickRing.strokeColor = NSColor.systemCyan.cgColor
+        clickRing.lineWidth = 2
+        clickRing.opacity = 0
+        layer?.addSublayer(clickRing)
+        layer?.addSublayer(pointer)
+        for (index, title) in ["Stop", "×"].enumerated() {
+            let button = NSButton(title: title, target: self,
+                                  action: index == 0 ? #selector(stopTarget) : #selector(closePreview))
+            button.frame = NSRect(x: index == 0 ? 0 : 56, y: 0,
+                                  width: index == 0 ? 54 : 26, height: 26)
+            button.bezelStyle = .rounded
+            button.setAccessibilityLabel(index == 0 ? "Stop this target" : "Close preview")
+            controls.addSubview(button)
+        }
+        controls.isHidden = true
+        addSubview(controls)
     }
+    @objc private func stopTarget() {
+        emit(["event": "stop-target"])
+        window?.orderOut(nil)
+        exit(0)
+    }
+    @objc private func closePreview() {
+        emit(["event": "close-preview"])
+        window?.orderOut(nil)
+        exit(0)
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+    override func mouseEntered(with event: NSEvent) { controls.isHidden = false }
+    override func mouseExited(with event: NSEvent) { controls.isHidden = true }
+
+    func showStatus(_ message: String?) {
+        statusText.string = message
+        statusText.isHidden = message == nil
+    }
+
+    func feedback(at point: CGPoint, click: Bool) {
+        hideFeedback?.cancel()
+        let path = CGMutablePath()
+        path.addLines(between: [point, CGPoint(x: point.x + 2, y: point.y - 14),
+            CGPoint(x: point.x + 5, y: point.y - 10), CGPoint(x: point.x + 10, y: point.y - 9)])
+        path.closeSubpath()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        pointer.path = path
+        pointer.opacity = 1
+        CATransaction.commit()
+        if click {
+            let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            clickRing.path = CGPath(ellipseIn: CGRect(x: point.x - 14, y: point.y - 14,
+                                                     width: 28, height: 28), transform: nil)
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 1; fade.toValue = 0
+            fade.duration = reduced ? 0.1 : 0.24
+            clickRing.add(fade, forKey: "click")
+        }
+        let hide = DispatchWorkItem { [weak self] in self?.pointer.opacity = 0 }
+        hideFeedback = hide
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: hide)
+    }
+
     required init?(coder: NSCoder) { fatalError() }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        window.performDrag(with: event)
+        let screen = NSScreen.screens.max { a, b in
+            let aa = a.visibleFrame.intersection(window.frame)
+            let bb = b.visibleFrame.intersection(window.frame)
+            return aa.width * aa.height < bb.width * bb.height
+        }
+        if let screen {
+            window.setFrame(PreviewGeometry.constrainCard(window.frame, to: screen.visibleFrame), display: true)
+        }
+        onMoved?(window.frame)
+    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     /// 120 ms fade-in when the first frame appears (Spec §6.1 card fade).
     func fadeIn(duration: CFTimeInterval = 0.12) {
@@ -169,6 +296,8 @@ final class PreviewCardView: NSView {
         staticLayer.frame = bounds
         displayLayer.frame = bounds
         border.frame = bounds
+        controls.frame = NSRect(x: max(0, bounds.width - 90), y: bounds.height - 34, width: 82, height: 26)
+        statusText.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 22)
         CATransaction.commit()
     }
 }
@@ -177,6 +306,11 @@ final class PreviewCardView: NSView {
 /// `seconds`, presenting live SCStream frames. Emits an early ack, then a final
 /// `{ok, preview:"shown", frames, firstFrameMs}`. A non-capturable window exits
 /// immediately with `window_not_capturable` (no empty card).
+final class PreviewPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
 func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = false) -> Never {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
@@ -196,25 +330,45 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
         } catch { resolveError = "scshareable_failed" }
         resolved.signal()
     }
-    _ = resolved.wait(timeout: .now() + 5)
+    if resolved.wait(timeout: .now() + 5) == .timedOut {
+        emit(["ok": false, "error": "target_resolve_timeout"]); exit(1)
+    }
     if let resolveError { emit(["ok": false, "error": resolveError]); exit(1) }
 
-    let card = PreviewCardView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
-    let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
-                        styleMask: [.titled, .nonactivatingPanel],
+    let sourceSize = scWindow?.frame.size ?? CGSize(width: scDisplay?.width ?? 320,
+                                                    height: scDisplay?.height ?? 200)
+    let ratio = min(320 / max(1, sourceSize.width), 240 / max(1, sourceSize.height))
+    let cardRect = NSRect(x: 0, y: 0, width: max(1, sourceSize.width * ratio),
+                          height: max(1, sourceSize.height * ratio))
+    let card = PreviewCardView(frame: cardRect)
+    let panel = PreviewPanel(contentRect: cardRect,
+                        styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
     panel.title = "cu preview"
-    // Normal level (layer 0) so it is an ordinary on-screen window that window
-    // inspection/`cu windows` can see; still ordered front for the watcher.
-    panel.level = .normal
+    panel.level = .floating
+    panel.isOpaque = false
+    panel.backgroundColor = .clear
+    panel.hasShadow = true
     panel.hidesOnDeactivate = false
-    panel.isMovableByWindowBackground = true
+    panel.isMovableByWindowBackground = false
     panel.contentView = card
     if let screen = NSScreen.main {
         let v = screen.visibleFrame
-        panel.setFrameOrigin(NSPoint(x: v.maxX - 320 - 24, y: v.maxY - 200 - 24))
+        let slot = max(0, Int(ProcessInfo.processInfo.environment["CU_PREVIEW_SLOT"] ?? "0") ?? 0)
+        let proposed = NSRect(x: v.maxX - cardRect.width - 24 - CGFloat(slot % 2) * 344,
+                              y: v.maxY - cardRect.height - 24 - CGFloat(slot / 2) * 264,
+                              width: cardRect.width, height: cardRect.height)
+        panel.setFrame(PreviewGeometry.constrainCard(proposed, to: v), display: true)
     }
     panel.orderFrontRegardless()
+    let previewWindowId = panel.windowNumber
+    card.onMoved = { frame in
+        let top = NSScreen.screens.first?.frame.maxY ?? 0
+        emit(["event": "preview-geometry", "previewWindowId": previewWindowId,
+              "frame": ["x": frame.minX, "y": top - frame.maxY,
+                        "width": frame.width, "height": frame.height]])
+    }
+    card.onMoved?(panel.frame)
 
     if staticOnly {
         // Deterministic fallback path: one still frame via SCScreenshotManager,
@@ -241,6 +395,7 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
                 DispatchQueue.main.async {
                     card.staticLayer.contents = image
                     card.displayLayer.isHidden = true
+                    card.showStatus("Still image")
                 }
                 result = ["ok": true, "mode": "static", "pixelWidth": image.width,
                           "pixelHeight": image.height,
@@ -263,7 +418,45 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
 
     let capture = PreviewCapture()
     capture.displayLayer = card.displayLayer
-    capture.onFirstFrame = { [weak card] in card?.fadeIn() }
+    capture.onFirstFrame = { [weak card] in
+        card?.fadeIn()
+        emit(["ok": true, "preview": "live"])
+    }
+    func currentTargetBounds() -> CGRect? {
+        guard let windowId,
+              let row = (CGWindowListCopyWindowInfo(.optionIncludingWindow, windowId) as? [[String: Any]])?.first,
+              row[kCGWindowIsOnscreen as String] as? Bool == true,
+              let raw = row[kCGWindowBounds as String] as? NSDictionary else { return nil }
+        return CGRect(dictionaryRepresentation: raw)
+    }
+    var capturedBounds: CGRect?
+    var capturedContent: CGRect?
+    var capturedPixels: CGSize?
+    var frameAt = Date.distantPast
+    capture.onFrame = { size, screenRect, contentRect, scale in
+        guard let screenRect, let contentRect, screenRect.width > 0, screenRect.height > 0 else {
+            capturedBounds = nil
+            return
+        }
+        let pixels = CGRect(x: contentRect.minX * scale, y: contentRect.minY * scale,
+                            width: contentRect.width * scale, height: contentRect.height * scale)
+        guard pixels.width > 0, pixels.height > 0,
+              CGRect(origin: .zero, size: size).insetBy(dx: -1, dy: -1).contains(pixels) else {
+            capturedBounds = nil
+            return
+        }
+        capturedBounds = screenRect
+        capturedContent = pixels
+        capturedPixels = size
+        frameAt = Date()
+        card.showStatus(nil)
+    }
+    capture.onIdle = {
+        // Idle means the current pixels remain valid, not that capture stalled.
+        guard let capturedBounds, currentTargetBounds() == capturedBounds else { return }
+        frameAt = Date()
+        card.showStatus(nil)
+    }
     let filter = windowId != nil ? SCContentFilter(desktopIndependentWindow: scWindow!)
                                  : SCContentFilter(display: scDisplay!, excludingWindows: [])
     let rect = windowId != nil ? scWindow!.frame : CGRect(x: 0, y: 0, width: scDisplay!.width, height: scDisplay!.height)
@@ -275,6 +468,7 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
     config.minimumFrameInterval = CMTime(value: 1, timescale: 15)
     config.queueDepth = 3
     config.showsCursor = false
+    if #available(macOS 14.2, *) { config.ignoreShadowsSingleWindow = true }
     let stream = SCStream(filter: filter, configuration: config, delegate: capture)
     try? stream.addStreamOutput(capture, type: .screen, sampleHandlerQueue: capture.queue)
 
@@ -312,12 +506,14 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
                 DispatchQueue.main.async {
                     card.staticLayer.contents = image
                     card.displayLayer.isHidden = true
+                    card.showStatus("Recent image · live preview unavailable")
                     card.fadeIn()
                 }
                 emit(["ok": true, "preview": "degraded", "mode": "static-fallback",
                       "reason": "first_frame_timeout", "budgetMs": 1500,
                       "pixelWidth": image.width, "pixelHeight": image.height])
             } catch {
+                DispatchQueue.main.async { card.showStatus("Preview unavailable") }
                 emit(["ok": false, "preview": "degraded", "mode": "static-fallback",
                       "reason": "first_frame_timeout", "budgetMs": 1500,
                       "message": String(describing: error)])
@@ -325,6 +521,16 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
         }
     }
     RunLoop.main.add(firstFrameBudget, forMode: .common)
+    let freshness = Timer(timeInterval: 0.5, repeats: true) { _ in
+        guard !degradedToStatic else { return }
+        if windowId != nil && currentTargetBounds() == nil {
+            capturedBounds = nil
+            card.showStatus("Window unavailable · recent image")
+        } else if Date().timeIntervalSince(frameAt) >= 2 {
+            card.showStatus("Waiting for a fresh frame")
+        }
+    }
+    RunLoop.main.add(freshness, forMode: .common)
     let finish = Timer(timeInterval: Double(max(1, seconds)), repeats: false) { _ in finishOnce() }
     RunLoop.main.add(finish, forMode: .common)
 
@@ -342,16 +548,35 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
                     let visible = obj["visible"] as? Bool ?? true
                     if visible {
                         panel.orderFrontRegardless()
-                        Task { try? await stream.startCapture() }
+                        if !degradedToStatic { Task { try? await stream.startCapture() } }
                     } else {
                         panel.orderOut(nil)
                         stream.stopCapture { _ in }
                     }
                     emit(["ok": true, "cmd": "visible", "visible": visible, "frames": capture.frames])
+                case "feedback":
+                    guard !degradedToStatic, Date().timeIntervalSince(frameAt) < 2,
+                          let captured = capturedBounds, let current = currentTargetBounds(),
+                          let raw = obj["bounds"] as? [String: Double],
+                          let x = raw["x"], let y = raw["y"],
+                          let width = raw["width"], let height = raw["height"],
+                          let point = obj["point"] as? [String: Double],
+                          let px = point["x"], let py = point["y"],
+                          let stamp = obj["sentAt"] as? Double,
+                          abs(Date().timeIntervalSince1970 * 1000 - stamp) < 1000,
+                          let mapped = PreviewGeometry.feedbackPoint(global: CGPoint(x: px, y: py),
+                              observed: CGRect(x: x, y: y, width: width, height: height),
+                              captured: captured, current: current, container: card.bounds.size,
+                              sourcePixels: capturedPixels, sourceContent: capturedContent) else { return }
+                    card.feedback(at: mapped, click: obj["click"] as? Bool == true)
                 case "status":
                     let first = capture.firstFrameAt.map { Int($0.timeIntervalSince(start) * 1000) }
                     emit(["ok": true, "cmd": "status", "frames": capture.frames,
-                          "firstFrameMs": first ?? NSNull()])
+                          "firstFrameMs": first ?? NSNull(),
+                          "capturedBounds": capturedBounds.map { ["x": $0.minX, "y": $0.minY,
+                              "width": $0.width, "height": $0.height] } ?? [:],
+                          "contentPixels": capturedContent.map { ["x": $0.minX, "y": $0.minY,
+                              "width": $0.width, "height": $0.height] } ?? [:]])
                 case "stop":
                     emit(["ok": true, "cmd": "stop", "frames": capture.frames])
                     finishOnce()
