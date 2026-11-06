@@ -17,6 +17,7 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let card = PreviewCardView(frame: NSRect(x: 0, y: 0, width: 200, height: 130))
 card.layout()
+card.setReducedMotion(false)
 let pointer = card.layer!.sublayers!.first { $0.name == "agent-pointer" }!
 card.feedback(at: CGPoint(x: 20, y: 30), click: false)
 card.feedback(at: CGPoint(x: 150, y: 90), click: true)
@@ -43,6 +44,10 @@ def main() -> int:
         subprocess.run(["swiftc","-swift-version","5","-module-cache-path",str(w/"cache"),
                         "-framework","AppKit","-framework","AVFoundation","-framework","QuartzCore",
                         str(main_swift),"-o",str(binp)], check=True)
-        r=subprocess.run([str(binp)],capture_output=True,text=True,check=True)
+        r=subprocess.run([str(binp)],capture_output=True,text=True)
+        if r.returncode:
+            print(r.stdout, file=sys.stderr)
+            print(r.stderr, file=sys.stderr)
+            return 1
     p=json.loads(r.stdout); print(json.dumps(p,ensure_ascii=False)); return 0 if p.get("ok") else 1
 if __name__=="__main__": sys.exit(main())
