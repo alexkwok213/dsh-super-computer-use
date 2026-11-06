@@ -130,3 +130,49 @@ test('preview geometry stays separate from the controlled window and survives li
  assert.deepEqual(target.nativePreview.frame,{x:1200,y:40,width:320,height:240});
  assert.equal(target.nativePreview.status,'live');
 });
+
+
+test('preview EOF allows its exit transition before termination', async () => {
+ const preview = new NativePreviews({keepAlive:true, onEvent:()=>{}, launch:()=>spawn(process.execPath,['-e',
+  "process.stdin.resume(); process.stdout.write('ready\\n'); process.stdin.on('end',()=>setTimeout(()=>process.exit(0),120));"
+ ],{stdio:['pipe','pipe','ignore']})});
+ preview.open({targetId:'fade',generation:1,windowId:11});
+ const child=preview.entries.get('fade').child;
+ await once(child.stdout,'data');
+ const exited=once(child,'exit');
+ preview.close('fade');
+ const [code,signal]=await exited;
+ assert.equal(signal,null);
+ assert.equal(code,0);
+});
+
+test('native card handles interrupted motion, stale frames and reduced motion', {timeout:120000}, async () => {
+ const {execFile}=await import('node:child_process');
+ const {promisify}=await import('node:util');
+ const {stdout}=await promisify(execFile)('python3',['-B','engine/tests/preview_card_anim.py'],{timeout:110000});
+ assert.equal(JSON.parse(stdout).ok,true);
+});
+
+test('host exit still reaps a preview that ignores EOF', async () => {
+ const {execFile}=await import('node:child_process');
+ const {promisify}=await import('node:util');
+ const source=`import {NativePreviews} from ${JSON.stringify(new URL('../lib/native-previews.mjs',import.meta.url).href)};
+ import {spawn} from 'node:child_process';
+ const previews=new NativePreviews({onEvent:()=>{},launch:()=>spawn(process.execPath,['-e',
+ "process.stdin.resume(); process.stdin.on('end',()=>{}); setInterval(()=>{},1000); console.log('ready');"
+ ],{stdio:['pipe','pipe','ignore']})});
+ previews.open({targetId:'a',generation:1,windowId:11});
+ const child=previews.entries.get('a').child;
+ const hold=setTimeout(()=>{},3000);
+ child.stdout.once('data',()=>{console.log(child.pid);previews.close();clearTimeout(hold);});`;
+ const {stdout}=await promisify(execFile)(process.execPath,['--input-type=module','-e',source],{timeout:5000});
+ const pid=Number(stdout.trim());
+ let alive=true;
+ try {
+  for(let i=0;i<20;i++) {
+   try {process.kill(pid,0);} catch {alive=false;break;}
+   await wait(50);
+  }
+  assert.equal(alive,false,'EOF-unresponsive preview must not outlive host close');
+ } finally {if(alive) process.kill(pid,'SIGKILL');}
+});

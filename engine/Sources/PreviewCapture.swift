@@ -158,7 +158,10 @@ final class PreviewCardView: NSView {
     let displayLayer = AVSampleBufferDisplayLayer()
     let staticLayer = CALayer()   // static-frame fallback when no live first frame
     private let border = CALayer()
-    private let controls = NSView()
+    private let controls = NSVisualEffectView()
+    private var controlsVisible = false
+    private var reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    private var dismissing = false
     private var hoverArea: NSTrackingArea?
     private let statusText = CATextLayer()
     private let pointer = CAShapeLayer()
@@ -174,9 +177,9 @@ final class PreviewCardView: NSView {
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = NSColor.black.cgColor
         layer?.addSublayer(displayLayer)
-        layer?.cornerRadius = 10
+        layer?.cornerRadius = 8
         layer?.masksToBounds = true
-        border.cornerRadius = 10
+        border.cornerRadius = 8
         border.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
         border.borderWidth = 0.5
         border.backgroundColor = NSColor.clear.cgColor
@@ -188,37 +191,84 @@ final class PreviewCardView: NSView {
         statusText.contentsScale = 2
         statusText.isHidden = true
         layer?.addSublayer(statusText)
+        pointer.name = "agent-pointer"
+        let arrow = CGMutablePath()
+        arrow.addLines(between: [.zero, CGPoint(x: 2, y: -14),
+            CGPoint(x: 5, y: -10), CGPoint(x: 10, y: -9)])
+        arrow.closeSubpath()
+        pointer.path = arrow
+        pointer.shadowColor = NSColor.black.cgColor
+        pointer.shadowOpacity = 0.3
+        pointer.shadowRadius = 2
+        pointer.shadowOffset = CGSize(width: 0, height: -1)
         pointer.fillColor = NSColor.white.cgColor
         pointer.strokeColor = NSColor.black.cgColor
         pointer.lineWidth = 1
         pointer.opacity = 0
         clickRing.fillColor = nil
-        clickRing.strokeColor = NSColor.systemCyan.cgColor
+        clickRing.strokeColor = NSColor.systemPurple.withAlphaComponent(0.85).cgColor
         clickRing.lineWidth = 2
         clickRing.opacity = 0
         layer?.addSublayer(clickRing)
         layer?.addSublayer(pointer)
-        for (index, title) in ["Stop", "×"].enumerated() {
-            let button = NSButton(title: title, target: self,
-                                  action: index == 0 ? #selector(stopTarget) : #selector(closePreview))
-            button.frame = NSRect(x: index == 0 ? 0 : 56, y: 0,
-                                  width: index == 0 ? 54 : 26, height: 26)
-            button.bezelStyle = .rounded
-            button.setAccessibilityLabel(index == 0 ? "Stop this target" : "Close preview")
+        controls.material = .hudWindow
+        controls.blendingMode = .withinWindow
+        controls.state = .active
+        controls.appearance = NSAppearance(named: .darkAqua)
+        controls.wantsLayer = true
+        controls.layer?.cornerRadius = 13
+        controls.layer?.masksToBounds = true
+        for (index, symbol) in ["stop.fill", "xmark"].enumerated() {
+            let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil)!,
+                                  target: self, action: index == 0 ? #selector(stopTarget) : #selector(closePreview))
+            button.frame = NSRect(x: 3 + index * 26, y: 2, width: 26, height: 22)
+            button.isBordered = false
+            button.contentTintColor = .white
+            let label = index == 0 ? "Stop this target" : "Close preview"
+            button.setAccessibilityLabel(label)
+            button.toolTip = label
             controls.addSubview(button)
         }
         controls.isHidden = true
+        controls.alphaValue = 0
         addSubview(controls)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(accessibilityChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+    }
+    deinit { NSWorkspace.shared.notificationCenter.removeObserver(self) }
+    @objc private func accessibilityChanged() {
+        setReducedMotion(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+    }
+    func setReducedMotion(_ enabled: Bool) {
+        reducedMotion = enabled
+        if enabled {
+            layer?.removeAllAnimations()
+            pointer.removeAllAnimations()
+            clickRing.removeAllAnimations()
+        }
     }
     @objc private func stopTarget() {
+        // Close the input gate immediately; only the visual departure is delayed.
         emit(["event": "stop-target"])
-        window?.orderOut(nil)
-        exit(0)
+        dismiss { exit(0) }
     }
     @objc private func closePreview() {
         emit(["event": "close-preview"])
-        window?.orderOut(nil)
-        exit(0)
+        dismiss { exit(0) }
+    }
+    func dismiss(completion: @escaping () -> Void) {
+        guard !dismissing else { return }
+        dismissing = true
+        hideFeedback?.cancel()
+        window?.ignoresMouseEvents = true
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = reducedMotion ? 0 : 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            window?.animator().alphaValue = 0
+        } completionHandler: {
+            self.window?.orderOut(nil)
+            completion()
+        }
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -228,34 +278,89 @@ final class PreviewCardView: NSView {
         addTrackingArea(area)
         hoverArea = area
     }
-    override func mouseEntered(with event: NSEvent) { controls.isHidden = false }
-    override func mouseExited(with event: NSEvent) { controls.isHidden = true }
+    override func mouseEntered(with event: NSEvent) { setControlsVisible(true) }
+    override func mouseExited(with event: NSEvent) { setControlsVisible(false) }
+    private func setControlsVisible(_ visible: Bool) {
+        controlsVisible = visible
+        if visible { controls.isHidden = false }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = reducedMotion ? 0 : 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            controls.animator().alphaValue = visible ? 1 : 0
+        } completionHandler: {
+            if !self.controlsVisible { self.controls.isHidden = true }
+        }
+    }
 
     func showStatus(_ message: String?) {
         statusText.string = message
         statusText.isHidden = message == nil
+        if message != nil {
+            hideFeedback?.cancel()
+            pointer.removeAllAnimations()
+            clickRing.removeAllAnimations()
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            pointer.opacity = 0
+            clickRing.opacity = 0
+            CATransaction.commit()
+            if window?.alphaValue == 0 { fadeIn() }
+        }
     }
 
     func feedback(at point: CGPoint, click: Bool) {
+        guard !dismissing else { return }
         hideFeedback?.cancel()
-        let path = CGMutablePath()
-        path.addLines(between: [point, CGPoint(x: point.x + 2, y: point.y - 14),
-            CGPoint(x: point.x + 5, y: point.y - 10), CGPoint(x: point.x + 10, y: point.y - 9)])
-        path.closeSubpath()
+        // Retarget from the visible position, never from the previous destination.
+        let origin = pointer.presentation()?.position ?? pointer.position
+        let opacity = pointer.presentation()?.opacity ?? pointer.opacity
+        let visible = opacity > 0
+        let distance = hypot(point.x - origin.x, point.y - origin.y)
+        let duration = reducedMotion || !visible ? 0 : min(0.22, max(0.08, Double(distance) / 700))
+        pointer.removeAllAnimations()
+        clickRing.removeAllAnimations()
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        pointer.path = path
+        pointer.position = point
         pointer.opacity = 1
+        clickRing.position = point
+        clickRing.path = CGPath(ellipseIn: CGRect(x: -12, y: -12, width: 24, height: 24), transform: nil)
         CATransaction.commit()
-        if click {
-            let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            clickRing.path = CGPath(ellipseIn: CGRect(x: point.x - 14, y: point.y - 14,
-                                                     width: 28, height: 28), transform: nil)
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = 1; fade.toValue = 0
-            fade.duration = reduced ? 0.1 : 0.24
-            clickRing.add(fade, forKey: "click")
+        if !reducedMotion && opacity < 1 {
+            let appear = CABasicAnimation(keyPath: "opacity")
+            appear.fromValue = opacity; appear.toValue = 1; appear.duration = 0.1
+            pointer.add(appear, forKey: "fade")
         }
-        let hide = DispatchWorkItem { [weak self] in self?.pointer.opacity = 0 }
+        if duration > 0 {
+            let move = CABasicAnimation(keyPath: "position")
+            move.fromValue = NSValue(point: origin); move.toValue = NSValue(point: point)
+            move.duration = duration
+            move.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+            pointer.add(move, forKey: "move")
+        }
+        if click {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0.9; fade.toValue = 0
+            let expand = CABasicAnimation(keyPath: "transform.scale")
+            expand.fromValue = 0.35; expand.toValue = 1.25
+            let group = CAAnimationGroup()
+            group.animations = reducedMotion ? [fade] : [fade, expand]
+            group.duration = reducedMotion ? 0.1 : 0.32
+            fade.duration = group.duration
+            expand.duration = group.duration
+            group.beginTime = CACurrentMediaTime() + duration
+            group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            clickRing.add(group, forKey: "click")
+        }
+        let hide = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            self.pointer.opacity = 0
+            CATransaction.commit()
+            if !self.reducedMotion {
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = 1; fade.toValue = 0; fade.duration = 0.2
+                self.pointer.add(fade, forKey: "fade")
+            }
+        }
         hideFeedback = hide
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: hide)
     }
@@ -278,9 +383,17 @@ final class PreviewCardView: NSView {
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    /// 120 ms fade-in when the first frame appears (Spec §6.1 card fade).
-    func fadeIn(duration: CFTimeInterval = 0.12) {
-        layer?.removeAnimation(forKey: "fadeIn")
+    /// Reveal only when content (or an explicit unavailable status) is ready.
+    func fadeIn(duration: CFTimeInterval = 0.22) {
+        guard !dismissing else { return }
+        window?.alphaValue = 1
+        layer?.removeAllAnimations()
+        guard !reducedMotion else { return }
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 0.96; scale.toValue = 1
+        scale.duration = duration
+        scale.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+        layer?.add(scale, forKey: "appear")
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0.0
         fade.toValue = 1.0
@@ -296,7 +409,7 @@ final class PreviewCardView: NSView {
         staticLayer.frame = bounds
         displayLayer.frame = bounds
         border.frame = bounds
-        controls.frame = NSRect(x: max(0, bounds.width - 90), y: bounds.height - 34, width: 82, height: 26)
+        controls.frame = NSRect(x: max(0, bounds.width - 64), y: bounds.height - 32, width: 58, height: 26)
         statusText.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 22)
         CATransaction.commit()
     }
@@ -337,7 +450,7 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
 
     let sourceSize = scWindow?.frame.size ?? CGSize(width: scDisplay?.width ?? 320,
                                                     height: scDisplay?.height ?? 200)
-    let ratio = min(320 / max(1, sourceSize.width), 240 / max(1, sourceSize.height))
+    let ratio = min(200 / max(1, sourceSize.width), 150 / max(1, sourceSize.height))
     let cardRect = NSRect(x: 0, y: 0, width: max(1, sourceSize.width * ratio),
                           height: max(1, sourceSize.height * ratio))
     let card = PreviewCardView(frame: cardRect)
@@ -355,11 +468,12 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
     if let screen = NSScreen.main {
         let v = screen.visibleFrame
         let slot = max(0, Int(ProcessInfo.processInfo.environment["CU_PREVIEW_SLOT"] ?? "0") ?? 0)
-        let proposed = NSRect(x: v.maxX - cardRect.width - 24 - CGFloat(slot % 2) * 344,
-                              y: v.maxY - cardRect.height - 24 - CGFloat(slot / 2) * 264,
+        let proposed = NSRect(x: v.maxX - cardRect.width - 24 - CGFloat(slot % 2) * 216,
+                              y: v.maxY - cardRect.height - 24 - CGFloat(slot / 2) * 166,
                               width: cardRect.width, height: cardRect.height)
         panel.setFrame(PreviewGeometry.constrainCard(proposed, to: v), display: true)
     }
+    panel.alphaValue = 0
     panel.orderFrontRegardless()
     let previewWindowId = panel.windowNumber
     card.onMoved = { frame in
@@ -396,6 +510,7 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
                     card.staticLayer.contents = image
                     card.displayLayer.isHidden = true
                     card.showStatus("Still image")
+                    card.fadeIn()
                 }
                 result = ["ok": true, "mode": "static", "pixelWidth": image.width,
                           "pixelHeight": image.height,
@@ -465,7 +580,7 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
     let shrink = min(1.0, 1280.0 / longest)
     config.width = Int(rect.width * shrink)
     config.height = Int(rect.height * shrink)
-    config.minimumFrameInterval = CMTime(value: 1, timescale: 15)
+    config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
     config.queueDepth = 3
     config.showsCursor = false
     if #available(macOS 14.2, *) { config.ignoreShadowsSingleWindow = true }
@@ -490,7 +605,7 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
         let first = capture.firstFrameAt.map { Int($0.timeIntervalSince(start) * 1000) }
         emit(["ok": capture.frames > 0, "preview": "shown", "frames": capture.frames,
               "firstFrameMs": first ?? NSNull()])
-        exit(capture.frames > 0 ? 0 : 1)
+        card.dismiss { exit(capture.frames > 0 ? 0 : 1) }
     }
     // R7 / Spec §6.3: if the live stream produces no valid first frame within
     // 1500 ms, cancel it and degrade to ONE static frame with an explicit status
@@ -592,8 +707,7 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
         if ProcessInfo.processInfo.environment["CU_PREVIEW_OWNED_BY_HELPER"] == "1" {
             DispatchQueue.main.async {
                 stream.stopCapture { _ in }
-                panel.orderOut(nil)
-                exit(0)
+                card.dismiss { exit(0) }
             }
         }
     }
