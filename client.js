@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } = React;
 
     const NS = "dsh-super-computer-use";
-    const CLIENT_VERSION = "0.4.1";
+    const CLIENT_VERSION = "0.5.0";
     const STATE_PATH = "/api/scu/state";
     const CONTROL_PATH = "/api/scu/control";
     const PREVIEW_PATH = "/api/scu/preview";
@@ -144,6 +144,41 @@ window.__ModuleLoader__.load({
         "meta.fps": "{fps} fps",
         "meta.none": "—",
         "perm.openSettings": "Open System Settings",
+        "native.nav": "Computer Use",
+        "native.subtitle": "Desktop control, permissions and preferences",
+        "native.refresh": "Refresh",
+        "native.loading": "Loading…",
+        "native.error": "Could not reach the Computer Use service: {error}",
+        "native.section.enable": "Enable computer use",
+        "native.section.enableHint": "When off, every action is refused except status, stop and resume.",
+        "native.section.mode": "How the agent uses the apps you allow",
+        "native.section.modeHint": "Background keeps other apps visible. Full control hides unrelated apps by default.",
+        "native.mode.background": "Background",
+        "native.mode.full": "Full control",
+        "native.section.denied": "Denied apps",
+        "native.section.deniedHint": "One app name per line. Matching ignores case.",
+        "native.section.deniedEmpty": "No apps denied. Add an app to refuse every request for it.",
+        "native.section.unhide": "Unhide apps when it finishes",
+        "native.section.unhideHint": "Restore apps hidden by a full-control session when it stops.",
+        "native.permissions": "Permissions",
+        "native.accessibility": "Accessibility",
+        "native.screenRecording": "Screen recording",
+        "native.granted": "Granted",
+        "native.notGranted": "Not granted",
+        "native.unknown": "Unknown",
+        "native.storage": "Storage",
+        "native.storageHint": "Space used by Computer Use on this Mac (top-level files).",
+        "native.activity": "Current activity",
+        "native.idle": "Idle",
+        "native.active": "Controlling {app}",
+        "native.targets": "{count} targets",
+        "native.stopAll": "Stop all",
+        "native.save": "Save",
+        "native.saving": "Saving…",
+        "native.saved": "Saved",
+        "native.close": "Close",
+        "native.kb": "{kb} KB",
+        "native.openSettings": "Open System Settings",
       },
       zh: {
         "card.expand": "展开",
@@ -210,6 +245,41 @@ window.__ModuleLoader__.load({
         "meta.fps": "{fps} fps",
         "meta.none": "—",
         "perm.openSettings": "打开系统设置授权",
+        "native.nav": "电脑控制",
+        "native.subtitle": "桌面操控、权限与偏好",
+        "native.refresh": "刷新",
+        "native.loading": "加载中…",
+        "native.error": "无法连接 Computer Use 服务：{error}",
+        "native.section.enable": "启用电脑控制",
+        "native.section.enableHint": "关闭后，除状态、停止与恢复外，所有动作都会被拒绝。",
+        "native.section.mode": "Agent 如何使用允许的应用",
+        "native.section.modeHint": "后台保留其他应用可见；完全控制默认隐藏无关应用。",
+        "native.mode.background": "后台",
+        "native.mode.full": "完全控制",
+        "native.section.denied": "拒绝的应用",
+        "native.section.deniedHint": "每行一个应用名，匹配不区分大小写。",
+        "native.section.deniedEmpty": "没有拒绝的应用。添加应用后会自动拒绝对它的请求。",
+        "native.section.unhide": "结束时恢复隐藏的应用",
+        "native.section.unhideHint": "完全控制会话结束时，恢复被它隐藏的应用。",
+        "native.permissions": "权限",
+        "native.accessibility": "辅助功能",
+        "native.screenRecording": "屏幕录制",
+        "native.granted": "已授权",
+        "native.notGranted": "未授权",
+        "native.unknown": "未知",
+        "native.storage": "存储",
+        "native.storageHint": "Computer Use 在这台 Mac 上占用的空间（仅顶层文件）。",
+        "native.activity": "当前状态",
+        "native.idle": "空闲",
+        "native.active": "正在操控 {app}",
+        "native.targets": "{count} 个目标",
+        "native.stopAll": "全部停止",
+        "native.save": "保存",
+        "native.saving": "保存中…",
+        "native.saved": "已保存",
+        "native.close": "关闭",
+        "native.kb": "{kb} KB",
+        "native.openSettings": "打开系统设置",
       },
     };
 
@@ -1570,8 +1640,45 @@ window.__ModuleLoader__.load({
 @keyframes scu-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes scu-rise { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
 @keyframes scu-pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+/* Native settings section + first-class sidebar panel. Inherit the host theme:
+   these surfaces live outside the chat card, so they use the shell's tokens. */
+.scu-native { color: var(--scu-fg, inherit); font-size: 13px; line-height: 1.55; }
+.scu-native-wrap { max-width: 760px; margin: 0 auto; padding: 28px 26px 48px; }
+.scu-native-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 22px; }
+.scu-native-head h2 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -.01em; }
+.scu-native-head p { margin: 3px 0 0; color: var(--scu-fg2, #888); font-size: 12px; }
+.scu-native-head .scu-native-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.scu-native-card { border: 1px solid var(--scu-line, rgba(127,127,127,.25)); border-radius: 14px; padding: 16px 18px; margin-bottom: 14px; background: rgba(127,127,127,.045); }
+.scu-native-card > h3 { margin: 0 0 12px; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--scu-fg2, #888); }
+.scu-native-row { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--scu-line, rgba(127,127,127,.18)); }
+.scu-native-row:last-child { border-bottom: 0; }
+.scu-native-row-main { flex: 1 1 auto; min-width: 0; }
+.scu-native-row-main b { display: block; font-weight: 600; font-size: 13px; }
+.scu-native-row-main small { display: block; color: var(--scu-fg2, #888); font-size: 11.5px; margin-top: 2px; }
+.scu-native-switch { flex: 0 0 auto; width: 40px; height: 23px; border-radius: 99px; border: 1px solid var(--scu-line, rgba(127,127,127,.35)); background: rgba(127,127,127,.18); cursor: pointer; position: relative; padding: 0; }
+.scu-native-switch[aria-pressed="true"] { background: #2f7cf6; border-color: #2f7cf6; }
+.scu-native-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px; border-radius: 50%; background: #fff; transition: transform .16s ease; }
+.scu-native-switch[aria-pressed="true"]::after { transform: translateX(17px); }
+.scu-native-seg { display: inline-flex; border: 1px solid var(--scu-line, rgba(127,127,127,.35)); border-radius: 9px; overflow: hidden; flex: 0 0 auto; }
+.scu-native-seg button { border: 0; background: transparent; color: inherit; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+.scu-native-seg button[aria-pressed="true"] { background: #2f7cf6; color: #fff; }
+.scu-native-btn { border: 1px solid var(--scu-line, rgba(127,127,127,.35)); background: transparent; color: inherit; border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+.scu-native-btn:hover { background: rgba(127,127,127,.1); }
+.scu-native-btn:disabled { opacity: .5; cursor: default; }
+.scu-native-btn-primary { background: #2f7cf6; border-color: #2f7cf6; color: #fff; }
+.scu-native-textarea { width: 100%; min-height: 74px; box-sizing: border-box; resize: vertical; border-radius: 9px; border: 1px solid var(--scu-line, rgba(127,127,127,.35)); background: transparent; color: inherit; padding: 9px 11px; font: inherit; font-size: 12px; }
+.scu-native-badge { flex: 0 0 auto; font-size: 11px; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--scu-line, rgba(127,127,127,.35)); }
+.scu-native-badge[data-ok="true"] { color: #17803d; border-color: rgba(23,128,61,.45); background: rgba(23,128,61,.09); }
+.scu-native-badge[data-ok="false"] { color: #b3472e; border-color: rgba(179,71,46,.45); background: rgba(179,71,46,.09); }
+.scu-native-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.scu-native-stat { border: 1px solid var(--scu-line, rgba(127,127,127,.22)); border-radius: 11px; padding: 12px 14px; }
+.scu-native-stat b { display: block; font-size: 16px; font-weight: 650; }
+.scu-native-stat small { color: var(--scu-fg2, #888); font-size: 11px; }
+.scu-native-note { color: var(--scu-fg2, #888); font-size: 11.5px; margin-top: 10px; }
+.scu-native-error { color: #b3472e; font-size: 12px; margin-bottom: 12px; }
 @media (prefers-reduced-motion: reduce) {
   .scu-card, .scu-backdrop, .scu-panel, .scu-dot { animation: none !important; transition: none !important; }
+  .scu-native-switch::after { transition: none !important; }
 }
 `;
 
@@ -2376,6 +2483,469 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // ---------------------------------------------------------------- native UI
+    //
+    // A first-class sidebar entry (sidebar.panellist + main) and a real settings
+    // page (settings.section). Both read one authenticated route, so the panel
+    // and the page can never disagree about what is enabled.
+
+    const NativeUI = { ctx: null };
+    const SETTINGS_PATH = "/api/scu/settings";
+    const NATIVE_POLL_MS = 5000;
+
+    function useNativeT() {
+      const ctx = NativeUI.ctx ?? { get: () => null };
+      return useLocale(ctx).t;
+    }
+
+    function useNativeSnapshot() {
+      const [state, setState] = useState({ loading: true, data: null, error: null });
+      const load = useCallback(async () => {
+        try {
+          const data = await postJson(SETTINGS_PATH, { action: "get" });
+          setState({ loading: false, data, error: null });
+        } catch (error) {
+          setState((prev) => ({
+            loading: false,
+            data: prev.data,
+            error: String(error?.message ?? error),
+          }));
+        }
+      }, []);
+      useEffect(() => {
+        load();
+        const timer = setInterval(load, NATIVE_POLL_MS);
+        return () => clearInterval(timer);
+      }, [load]);
+      return { ...state, reload: load };
+    }
+
+    async function openPermissionSettings(target) {
+      try {
+        await postJson(CONTROL_PATH, { command: "open_settings", target });
+      } catch {
+        // A shortcut to System Settings is not a state machine. The next poll
+        // reports the real permission bits; never show a fake "Granted".
+      }
+    }
+
+    async function stopAllFromPanel(ownerSessionId) {
+      if (!ownerSessionId) return;
+      try {
+        await postJson(CONTROL_PATH, { hostSessionId: ownerSessionId, command: "stop" });
+      } catch {
+        // The poll reports the honest stopped/unknown state afterwards.
+      }
+    }
+
+    function PermissionRow({ t, label, value, available, target }) {
+      const known = available === true;
+      return h(
+        "div",
+        { className: "scu-native-row" },
+        h("div", { className: "scu-native-row-main" }, h("b", null, label)),
+        h(
+          "span",
+          { className: "scu-native-badge", "data-ok": known ? String(Boolean(value)) : "null" },
+          known
+            ? value === true
+              ? t("native.granted")
+              : t("native.notGranted")
+            : t("native.unknown"),
+        ),
+        h(
+          "button",
+          {
+            className: "scu-native-btn",
+            type: "button",
+            onClick: () => openPermissionSettings(target),
+          },
+          t("native.openSettings"),
+        ),
+      );
+    }
+
+    function SidebarIcon(props) {
+      const size = props && typeof props.size === "number" ? props.size : 16;
+      // The host draws the row, selected state, tooltip and aria-label. Only a
+      // bare glyph here: a fixed-size wrapper would misalign the icon column.
+      return h(
+        "svg",
+        {
+          viewBox: "0 0 24 24",
+          width: size,
+          height: size,
+          "aria-hidden": "true",
+          style: {
+            display: "block",
+            fill: "none",
+            stroke: "currentColor",
+            strokeWidth: 1.7,
+            strokeLinecap: "round",
+            strokeLinejoin: "round",
+          },
+        },
+        h("rect", { x: 2.5, y: 4, width: 19, height: 13, rx: 2 }),
+        h("path", { d: "M8 21h8" }),
+        h("path", { d: "M12 17v4" }),
+        h("path", { d: "m9.5 9 3 3-1.3 1.3L14.5 14" }),
+      );
+    }
+
+    /** Central panel selected by the sidebar entry. Root-scoped: no session id. */
+    function NativePanel() {
+      const t = useNativeT();
+      const snap = useNativeSnapshot();
+      const [busy, setBusy] = useState(false);
+      const data = snap.data;
+      return h(
+        "div",
+        { className: "scu-native" },
+        h(
+          "div",
+          { className: "scu-native-wrap" },
+          h(
+            "div",
+            { className: "scu-native-head" },
+            h(
+              "div",
+              null,
+              h("h2", null, t("native.nav")),
+              h("p", null, t("native.subtitle")),
+            ),
+            h(
+              "div",
+              { className: "scu-native-actions" },
+              h(
+                "button",
+                { className: "scu-native-btn", type: "button", onClick: snap.reload },
+                t("native.refresh"),
+              ),
+              h(
+                "button",
+                {
+                  className: "scu-native-btn",
+                  type: "button",
+                  disabled: !data?.ownerSessionId || busy,
+                  onClick: async () => {
+                    setBusy(true);
+                    await stopAllFromPanel(data?.ownerSessionId);
+                    setBusy(false);
+                    snap.reload();
+                  },
+                },
+                t("native.stopAll"),
+              ),
+            ),
+          ),
+          snap.error
+            ? h("div", { className: "scu-native-error" }, t("native.error", { error: snap.error }))
+            : null,
+          !data && snap.loading
+            ? h("div", { className: "scu-native-note" }, t("native.loading"))
+            : null,
+          data
+            ? h(
+                "div",
+                { className: "scu-native-grid" },
+                h(
+                  "div",
+                  { className: "scu-native-stat" },
+                  h(
+                    "b",
+                    null,
+                    data.activity?.active
+                      ? t("native.active", { app: data.activity.app || "—" })
+                      : t("native.idle"),
+                  ),
+                  h("small", null, t("native.targets", { count: data.activity?.targetCount ?? 0 })),
+                ),
+                h(
+                  "div",
+                  { className: "scu-native-stat" },
+                  h(
+                    "b",
+                    null,
+                    data.settings?.enabled === false ? t("native.notGranted") : t("native.granted"),
+                  ),
+                  h("small", null, t("native.section.enable")),
+                ),
+                h(
+                  "div",
+                  { className: "scu-native-stat" },
+                  h(
+                    "b",
+                    null,
+                    data.storageBytes == null
+                      ? "—"
+                      : t("native.kb", { kb: Math.round(data.storageBytes / 1024) }),
+                  ),
+                  h("small", null, t("native.storage")),
+                ),
+              )
+            : null,
+          data
+            ? h(
+                "div",
+                { className: "scu-native-card" },
+                h("h3", null, t("native.permissions")),
+                h(PermissionRow, {
+                  t,
+                  label: t("native.accessibility"),
+                  value: data.permissions?.accessibility,
+                  available: data.permissions?.available,
+                  target: "accessibility",
+                }),
+                h(PermissionRow, {
+                  t,
+                  label: t("native.screenRecording"),
+                  value: data.permissions?.screenRecording,
+                  available: data.permissions?.available,
+                  target: "screenRecording",
+                }),
+              )
+            : null,
+        ),
+      );
+    }
+
+    /** The real settings.section page. Host passes { close }. */
+    function SettingsSection(props) {
+      const t = useNativeT();
+      const snap = useNativeSnapshot();
+      const [draft, setDraft] = useState(null);
+      const [saving, setSaving] = useState(false);
+      const [message, setMessage] = useState("");
+      const current = snap.data?.settings ?? null;
+      const effective = draft ?? current;
+      const patch = (key, value) => setDraft({ ...(effective ?? {}), [key]: value });
+      const deniedText = (effective?.deniedApps ?? []).join("\n");
+
+      const save = async () => {
+        if (!draft || !effective) return;
+        setSaving(true);
+        setMessage("");
+        try {
+          await postJson(SETTINGS_PATH, {
+            action: "set",
+            patch: {
+              enabled: effective.enabled !== false,
+              controlMode: effective.controlMode === "full" ? "full" : "background",
+              deniedApps: Array.isArray(effective.deniedApps) ? effective.deniedApps : [],
+              unhideOnFinish: effective.unhideOnFinish !== false,
+            },
+          });
+          setDraft(null);
+          setMessage(t("native.saved"));
+          await snap.reload();
+        } catch (error) {
+          setMessage(String(error?.message ?? error));
+        } finally {
+          setSaving(false);
+        }
+      };
+
+      return h(
+        "div",
+        { className: "scu-native" },
+        h(
+          "div",
+          { className: "scu-native-wrap" },
+          h(
+            "div",
+            { className: "scu-native-head" },
+            h(
+              "div",
+              null,
+              h("h2", null, t("native.nav")),
+              h("p", null, t("native.subtitle")),
+            ),
+            h(
+              "div",
+              { className: "scu-native-actions" },
+              h(
+                "button",
+                { className: "scu-native-btn", type: "button", onClick: snap.reload },
+                t("native.refresh"),
+              ),
+              h(
+                "button",
+                {
+                  className: "scu-native-btn scu-native-btn-primary",
+                  type: "button",
+                  disabled: !draft || saving,
+                  onClick: save,
+                },
+                saving ? t("native.saving") : t("native.save"),
+              ),
+              typeof props?.close === "function"
+                ? h(
+                    "button",
+                    { className: "scu-native-btn", type: "button", onClick: props.close },
+                    t("native.close"),
+                  )
+                : null,
+            ),
+          ),
+          snap.error
+            ? h("div", { className: "scu-native-error" }, t("native.error", { error: snap.error }))
+            : null,
+          !effective && snap.loading
+            ? h("div", { className: "scu-native-note" }, t("native.loading"))
+            : null,
+          message ? h("div", { className: "scu-native-note" }, message) : null,
+          effective
+            ? h(
+                "div",
+                { className: "scu-native-card" },
+                h(
+                  "div",
+                  { className: "scu-native-row" },
+                  h(
+                    "div",
+                    { className: "scu-native-row-main" },
+                    h("b", null, t("native.section.enable")),
+                    h("small", null, t("native.section.enableHint")),
+                  ),
+                  h("button", {
+                    className: "scu-native-switch",
+                    type: "button",
+                    "aria-pressed": String(effective.enabled !== false),
+                    "aria-label": t("native.section.enable"),
+                    onClick: () => patch("enabled", effective.enabled === false),
+                  }),
+                ),
+                h(
+                  "div",
+                  { className: "scu-native-row" },
+                  h(
+                    "div",
+                    { className: "scu-native-row-main" },
+                    h("b", null, t("native.section.mode")),
+                    h("small", null, t("native.section.modeHint")),
+                  ),
+                  h(
+                    "div",
+                    { className: "scu-native-seg" },
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        "aria-pressed": String(effective.controlMode !== "full"),
+                        onClick: () => patch("controlMode", "background"),
+                      },
+                      t("native.mode.background"),
+                    ),
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        "aria-pressed": String(effective.controlMode === "full"),
+                        onClick: () => patch("controlMode", "full"),
+                      },
+                      t("native.mode.full"),
+                    ),
+                  ),
+                ),
+                h(
+                  "div",
+                  { className: "scu-native-row" },
+                  h(
+                    "div",
+                    { className: "scu-native-row-main" },
+                    h("b", null, t("native.section.denied")),
+                    h("small", null, t("native.section.deniedHint")),
+                    h("textarea", {
+                      className: "scu-native-textarea",
+                      value: deniedText,
+                      "aria-label": t("native.section.denied"),
+                      onChange: (event) =>
+                        patch(
+                          "deniedApps",
+                          String(event?.target?.value ?? "")
+                            .split("\n")
+                            .map((line) => line.trim())
+                            .filter(Boolean),
+                        ),
+                    }),
+                    deniedText ? null : h("small", null, t("native.section.deniedEmpty")),
+                  ),
+                ),
+                h(
+                  "div",
+                  { className: "scu-native-row" },
+                  h(
+                    "div",
+                    { className: "scu-native-row-main" },
+                    h("b", null, t("native.section.unhide")),
+                    h("small", null, t("native.section.unhideHint")),
+                  ),
+                  h("button", {
+                    className: "scu-native-switch",
+                    type: "button",
+                    "aria-pressed": String(effective.unhideOnFinish !== false),
+                    "aria-label": t("native.section.unhide"),
+                    onClick: () => patch("unhideOnFinish", effective.unhideOnFinish === false),
+                  }),
+                ),
+              )
+            : null,
+          snap.data
+            ? h(
+                "div",
+                { className: "scu-native-card" },
+                h("h3", null, t("native.permissions")),
+                h(PermissionRow, {
+                  t,
+                  label: t("native.accessibility"),
+                  value: snap.data.permissions?.accessibility,
+                  available: snap.data.permissions?.available,
+                  target: "accessibility",
+                }),
+                h(PermissionRow, {
+                  t,
+                  label: t("native.screenRecording"),
+                  value: snap.data.permissions?.screenRecording,
+                  available: snap.data.permissions?.available,
+                  target: "screenRecording",
+                }),
+              )
+            : null,
+          snap.data
+            ? h(
+                "div",
+                { className: "scu-native-card" },
+                h("h3", null, t("native.storage")),
+                h(
+                  "div",
+                  { className: "scu-native-row" },
+                  h(
+                    "div",
+                    { className: "scu-native-row-main" },
+                    h(
+                      "b",
+                      null,
+                      snap.data.storageBytes == null
+                        ? t("native.unknown")
+                        : t("native.kb", { kb: Math.round(snap.data.storageBytes / 1024) }),
+                    ),
+                    h("small", null, t("native.storageHint")),
+                  ),
+                ),
+              )
+            : null,
+        ),
+      );
+    }
+
+    function nativeNavLabel() {
+      const lang =
+        typeof navigator !== "undefined" && typeof navigator.language === "string"
+          ? navigator.language
+          : "en";
+      return lang.toLowerCase().startsWith("zh") ? "电脑控制" : "Computer Use";
+    }
+
     // ---------------------------------------------------------------- plugin
 
     return {
@@ -2385,12 +2955,14 @@ window.__ModuleLoader__.load({
       // cheaper and more honest than a second copy of the lifecycle logic.
       __test: {
         SessionStore, PreviewController, CuCard, Overlay, ControlDeck,
+        NativePanel, SettingsSection, SidebarIcon,
         storeFor, expansion, activeDeckSession,
       },
       apply(ctx) {
         CuCard.ctx = ctx;
         Overlay.ctx = ctx;
         ControlDeck.ctx = ctx;
+        NativeUI.ctx = ctx;
 
         const locale = ctx.get("locale");
         if (locale && typeof locale.register === "function") {
@@ -2444,6 +3016,38 @@ window.__ModuleLoader__.load({
             try { disposeOverlay?.(); } catch { /* teardown continues */ }
           };
         });
+
+        // First-class entry + real settings page. Both are declared root-scoped
+        // list/keyed slots: the host owns the sidebar row, the central panel
+        // switch and the settings navigation, so no shell UI is replaced.
+        ctx.slots.inject("sidebar.panellist", () =>
+          ctx.slots.register(
+            {
+              name: "sidebar.panellist",
+              id: "computer-use",
+              order: 25,
+              label: nativeNavLabel,
+            },
+            SidebarIcon,
+          ),
+        );
+        ctx.slots.inject("main", () =>
+          ctx.slots.register(
+            { name: "main", key: "computer-use" },
+            NativePanel,
+          ),
+        );
+        ctx.slots.inject("settings.section", () =>
+          ctx.slots.register(
+            {
+              name: "settings.section",
+              id: "computer-use",
+              order: 35,
+              label: nativeNavLabel,
+            },
+            SettingsSection,
+          ),
+        );
 
         if (typeof window !== "undefined") {
           window.__SCU_CLIENT__ = {
