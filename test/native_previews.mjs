@@ -205,3 +205,26 @@ test('a final badge command cannot reach a replacement generation', async () => 
  assert.match(lines[0].join(''),/last-action-verified/);
  assert.doesNotMatch(lines[1].join(''),/last-action-verified/);
 });
+
+test('reusing a slot dismisses its verified result and preserves the sibling result', async () => {
+  const previews = new NativePreviews({
+    launch: () => spawn(process.execPath, ['-e', 'process.stdin.resume(); setInterval(() => {}, 1000)'],
+      { stdio: ['pipe', 'pipe', 'ignore'] }),
+    onEvent: () => {},
+    keepAlive: true,
+  });
+  try {
+    previews.open({ targetId: 'first', generation: 1, windowId: 11, slot: 0 });
+    previews.open({ targetId: 'second', generation: 1, windowId: 22, slot: 1 });
+    const first = previews.entries.get('first').child;
+    const second = previews.entries.get('second').child;
+    previews.close(undefined, new Map([['first', 1], ['second', 1]]));
+    const firstExit = once(first, 'exit');
+    previews.open({ targetId: 'next', generation: 2, windowId: 33, slot: 0 });
+    assert.equal(first.killed, true);
+    assert.equal(second.killed, false);
+    await firstExit;
+  } finally {
+    previews.close();
+  }
+});

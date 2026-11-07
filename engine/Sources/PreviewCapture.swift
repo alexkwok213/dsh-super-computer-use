@@ -162,6 +162,7 @@ final class PreviewCardView: NSView {
     private var controlsVisible = false
     private var reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     private var dismissing = false
+    private(set) var showingVerifiedResult = false
     private var hoverArea: NSTrackingArea?
     private let statusText = CATextLayer()
     private let pointer = CAShapeLayer()
@@ -177,9 +178,9 @@ final class PreviewCardView: NSView {
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = NSColor.black.cgColor
         layer?.addSublayer(displayLayer)
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = 3
         layer?.masksToBounds = true
-        border.cornerRadius = 8
+        border.cornerRadius = 3
         border.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
         border.borderWidth = 0.5
         border.backgroundColor = NSColor.clear.cgColor
@@ -218,13 +219,13 @@ final class PreviewCardView: NSView {
         controls.wantsLayer = true
         controls.layer?.cornerRadius = 13
         controls.layer?.masksToBounds = true
-        for (index, symbol) in ["stop.fill", "xmark"].enumerated() {
+        for (index, symbol) in ["xmark", "stop.fill"].enumerated() {
             let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil)!,
-                                  target: self, action: index == 0 ? #selector(stopTarget) : #selector(closePreview))
+                                  target: self, action: index == 0 ? #selector(closePreview) : #selector(stopTarget))
             button.frame = NSRect(x: 3 + index * 26, y: 2, width: 26, height: 22)
             button.isBordered = false
             button.contentTintColor = .white
-            let label = index == 0 ? "Stop this target" : "Close preview"
+            let label = index == 0 ? "Close preview" : "Stop this target"
             button.setAccessibilityLabel(label)
             button.toolTip = label
             controls.addSubview(button)
@@ -256,52 +257,55 @@ final class PreviewCardView: NSView {
         emit(["event": "close-preview"])
         dismiss { exit(0) }
     }
-    func dismiss(verifiedAppIcon: NSImage? = nil, completion: @escaping () -> Void) {
+    func showVerifiedResult(icon: NSImage) {
+        guard !dismissing, !showingVerifiedResult else { return }
+        showingVerifiedResult = true
+        hideFeedback?.cancel()
+        controls.subviews.last?.isHidden = true
+        needsLayout = true
+        pointer.removeAllAnimations()
+        pointer.opacity = 0
+        clickRing.removeAllAnimations()
+        let image = NSImageView(image: icon)
+        image.imageScaling = .scaleProportionallyUpOrDown
+        let side = min(40, bounds.width, bounds.height)
+        image.frame = NSRect(x: bounds.midX - side/2, y: bounds.midY - side/2, width: side, height: side)
+        image.setAccessibilityLabel("Last action verified")
+        addSubview(image)
+        let check = NSTextField(labelWithString: "✓")
+        check.alignment = .center
+        check.font = .systemFont(ofSize: 11, weight: .bold)
+        check.textColor = .black
+        check.wantsLayer = true
+        check.layer?.backgroundColor = NSColor.systemGreen.cgColor
+        check.layer?.cornerRadius = 9
+        check.frame = NSRect(x: image.frame.maxX - 11, y: image.frame.minY - 7, width: 18, height: 18)
+        addSubview(check)
+        if !reducedMotion {
+            image.alphaValue = 0; check.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.14
+                image.animator().alphaValue = 1; check.animator().alphaValue = 1
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            self.dismiss { exit(0) }
+        }
+    }
+
+    func dismiss(completion: @escaping () -> Void) {
         guard !dismissing else { return }
         dismissing = true
         hideFeedback?.cancel()
         window?.ignoresMouseEvents = true
-        if let icon = verifiedAppIcon {
-            controls.isHidden = true
-            pointer.removeAllAnimations()
-            pointer.opacity = 0
-            clickRing.removeAllAnimations()
-            let image = NSImageView(image: icon)
-            image.imageScaling = .scaleProportionallyUpOrDown
-            let side = min(40, bounds.width, bounds.height)
-            image.frame = NSRect(x: bounds.midX - side/2, y: bounds.midY - side/2, width: side, height: side)
-            image.setAccessibilityLabel("Last action verified")
-            addSubview(image)
-            let check = NSTextField(labelWithString: "✓")
-            check.alignment = .center
-            check.font = .systemFont(ofSize: 11, weight: .bold)
-            check.textColor = .black
-            check.wantsLayer = true
-            check.layer?.backgroundColor = NSColor.systemGreen.cgColor
-            check.layer?.cornerRadius = 8
-            check.frame = NSRect(x: image.frame.maxX - 11, y: image.frame.minY - 3, width: 16, height: 16)
-            addSubview(check)
-            if !reducedMotion {
-                image.alphaValue = 0; check.alphaValue = 0
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.14
-                    image.animator().alphaValue = 1; check.animator().alphaValue = 1
-                }
-            }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = self.reducedMotion ? 0 : 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            self.window?.animator().alphaValue = 0
+        } completionHandler: {
+            self.window?.orderOut(nil)
+            completion()
         }
-        let depart = {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = self.reducedMotion ? 0 : 0.16
-                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-                self.window?.animator().alphaValue = 0
-            } completionHandler: {
-                self.window?.orderOut(nil)
-                completion()
-            }
-        }
-        if verifiedAppIcon != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: depart)
-        } else { depart() }
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -442,7 +446,7 @@ final class PreviewCardView: NSView {
         staticLayer.frame = bounds
         displayLayer.frame = bounds
         border.frame = bounds
-        controls.frame = NSRect(x: max(0, bounds.width - 64), y: bounds.height - 32, width: 58, height: 26)
+        controls.frame = NSRect(x: 6, y: bounds.height - 32, width: showingVerifiedResult ? 32 : 58, height: 26)
         statusText.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 22)
         CATransaction.commit()
     }
@@ -691,6 +695,7 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let cmd = obj["cmd"] as? String else { continue }
             DispatchQueue.main.async {
+                guard !finished else { return }
                 switch cmd {
                 case "visible":
                     let visible = obj["visible"] as? Bool ?? true
@@ -711,7 +716,8 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
                     stream.stopCapture { _ in }
                     let icon = NSRunningApplication(processIdentifier: pid)?.icon ??
                         NSImage(systemSymbolName: "app", accessibilityDescription: nil)
-                    card.dismiss(verifiedAppIcon: icon) { exit(0) }
+                    if let icon { card.showVerifiedResult(icon: icon) }
+                    else { card.dismiss { exit(0) } }
                 case "feedback":
                     guard !degradedToStatic, Date().timeIntervalSince(frameAt) < 2,
                           let captured = capturedBounds, let current = currentTargetBounds(),
@@ -749,6 +755,7 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
         // A standalone `cu preview` CLI has no owner pipe and keeps running.
         if ProcessInfo.processInfo.environment["CU_PREVIEW_OWNED_BY_HELPER"] == "1" {
             DispatchQueue.main.async {
+                guard !card.showingVerifiedResult else { return }
                 stream.stopCapture { _ in }
                 card.dismiss { exit(0) }
             }
