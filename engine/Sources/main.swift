@@ -1016,8 +1016,9 @@ func isOwnPassthroughHalo(_ window: WindowInfo, targetPid: pid_t, windows: [Wind
     let ownPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
     guard ownerPath == ownPath else { return false }
     func matches(_ a: CGRect, _ b: CGRect) -> Bool {
-        abs(a.minX - b.minX) < 1 && abs(a.minY - b.minY) < 1 &&
-        abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
+        // AppKit can nudge a panel a couple of points away from the menu bar.
+        abs(a.minX - b.minX) <= 3 && abs(a.minY - b.minY) <= 3 &&
+        abs(a.width - b.width) <= 3 && abs(a.height - b.height) <= 3
     }
     // A halo process owns exactly this full-size click-through panel plus a
     // separate, smaller input-receiving stop panel. Match both and the target

@@ -31,6 +31,9 @@ app.setActivationPolicy(.regular)
 let window = NSWindow(contentRect: NSRect(x: 300, y: 300, width: 480, height: 320), styleMask: [.titled, .closable], backing: .buffered, defer: false)
 window.title = "CU drag guard fixture"
 window.contentView = DragView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
+if CommandLine.arguments.contains("edge"), let screen = NSScreen.main {
+    window.setFrameTopLeftPoint(NSPoint(x: 14, y: screen.frame.maxY - 43))
+}
 window.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
 print("\(ProcessInfo.processInfo.processIdentifier) \(window.windowNumber)")
@@ -42,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix="cu-drag-guard-") as tmp:
     src, fixture = tmp / "main.swift", tmp / "fixture"
     src.write_text(SWIFT)
     subprocess.run(["swiftc", str(src), "-o", str(fixture)], check=True, timeout=60)
-    app = subprocess.Popen([str(fixture)], stdout=subprocess.PIPE, text=True)
+    app = subprocess.Popen([str(fixture), *(["edge"] if os.environ.get("CU_DRAG_EDGE") == "1" else [])], stdout=subprocess.PIPE, text=True)
     halo = None
     blocker = None
     try:
@@ -102,13 +105,15 @@ with tempfile.TemporaryDirectory(prefix="cu-drag-guard-") as tmp:
                 if "UP\n" in events:
                     break
         assert "DOWN\n" in events and "DRAG\n" in events and "UP\n" in events, events
-        blocker = subprocess.Popen([str(fixture), "blocker"], stdout=subprocess.PIPE, text=True)
-        assert select.select([blocker.stdout], [], [], 10)[0], "blocker did not open"
-        assert blocker.stdout.readline().startswith("BLOCKER ")
-        time.sleep(0.2)
-        blocked = run("drag", "--window", str(window), "--pid", str(pid), "--from", point, "--to", end)
-        assert blocked.get("error") == "another_window_on_top" and blocked.get("topWindow", {}).get("pid") == blocker.pid, blocked
-        print("PASS: invalid drags and real occluder refused; stop protected; valid drag passes halo")
+        if os.environ.get("CU_DRAG_EDGE") != "1":
+            blocker = subprocess.Popen([str(fixture), "blocker"], stdout=subprocess.PIPE, text=True)
+            assert select.select([blocker.stdout], [], [], 10)[0], "blocker did not open"
+            assert blocker.stdout.readline().startswith("BLOCKER ")
+            time.sleep(0.2)
+            blocked = run("drag", "--window", str(window), "--pid", str(pid), "--from", point, "--to", end)
+            assert blocked.get("error") == "another_window_on_top" and blocked.get("topWindow", {}).get("pid") == blocker.pid, blocked
+        print("PASS: invalid drags refused; stop protected; valid drag passes halo" +
+              ("" if os.environ.get("CU_DRAG_EDGE") == "1" else "; real occluder refused"))
     finally:
         if blocker is not None and blocker.poll() is None:
             blocker.terminate()

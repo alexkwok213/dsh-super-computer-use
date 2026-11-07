@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } = React;
 
     const NS = "dsh-super-computer-use";
-    const CLIENT_VERSION = "0.10.2";
+    const CLIENT_VERSION = "0.10.3";
     const STATE_PATH = "/api/scu/state";
     const CONTROL_PATH = "/api/scu/control";
     const PREVIEW_PATH = "/api/scu/preview";
