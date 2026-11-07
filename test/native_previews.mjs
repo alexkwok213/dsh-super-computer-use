@@ -176,3 +176,32 @@ test('host exit still reaps a preview that ignores EOF', async () => {
   assert.equal(alive,false,'EOF-unresponsive preview must not outlive host close');
  } finally {if(alive) process.kill(pid,'SIGKILL');}
 });
+
+test('turn end marks only the owner’s verified live targets for the final badge', async () => {
+ const {registerCuSkill}=await import('../lib/index.mjs');
+ const handlers=new Map(), stops=[];
+ const verified={targetId:'a',targetGeneration:4,state:'verified',active:true,
+  action:{verified:true},nativePreview:{visible:true,status:'live'}};
+ const targets=[verified,{...verified,targetId:'b',state:'unverified'},
+  {...verified,targetId:'c',nativePreview:{visible:false,status:'closed'}},
+  {...verified,targetId:'d',action:{verified:false}}];
+ const manager={activeSession:{},stopVisualSession:async opts=>{stops.push(opts);return {};}};
+ registerCuSkill({on:(name,cb)=>{handlers.set(name,cb);return ()=>{};},get:()=>undefined},
+  manager,{ownerSessionId:()=>'owner',snapshot:()=>({targets})});
+ handlers.get('session/event')({id:'other'},{type:'turn/end'});
+ assert.equal(stops.length,0);
+ handlers.get('session/event')({id:'owner'},{type:'turn/end'});
+ assert.deepEqual([...stops[0].verifiedPreviews],[['a',4]]);
+});
+
+test('a final badge command cannot reach a replacement generation', async () => {
+ const {previews,children}=harness();
+ for(const id of ['a','b']) previews.open({targetId:id,generation:2,windowId:id==='a'?11:22});
+ const lines=children.map(()=>[]);
+ children.forEach((child,i)=>child.stdout.on('data',chunk=>lines[i].push(String(chunk))));
+ const exits=children.map(c=>once(c,'exit'));
+ previews.close(undefined,new Map([['a',2],['b',1]]));
+ await Promise.all(exits);
+ assert.match(lines[0].join(''),/last-action-verified/);
+ assert.doesNotMatch(lines[1].join(''),/last-action-verified/);
+});

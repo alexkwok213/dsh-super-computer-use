@@ -256,19 +256,52 @@ final class PreviewCardView: NSView {
         emit(["event": "close-preview"])
         dismiss { exit(0) }
     }
-    func dismiss(completion: @escaping () -> Void) {
+    func dismiss(verifiedAppIcon: NSImage? = nil, completion: @escaping () -> Void) {
         guard !dismissing else { return }
         dismissing = true
         hideFeedback?.cancel()
         window?.ignoresMouseEvents = true
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = reducedMotion ? 0 : 0.16
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            window?.animator().alphaValue = 0
-        } completionHandler: {
-            self.window?.orderOut(nil)
-            completion()
+        if let icon = verifiedAppIcon {
+            controls.isHidden = true
+            pointer.removeAllAnimations()
+            pointer.opacity = 0
+            clickRing.removeAllAnimations()
+            let image = NSImageView(image: icon)
+            image.imageScaling = .scaleProportionallyUpOrDown
+            let side = min(40, bounds.width, bounds.height)
+            image.frame = NSRect(x: bounds.midX - side/2, y: bounds.midY - side/2, width: side, height: side)
+            image.setAccessibilityLabel("Last action verified")
+            addSubview(image)
+            let check = NSTextField(labelWithString: "✓")
+            check.alignment = .center
+            check.font = .systemFont(ofSize: 11, weight: .bold)
+            check.textColor = .black
+            check.wantsLayer = true
+            check.layer?.backgroundColor = NSColor.systemGreen.cgColor
+            check.layer?.cornerRadius = 8
+            check.frame = NSRect(x: image.frame.maxX - 11, y: image.frame.minY - 3, width: 16, height: 16)
+            addSubview(check)
+            if !reducedMotion {
+                image.alphaValue = 0; check.alphaValue = 0
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.14
+                    image.animator().alphaValue = 1; check.animator().alphaValue = 1
+                }
+            }
         }
+        let depart = {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = self.reducedMotion ? 0 : 0.16
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                self.window?.animator().alphaValue = 0
+            } completionHandler: {
+                self.window?.orderOut(nil)
+                completion()
+            }
+        }
+        if verifiedAppIcon != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: depart)
+        } else { depart() }
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -637,7 +670,7 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
     }
     RunLoop.main.add(firstFrameBudget, forMode: .common)
     let freshness = Timer(timeInterval: 0.5, repeats: true) { _ in
-        guard !degradedToStatic else { return }
+        guard !finished, !degradedToStatic else { return }
         if windowId != nil && currentTargetBounds() == nil {
             capturedBounds = nil
             card.showStatus("Window unavailable · recent image")
@@ -669,6 +702,16 @@ func runPreviewWindow(windowId: CGWindowID?, seconds: Int, staticOnly: Bool = fa
                         stream.stopCapture { _ in }
                     }
                     emit(["ok": true, "cmd": "visible", "visible": visible, "frames": capture.frames])
+                case "last-action-verified":
+                    guard panel.isVisible, panel.alphaValue > 0, !degradedToStatic,
+                          let capturedBounds, currentTargetBounds() == capturedBounds,
+                          Date().timeIntervalSince(frameAt) < 2,
+                          let pid = scWindow?.owningApplication?.processID else { break }
+                    finished = true
+                    stream.stopCapture { _ in }
+                    let icon = NSRunningApplication(processIdentifier: pid)?.icon ??
+                        NSImage(systemSymbolName: "app", accessibilityDescription: nil)
+                    card.dismiss(verifiedAppIcon: icon) { exit(0) }
                 case "feedback":
                     guard !degradedToStatic, Date().timeIntervalSince(frameAt) < 2,
                           let captured = capturedBounds, let current = currentTargetBounds(),
