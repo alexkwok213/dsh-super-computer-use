@@ -177,6 +177,7 @@ function collectTools() {
 test("every cu_* tool declares a parameter schema the host will accept", () => {
   const tools = collectTools();
   assert.ok(tools.length >= 13, `expected the full tool set, got ${tools.length}`);
+  assert.ok(tools.some((tool) => tool.name === "cu_drag"), "drag must register in the host tool schema");
   for (const tool of tools) {
     assert.equal(typeof tool.name, "string", "a tool needs a name");
     assert.equal(typeof tool.description, "string", `${tool.name} needs a description`);

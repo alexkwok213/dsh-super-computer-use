@@ -109,8 +109,10 @@ test("a new chat's first snapshot is full, not another chat's delta", async (t) 
 
   const first = await run("cu_snapshot", { pid: 42, windowId: 5 }, { agent: { id: "chat-a" } });
   assert.equal(first.mode, "full", "the first observation for chat-a is full");
+  assert.equal(first.coordinateSpace, "screen-points-top-left", "AX node frames must not be mistaken for window-relative coordinates");
   const same = await run("cu_snapshot", { pid: 42, windowId: 5 }, { agent: { id: "chat-a" } });
   assert.equal(same.mode, "delta", "the same chat gets a delta on its second read");
+  assert.equal(same.coordinateSpace, "screen-points-top-left");
   const other = await run("cu_snapshot", { pid: 42, windowId: 5 }, { agent: { id: "chat-b" } });
   assert.equal(other.mode, "full", "chat-b has no baseline of its own and must see the whole tree");
   assert.ok(Array.isArray(other.lines) && other.lines.length === 2);
@@ -171,4 +173,93 @@ test("a coordinate inside the current frame still dispatches", async (t) => {
   const result = await run("cu_click", { pid: 77, windowId: 11, x: 300, y: 300 });
   assert.equal(result.ok, true);
   assert.ok(calls.some((argv) => argv[0] === "click"));
+});
+
+test("drag requires foreground authorization before sending events", async (t) => {
+  const { manager, calls, run } = setup(t);
+  manager._execRequest = async (argv) => { calls.push(argv); return { ok: true }; };
+  const result = await run("cu_drag", { pid: 77, windowId: 11, from: { x: 200, y: 200 }, to: { x: 300, y: 300 }, foreground: true });
+  assert.equal(result.error, "foreground_requires_authorization");
+  assert.equal(calls.some((argv) => argv[0] === "drag"), false);
+});
+
+test("drag refuses an endpoint outside the observed target", async (t) => {
+  const { manager, calls, run } = setup(t);
+  manager._execRequest = async (argv) => {
+    calls.push(argv);
+    if (argv[0] === "windows") return { ok: true, windows: [{ windowId: 11, pid: 77, app: "Probe", bounds: { x: 100, y: 100, width: 700, height: 500 } }] };
+    return { ok: true };
+  };
+  const result = await run("cu_drag", { pid: 77, windowId: 11, from: { x: 200, y: 200 }, to: { x: 900, y: 300 }, foreground: true, authorizeForeground: true });
+  assert.equal(result.error, "point_outside_target_window");
+  assert.equal(calls.some((argv) => argv[0] === "drag"), false);
+});
+
+test("background drag dispatch alone is reported unverified and is not replay-safe", async (t) => {
+  const { manager, calls, run } = setup(t);
+  manager._execRequest = async (argv) => {
+    calls.push(argv);
+    if (argv[0] === "windows") return { ok: true, windows: [{ windowId: 11, pid: 77, app: "Probe", bounds: { x: 100, y: 100, width: 700, height: 500 } }] };
+    if (argv[0] === "drag") return { ok: true, via: "pid-events" };
+    return { ok: true };
+  };
+  const result = await run("cu_drag", { pid: 77, windowId: 11, from: { x: 200, y: 200 }, to: { x: 300, y: 300 }, observe: false });
+  assert.equal(result.error, "effect_not_verified");
+  assert.equal(result.verified, false);
+  assert.equal(result.actionReplaySafe, false);
+  const drag = calls.find((argv) => argv[0] === "drag");
+  assert.ok(drag.includes("--background"));
+  assert.ok(drag.includes("--pid"));
+});
+
+test("drag refuses a window owned by a different process", async (t) => {
+  const { manager, calls, run } = setup(t);
+  manager._execRequest = async (argv) => {
+    calls.push(argv);
+    if (argv[0] === "windows") return { ok: true, windows: [{ windowId: 11, pid: 99, app: "Other", bounds: { x: 100, y: 100, width: 700, height: 500 } }] };
+    return { ok: true };
+  };
+  const result = await run("cu_drag", { pid: 77, windowId: 11, from: { x: 200, y: 200 }, to: { x: 300, y: 300 }, foreground: true, authorizeForeground: true });
+  assert.equal(result.error, "target_mismatch");
+  assert.equal(calls.some((argv) => argv[0] === "drag"), false);
+});
+
+test("drag refuses coordinates from a moved window", async (t) => {
+  const { manager, calls, run } = setup(t);
+  let bounds = { x: 100, y: 100, width: 700, height: 500 };
+  manager._execRequest = async (argv) => {
+    calls.push(argv);
+    if (argv[0] === "windows") return { ok: true, windows: [{ windowId: 11, pid: 77, app: "Probe", bounds: { ...bounds } }] };
+    if (argv[0] === "snapshot") return { ok: true, pid: 77, windowId: 11, app: "Probe", nodes: [] };
+    return { ok: true };
+  };
+  await run("cu_snapshot", { pid: 77, windowId: 11 });
+  bounds.x += 20;
+  const result = await run("cu_drag", { pid: 77, windowId: 11, from: { x: 200, y: 200 }, to: { x: 300, y: 300 } });
+  assert.equal(result.error, "window_geometry_changed");
+  assert.equal(calls.some((argv) => argv[0] === "drag"), false);
+});
+
+test("a stopped session cannot dispatch a drag", async (t) => {
+  const { manager, calls, run } = setup(t);
+  manager.pauseLatched = true;
+  manager._execRequest = async (argv) => { calls.push(argv); return { ok: true }; };
+  await assert.rejects(run("cu_drag", { pid: 77, windowId: 11, from: { x: 200, y: 200 }, to: { x: 300, y: 300 } }), { code: "PAUSED_BY_USER" });
+  assert.equal(calls.some((argv) => argv[0] === "drag"), false);
+});
+
+test("an authorized foreground drag uses the named window and reports unverified dispatch", async (t) => {
+  const { manager, calls, run } = setup(t);
+  manager._execRequest = async (argv) => {
+    calls.push(argv);
+    if (argv[0] === "windows") return { ok: true, windows: [{ windowId: 11, pid: 77, app: "Probe", bounds: { x: 100, y: 100, width: 700, height: 500 } }] };
+    if (argv[0] === "drag") return { ok: true, action: "drag" };
+    return { ok: true };
+  };
+  const result = await run("cu_drag", { pid: 77, windowId: 11, from: { x: 200, y: 200 }, to: { x: 300, y: 300 }, foreground: true, authorizeForeground: true, observe: false });
+  assert.equal(result.dispatchMode, "foreground");
+  assert.equal(result.verified, false);
+  assert.equal(result.outcome, "dispatched_unverified");
+  assert.equal(result.actionReplaySafe, false);
+  assert.deepEqual(calls.find((argv) => argv[0] === "drag"), ["drag", "--from", "200,200", "--to", "300,300", "--pid", "77", "--window", "11"]);
 });

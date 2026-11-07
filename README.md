@@ -88,9 +88,11 @@ npm run dev:sync -- --wait-idle=30    # 活跃 CU 会话时最多等待 30 秒
 
 ## 能力
 
-**插件工具（14）**
+**插件工具（15）**
 `cu_status` `cu_windows` `cu_launch` `cu_snapshot` `cu_expect` `cu_click` `cu_click_text`
-`cu_type` `cu_key` `cu_scroll` `cu_screenshot` `cu_session` `cu_find` `cu_batch`
+`cu_type` `cu_key` `cu_scroll` `cu_drag` `cu_screenshot` `cu_session` `cu_find` `cu_batch`
+
+`cu_drag` 接受同一目标窗口内的起点和终点（屏幕逻辑坐标），默认后台派发；真实鼠标拖拽须显式授权前台操作。窗口边界、进程与观察后的位置变化会在派发前检查。事件派发不代表剪映等画布接受了拖拽，必须通过后置条件或新画面核实。
 
 **视觉反馈**
 - 边缘呼吸光：只在 agent 真正操作时出现的屏幕四边窄光带（蓝→青→紫，约 72pt），停手约 2 秒后自动淡出

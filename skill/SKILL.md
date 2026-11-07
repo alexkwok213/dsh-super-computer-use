@@ -16,7 +16,7 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
 
 
 1. **Background First (Never Steal the User's Pointer or Focus by Default)**
-   - `cu_click`, `cu_type`, `cu_key`, and `cu_scroll` default to `foreground: false` (background execution via `AXPress` or PID-targeted events).
+   - `cu_click`, `cu_drag`, `cu_type`, `cu_key`, and `cu_scroll` default to `foreground: false` (background execution via `AXPress` or PID-targeted events).
    - A foreground action takes focus and real keyboard/mouse input. It runs only with BOTH `foreground: true` and `authorizeForeground: true`; the latter means the user explicitly agreed to the interruption. Otherwise the tool refuses before sending input.
    - A background operation that needs foreground capability reports `capability: "background_unavailable"` / `requiresForeground`; do not retry it or silently promote it.
    - `cu_launch` defaults to `background:true`: it can create an app window without taking focus. Use `background:false` plus `authorizeForeground:true` only when the user explicitly wants the app brought forward.
@@ -57,7 +57,10 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
 7. **Coordinates Must Come From the Current Frame**
    - Read coordinates from the observation you are looking at, not from an earlier window position or from memory.
    - `cu_click` refuses `point_outside_target_window` when the point is outside the target window's live bounds, and `window_geometry_changed` when the window moved or resized after your last `cu_snapshot`. Both are refusals, not transient errors: call `cu_snapshot` again and derive a new point. Never repeat the rejected numbers.
+   - `cu_snapshot` node frames (`@x,y width×height`) are already global screen logical points with a top-left origin, not window-relative. Do not add the window origin to them.
    - When a reliable control ref exists, click the ref (or `cu_type` with `mode: "action"`, `actionName: "AXPress"`) instead of a coordinate. Coordinates are for canvas areas with no AX node.
+   - For a canvas drag, use `cu_drag` with `from` and `to` in logical screen points, both inside the same target window. A screenshot's `origin` and `scale` map image pixels to points: `screen = origin + pixel / scale`; use the image actually delivered, and take a fresh snapshot before aiming if the window may have moved. Do not mistake the floating preview for the target window.
+   - A background drag may be ignored by an app; an unverified dispatch is not success and must not be replayed blindly. Re-observe the timeline or canvas. If background input is unsuitable, foreground drag requires explicit user authorization and takes the real mouse/focus. Verify the intended clip or position after the gesture.
 
 8. **A Dispatched Event Is Not a Successful Action**
    - `ok: true` only means the engine dispatched the event. If `observation.changed` is `false` or the expected state is absent, the app did not react: stop and re-observe. Do not replay the same click, type or key "once more" — a second identical dispatch is how a background click becomes a counter or a duplicate.
