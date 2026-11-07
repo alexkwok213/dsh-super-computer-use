@@ -5438,17 +5438,21 @@ case "drag":
               "via": "pid-events", "pid": Int(pid), "frontmostAfter": frontmost().app])
         exit(0)
     }
+    let target = resolveTargetPair(pid: args.int("pid"), window: args.int("window"), action: "drag")
     if let windowId = args.int("window") {
         guard let window = onScreenWindows().first(where: { $0.id == CGWindowID(windowId) }) else {
             fail("window_gone", "window \(windowId) is not on screen")
         }
-        _ = activate(pid: window.pid)
-        pump(0.2)
-        if !args.flag("force"), let refusal = preflight(action: "drag", point: nil, pid: window.pid,
-                                                        requireFocus: false, secureAllowed: false,
-                                                        ignoreSheet: false) {
-            refuse(refusal)
+        guard window.bounds.contains(dragFrom), window.bounds.contains(dragTo) else {
+            fail("point_outside_target_window", "drag endpoints must be inside the target window")
         }
+    }
+    _ = guardedFocus(args, action: "drag", point: dragFrom)
+    if !args.flag("force"), !args.flag("no-preflight"),
+       let refusal = preflight(action: "drag", point: dragTo, pid: target.pid,
+                               requireFocus: target.pid != nil, secureAllowed: false,
+                               ignoreSheet: args.flag("ignore-sheet")) {
+        refuse(refusal)
     }
     drag(from: dragFrom, to: dragTo)
     emitActionEventLine("dispatched", kind: "drag", target: dragTarget)
