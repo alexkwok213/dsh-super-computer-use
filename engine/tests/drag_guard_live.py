@@ -89,11 +89,14 @@ with tempfile.TemporaryDirectory(prefix="cu-drag-guard-") as tmp:
         halo_windows = [w for w in run("windows").get("windows", []) if w["pid"] == halo.pid]
         assert halo_windows, halo_windows
         frame = max(halo_windows, key=lambda w: w["bounds"]["width"] * w["bounds"]["height"])["bounds"]
-        # The control is 28 points high and may be omitted by the regular window list.
-        control_point = f'{frame["x"] + 16 + 150},{frame["y"] + 18 + 14}'
+        # The control is centered at the top edge and may be omitted by the regular window list.
+        control_point = f'{round(frame["x"] + frame["width"] / 2)},{frame["y"] + 18 + 14}'
         blocked = run("drag", "--window", str(window), "--pid", str(pid), "--from", control_point, "--to", control_point)
         assert blocked.get("error") == "another_window_on_top", ("stop control was not protected", blocked)
         assert blocked.get("topWindow", {}).get("pid") == halo.pid and blocked.get("topWindow", {}).get("bounds", {}).get("height", 1000) <= 32, blocked
+        top_left = f'{b["x"] + 80},{b["y"] + 18}'
+        top_left_click = run("click", "--window", str(window), "--pid", str(pid), "--x", str(b["x"] + 80), "--y", str(b["y"] + 18))
+        assert top_left_click.get("ok") is True, ("top-left window controls blocked by halo", top_left_click)
         end = f'{b["x"] + b["width"] / 2 + 50},{b["y"] + b["height"] / 2}'
         valid = run("drag", "--window", str(window), "--pid", str(pid), "--from", point, "--to", end)
         assert valid.get("ok") is True, ("valid drag refused", valid)

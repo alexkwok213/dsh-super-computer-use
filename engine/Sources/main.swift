@@ -827,6 +827,15 @@ func focusedValue(pid: pid_t) -> String? {
     return stringAttribute(focused, kAXValueAttribute)
 }
 
+func hasTypeLanded(before: String, after: String?, text: String) -> Bool {
+    guard let after else { return true }
+    if after != before || text.isEmpty || after == text { return true }
+    let unitChars = CharacterSet(charactersIn: "%°pxs \t\r\n")
+    let trimmedAfter = after.trimmingCharacters(in: unitChars)
+    let trimmedText = text.trimmingCharacters(in: unitChars)
+    return !trimmedText.isEmpty && trimmedAfter == trimmedText
+}
+
 func typeText(_ text: String) {
     // Unicode injection keeps the layout out of it: the string is delivered as-is.
     for scalarChunk in stride(from: 0, to: text.count, by: 20) {
@@ -1024,8 +1033,9 @@ func isOwnPassthroughHalo(_ window: WindowInfo, targetPid: pid_t, windows: [Wind
     // separate, smaller input-receiving stop panel. Match both and the target
     // frame; never ignore the stop panel or another process's window.
     let frame = window.bounds
-    let control = CGRect(x: frame.minX + 16, y: frame.minY + 18,
-                         width: min(300, max(80, frame.width - 32)), height: 28)
+    let width = min(300, max(80, frame.width - 32))
+    let control = CGRect(x: (frame.midX - width / 2).rounded(), y: frame.minY + 18,
+                         width: width, height: 28)
     return windows.contains { $0.pid == targetPid && matches(frame, $0.bounds.insetBy(dx: -12, dy: -12)) }
         && windows.contains { $0.pid == window.pid && $0.id != window.id && matches($0.bounds, control) }
 }
@@ -1780,7 +1790,7 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
     // window-sized panel pass clicks through to a different application.
     func controlFrame(_ target: NSRect) -> NSRect {
         let width = min(CGFloat(300), max(CGFloat(80), target.width - 32))
-        return NSRect(x: target.minX + 16, y: target.maxY - 46, width: width, height: 28)
+        return NSRect(x: (target.midX - width / 2).rounded(), y: target.maxY - 46, width: width, height: 28)
     }
     let control = HaloPanel(contentRect: controlFrame(frame),
         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -5531,7 +5541,7 @@ case "type":
         typeToPid(pid, text)
         emitActionEventLine("dispatched", kind: "type", target: typeTargetInfo)
         pump(0.08)
-        var landed: Bool? = before == nil ? nil : read() != before
+        var landed: Bool? = before.map { hasTypeLanded(before: $0, after: read(), text: text) }
         var via = "pid-events"
         if landed == false, let element = target {
             let base = before ?? ""
@@ -5539,7 +5549,7 @@ case "type":
                                                       (base + text) as CFTypeRef)
             if status == .success {
                 pump(0.05)
-                landed = read() != before
+                landed = before.map { hasTypeLanded(before: $0, after: read(), text: text) }
                 via = "ax-setvalue"
             }
         }
@@ -5573,12 +5583,12 @@ case "type":
     var landed: Bool?
     if let pid, let before {
         pump(0.06)
-        landed = focusedValue(pid: pid) != before
+        landed = hasTypeLanded(before: before, after: focusedValue(pid: pid), text: text)
         if landed == false {
             typeText(text)
             via = "unicode-fallback"
             pump(0.10)
-            landed = focusedValue(pid: pid) != before
+            landed = hasTypeLanded(before: before, after: focusedValue(pid: pid), text: text)
         }
     }
     var payload: [String: Any] = ["ok": landed ?? true, "action": "type",
