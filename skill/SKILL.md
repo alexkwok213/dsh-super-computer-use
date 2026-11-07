@@ -38,6 +38,7 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
    - Mutating tools (`cu_click`, `cu_type`, `cu_key`) support `observe: true` (enabled by default when `pid` is provided), which returns the AX delta (`+` added, `-` removed, `~` changed) in the same call.
    - Never assume `ok: true` means the business action succeeded. A raw PID event without an explicit `expect` is returned as `ok:false, error:"effect_not_verified"`; do not replay it. Prefer AXPress / setvalue plus a concrete `expect`.
    - For canvas-heavy apps (such as video timelines or custom panels without AX nodes), use `cu_find` (`mode: "auto"` or `"ocr"`) or `cu_screenshot`.
+   - A window capture may omit a separate file chooser or modal. If the target reports a modal but it is missing from the window image, use `cu_windows` and, when necessary, `cu_screenshot` with `screen:true` to locate it; screen capture can include other visible apps.
 
 4. **Respect User Pause / Stop**
    - If any tool returns `PAUSED_BY_USER`, stop immediately and ask the user before calling `cu_session(action="resume")`.
@@ -45,6 +46,7 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
 5. **Multi-Step Execution with `cu_batch` (Codex / Claude Fast-Action Loop)**
    - For compound tasks (e.g. click search box -> type keyword -> press return), prefer `cu_batch` instead of round-tripping to the model for each individual keystroke or click.
    - `cu_batch` runs all steps locally, updates the floating status capsule live, and delivers the single final observation delta + preview.
+   - Batch input defaults to background. If foreground input is authorized and needed, pass both `foreground:true` and `authorizeForeground:true` on the batch; its input steps inherit foreground unless a step explicitly overrides it. Authorization alone does not switch modes.
    - A step can be `{action: "expect", query/enabled/value/contains/ref, timeoutMs}`: it polls until the app reaches that state and, with `stopOnError`, stops the batch there. That is the checkpoint to use when the next step depends on loading. Blind `settleMs` (default 60 ms between steps) is only a fallback; it is reported in `timings.settleMs`.
    - `cu_batch` returns `budgetExceeded: true` when a run overshoots `timeoutMs` even if every step landed, so a slow run is never mistaken for a fast one.
 

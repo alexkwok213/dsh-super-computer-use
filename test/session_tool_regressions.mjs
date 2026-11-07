@@ -57,6 +57,14 @@ test("cu_windows still reports a genuinely empty window list as success", async 
   assert.deepEqual(result.windows, []);
 });
 
+test("a foreground step in a background-default batch reports foreground dispatch", async (t) => {
+  const { manager, calls, run } = setup(t);
+  manager._execRequest = async (argv) => { calls.push(argv); return { ok: true }; };
+  const result = await run("cu_batch", { pid: 77, windowId: 11, authorizeForeground: true, steps: [{ action: "key", name: "return", foreground: true }], settleMs: 0, observe: false, preview: false });
+  assert.equal(result.dispatchMode, "foreground");
+  assert.equal(result.verified, false);
+});
+
 test("read-only window listing keeps working after a stop without reopening the input gate", async (t) => {
   // The real host always passes the UI registry; without it the ownership gate
   // is absent and this test would miss the paused-read regression.
@@ -262,4 +270,24 @@ test("an authorized foreground drag uses the named window and reports unverified
   assert.equal(result.outcome, "dispatched_unverified");
   assert.equal(result.actionReplaySafe, false);
   assert.deepEqual(calls.find((argv) => argv[0] === "drag"), ["drag", "--from", "200,200", "--to", "300,300", "--pid", "77", "--window", "11"]);
+});
+
+test("a foreground batch needs authorization before any input", async (t) => {
+  const { manager, calls, run } = setup(t);
+  manager._execRequest = async (argv) => { calls.push(argv); return { ok: true }; };
+  const result = await run("cu_batch", { pid: 77, windowId: 11, foreground: true, steps: [{ action: "key", name: "return" }], observe: false, preview: false });
+  assert.equal(result.error, "foreground_requires_authorization");
+  assert.equal(calls.some((argv) => argv[0] === "key"), false);
+});
+
+test("a batch foreground default reaches each input and permits an explicit background override", async (t) => {
+  const { manager, calls, run } = setup(t);
+  manager._execRequest = async (argv) => { calls.push(argv); return { ok: true }; };
+  const result = await run("cu_batch", { pid: 77, windowId: 11, foreground: true, authorizeForeground: true, steps: [{ action: "key", name: "return" }, { action: "key", name: "tab", foreground: false }], settleMs: 0, observe: false, preview: false });
+  assert.equal(result.ok, true);
+  assert.equal(result.dispatchMode, "mixed");
+  const keys = calls.filter((argv) => argv[0] === "key");
+  assert.equal(keys.length, 2);
+  assert.equal(keys[0].includes("--background"), false);
+  assert.equal(keys[1].includes("--background"), true);
 });
