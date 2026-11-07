@@ -30,6 +30,19 @@ test("renderNodeLine formats snapshot nodes compactly", () => {
   });
   assert.match(line, /^e12 AXButton "开始创作"/);
   assert.match(line, /@100,200 88×32/);
+
+  const occludedLine = renderNodeLine({
+    ref: "k5.118",
+    role: "AXGroup",
+    title: "automationpositionValue",
+    enabled: true,
+    occluded: true,
+    x: 949,
+    y: 821,
+    w: 70,
+    h: 22,
+  });
+  assert.match(occludedLine, /occluded @949,821 70×22/);
 });
 
 test("CuSessionManager caches snapshot refs and computes compact deltas", () => {

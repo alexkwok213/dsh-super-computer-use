@@ -582,15 +582,18 @@ func clickToPid(_ pid: pid_t, x: Double, y: Double, button: String, count: Int) 
     let point = CGPoint(x: x, y: y)
     let move = CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
                        mouseCursorPosition: point, mouseButton: which)
+    move?.flags = []
     postToPid(move, pid)
     for clickIndex in 1...max(1, count) {
         let down = CGEvent(mouseEventSource: eventSource, mouseType: downType,
                            mouseCursorPosition: point, mouseButton: which)
         down?.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
+        down?.flags = []
         postToPid(down, pid)
         let up = CGEvent(mouseEventSource: eventSource, mouseType: upType,
                          mouseCursorPosition: point, mouseButton: which)
         up?.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
+        up?.flags = []
         postToPid(up, pid)
     }
 }
@@ -714,57 +717,77 @@ func scrollToPid(_ pid: pid_t, dx: Double, dy: Double) {
 func click(x: Double, y: Double, button: String, count: Int) {
     let (which, downType, upType) = mouseButton(button)
     let point = CGPoint(x: x, y: y)
-    CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
-            mouseCursorPosition: point, mouseButton: which)?.post(tap: .cghidEventTap)
+    let move = CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
+                       mouseCursorPosition: point, mouseButton: which)
+    move?.flags = []
+    move?.post(tap: .cghidEventTap)
     usleep(30_000)
     for clickIndex in 1...max(1, count) {
         let down = CGEvent(mouseEventSource: eventSource, mouseType: downType,
                            mouseCursorPosition: point, mouseButton: which)
         down?.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
+        down?.flags = []
         post(down)
         let up = CGEvent(mouseEventSource: eventSource, mouseType: upType,
                          mouseCursorPosition: point, mouseButton: which)
         up?.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
+        up?.flags = []
         post(up)
     }
 }
 
 func drag(from: CGPoint, to: CGPoint) {
-    CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
-            mouseCursorPosition: from, mouseButton: .left)?.post(tap: .cghidEventTap)
+    let move = CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
+                       mouseCursorPosition: from, mouseButton: .left)
+    move?.flags = []
+    move?.post(tap: .cghidEventTap)
     usleep(40_000)
-    CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDown,
-            mouseCursorPosition: from, mouseButton: .left)?.post(tap: .cghidEventTap)
+    let down = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDown,
+                       mouseCursorPosition: from, mouseButton: .left)
+    down?.flags = []
+    down?.post(tap: .cghidEventTap)
     let steps = 24
     for step in 1...steps {
         let progress = Double(step) / Double(steps)
         let point = CGPoint(x: from.x + (to.x - from.x) * progress,
                             y: from.y + (to.y - from.y) * progress)
-        CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDragged,
-                mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
+        let dragged = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDragged,
+                              mouseCursorPosition: point, mouseButton: .left)
+        dragged?.flags = []
+        dragged?.post(tap: .cghidEventTap)
         usleep(9_000)
     }
-    CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp,
-            mouseCursorPosition: to, mouseButton: .left)?.post(tap: .cghidEventTap)
+    let up = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp,
+                     mouseCursorPosition: to, mouseButton: .left)
+    up?.flags = []
+    up?.post(tap: .cghidEventTap)
 }
 
 func dragToPid(_ pid: pid_t, from: CGPoint, to: CGPoint, button: String, steps: Int = 18) {
     let (which, downType, upType) = mouseButton(button)
     let dragged: CGEventType = button == "right" ? .rightMouseDragged
         : (button == "middle" ? .otherMouseDragged : .leftMouseDragged)
-    postToPid(CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
-                      mouseCursorPosition: from, mouseButton: which), pid)
-    postToPid(CGEvent(mouseEventSource: eventSource, mouseType: downType,
-                      mouseCursorPosition: from, mouseButton: which), pid)
+    let move = CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
+                       mouseCursorPosition: from, mouseButton: which)
+    move?.flags = []
+    postToPid(move, pid)
+    let down = CGEvent(mouseEventSource: eventSource, mouseType: downType,
+                       mouseCursorPosition: from, mouseButton: which)
+    down?.flags = []
+    postToPid(down, pid)
     for step in 1...steps {
         let progress = Double(step) / Double(steps)
         let point = CGPoint(x: from.x + (to.x - from.x) * progress,
                             y: from.y + (to.y - from.y) * progress)
-        postToPid(CGEvent(mouseEventSource: eventSource, mouseType: dragged,
-                          mouseCursorPosition: point, mouseButton: which), pid)
+        let stepEvent = CGEvent(mouseEventSource: eventSource, mouseType: dragged,
+                                mouseCursorPosition: point, mouseButton: which)
+        stepEvent?.flags = []
+        postToPid(stepEvent, pid)
     }
-    postToPid(CGEvent(mouseEventSource: eventSource, mouseType: upType,
-                      mouseCursorPosition: to, mouseButton: which), pid)
+    let up = CGEvent(mouseEventSource: eventSource, mouseType: upType,
+                     mouseCursorPosition: to, mouseButton: which)
+    up?.flags = []
+    postToPid(up, pid)
 }
 
 func scroll(dx: Double, dy: Double, at point: CGPoint?) {
@@ -3100,14 +3123,90 @@ func element(for node: SnapNode, pid: pid_t) -> AXUIElement? {
     element(pid: pid, path: node.path)
 }
 
-func nodeLine(_ node: SnapNode) -> [String: Any] {
+/// Returns the AX element hit at global screen point `(x, y)` inside `pid`,
+/// along with its role and title/description.
+func axHitInfo(pid: pid_t, at point: CGPoint) -> (element: AXUIElement, role: String, title: String)? {
+    let app = AXUIElementCreateApplication(pid)
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &hit) == .success,
+          let element = hit else { return nil }
+    let role = stringAttribute(element, kAXRoleAttribute)
+    let title = stringAttribute(element, kAXTitleAttribute)
+    let desc = stringAttribute(element, kAXDescriptionAttribute)
+    return (element, role, title.isEmpty ? desc : title)
+}
+
+func elementsShareLineage(_ a: AXUIElement, _ b: AXUIElement, maxSteps: Int = 5) -> Bool {
+    if CFEqual(a, b) { return true }
+    var cur: AXUIElement? = a
+    for _ in 0..<maxSteps {
+        guard let el = cur, let p = axElement(attribute(el, kAXParentAttribute)) else { break }
+        if CFEqual(p, b) { return true }
+        cur = p
+    }
+    cur = b
+    for _ in 0..<maxSteps {
+        guard let el = cur, let p = axElement(attribute(el, kAXParentAttribute)) else { break }
+        if CFEqual(p, a) { return true }
+        cur = p
+    }
+    return false
+}
+
+/// When a ref's geometric center is partially covered by a sticky track or
+/// sibling pane, sample vertical points inside its frame to find an exposed
+/// point that actually hits the ref (or its descendant/ancestor).
+func resolveVisibleClickPoint(node: SnapNode, pid: pid_t) -> (point: CGPoint, occludedBy: String?) {
+    guard let frame = node.frame, frame.width >= 2, frame.height >= 2 else {
+        return (CGPoint(x: node.frame?.midX ?? 0, y: node.frame?.midY ?? 0), nil)
+    }
+    let fractions: [CGFloat] = [0.5, 0.2, 0.8, 0.12, 0.88]
+    var firstBlocker: String?
+    for frac in fractions {
+        let candidate = CGPoint(x: frame.midX, y: (frame.minY + frame.height * frac).rounded())
+        guard let hit = axHitInfo(pid: pid, at: candidate) else {
+            return (candidate, nil)
+        }
+        if elementsShareLineage(hit.element, node.element)
+            || (!node.title.isEmpty && hit.title == node.title && hit.role == node.role) {
+            return (candidate, nil)
+        }
+        if firstBlocker == nil {
+            let label = hit.title.isEmpty ? hit.role : "\(hit.role) \"\(hit.title)\""
+            firstBlocker = label
+        }
+    }
+    return (CGPoint(x: frame.midX, y: frame.midY), firstBlocker)
+}
+
+func nodeLine(_ node: SnapNode, in allNodes: [SnapNode] = []) -> [String: Any] {
     var object: [String: Any] = ["ref": node.ref, "role": node.role,
                                  "enabled": node.enabled, "index": node.index]
     if node.focused { object["focused"] = true }
     if !node.subrole.isEmpty { object["subrole"] = node.subrole }
     if !node.title.isEmpty { object["title"] = node.title }
     if !node.value.isEmpty { object["value"] = node.value }
-    if let frame = node.frame {
+    if var frame = node.frame {
+        let parentPrefix = node.path.split(separator: ".").dropLast().joined(separator: ".")
+        if !parentPrefix.isEmpty {
+            for other in allNodes where other.index != node.index {
+                let otherParent = other.path.split(separator: ".").dropLast().joined(separator: ".")
+                guard otherParent == parentPrefix, let o = other.frame else { continue }
+                if abs(frame.minX - o.minX) <= 4, abs(frame.width - o.width) <= 4, frame.width >= 40 {
+                    if o.minY > frame.minY, o.minY < frame.maxY, o.minY <= frame.midY, o.maxY >= frame.maxY - 2 {
+                        frame = CGRect(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: o.minY - frame.minY)
+                    }
+                }
+            }
+        }
+        for other in allNodes where other.role == "AXScrollBar" && other.index > node.index {
+            guard let sbf = other.frame, sbf.width <= 16, sbf.height >= 250, sbf.minY < 300 else { continue }
+            let barParent = other.path.split(separator: ".").dropLast().joined(separator: ".")
+            if barParent.split(separator: ".").count <= 1, frame.maxX <= sbf.maxX + 8, frame.minX >= sbf.minX - 420, frame.midY > sbf.maxY + 24 {
+                object["occluded"] = true
+                break
+            }
+        }
         object["x"] = frame.origin.x
         object["y"] = frame.origin.y
         object["w"] = frame.size.width
@@ -4923,7 +5022,7 @@ case "snapshot":
     emit(["ok": true, "pid": pid, "app": app, "version": SNAP_VERSION,
           "count": nodes.count, "settleWalks": extraWalks,
           "truncated": truncated, "limit": limit,
-          "nodes": nodes.map(nodeLine)])
+          "nodes": nodes.map { nodeLine($0, in: nodes) }])
 
 case "setvalue", "set-value":
     guard let pid = args.int("pid") else { fail("missing_pid", "pass --pid <pid>") }
@@ -5265,6 +5364,17 @@ case "click":
         if let frame = node.frame {
             x = frame.midX
             y = frame.midY
+            if !node.actions.contains("AXPress") || args.flag("coords") {
+                let resolvedPoint = resolveVisibleClickPoint(node: node, pid: refPid)
+                x = Double(resolvedPoint.point.x)
+                y = Double(resolvedPoint.point.y)
+                if let blocker = resolvedPoint.occludedBy, !args.flag("force") {
+                    fail("element_occluded",
+                         "\(ref) at (\(Int(x)),\(Int(y))) is occluded by \(blocker); scroll the panel or timeline first",
+                         ["ref": ref, "role": node.role, "title": node.title,
+                          "x": x, "y": y, "occludedBy": blocker])
+                }
+            }
         } else if !node.actions.contains("AXPress") {
             fail("no_frame", "\(ref) has no frame and no AXPress; nothing to click",
                  ["ref": ref, "role": node.role])
@@ -5383,8 +5493,12 @@ case "click":
         markAction()
         emitActionEventLine("dispatched", kind: "click",
                             target: actionTargetDict(pid: pid, windowId: args.int("window")), point: point)
-        emit(["ok": true, "action": "click", "via": "pid-events", "pid": Int(pid),
-              "x": x, "y": y, "resolved": lastResolve, "frontmostAfter": frontmost().app])
+        var bgPayload: [String: Any] = ["ok": true, "action": "click", "via": "pid-events", "pid": Int(pid),
+                                        "x": x, "y": y, "resolved": lastResolve, "frontmostAfter": frontmost().app]
+        if let hit = axHitInfo(pid: pid, at: point) {
+            bgPayload["hit"] = ["role": hit.role, "title": hit.title]
+        }
+        emit(bgPayload)
         exit(0)
     }
     let settle = args.int("settle") ?? 90
@@ -5438,6 +5552,9 @@ case "click":
     ]
     if let ref = args["ref"] { payload["ref"] = ref }
     if let activated { payload["activated"] = activated }
+    if let pid = guardPid ?? targetPid, pid != 0, let hit = axHitInfo(pid: pid, at: point) {
+        payload["hit"] = ["role": hit.role, "title": hit.title]
+    }
     emit(payload)
 
 case "move":
