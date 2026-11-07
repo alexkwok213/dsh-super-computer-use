@@ -17,6 +17,16 @@ class DragView: NSView {
     override func mouseUp(with event: NSEvent) { print("UP"); fflush(stdout) }
 }
 let app = NSApplication.shared
+if CommandLine.arguments.contains("blocker") {
+    app.setActivationPolicy(.accessory)
+    let blocker = NSPanel(contentRect: NSRect(x: 510, y: 430, width: 60, height: 60), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    blocker.backgroundColor = .red
+    blocker.orderFrontRegardless()
+    print("BLOCKER \(ProcessInfo.processInfo.processIdentifier)")
+    fflush(stdout)
+    app.run()
+    exit(0)
+}
 app.setActivationPolicy(.regular)
 let window = NSWindow(contentRect: NSRect(x: 300, y: 300, width: 480, height: 320), styleMask: [.titled, .closable], backing: .buffered, defer: false)
 window.title = "CU drag guard fixture"
@@ -33,6 +43,8 @@ with tempfile.TemporaryDirectory(prefix="cu-drag-guard-") as tmp:
     src.write_text(SWIFT)
     subprocess.run(["swiftc", str(src), "-o", str(fixture)], check=True, timeout=60)
     app = subprocess.Popen([str(fixture)], stdout=subprocess.PIPE, text=True)
+    halo = None
+    blocker = None
     try:
         if not select.select([app.stdout], [], [], 15)[0]:
             raise RuntimeError("fixture did not open")
@@ -67,6 +79,18 @@ with tempfile.TemporaryDirectory(prefix="cu-drag-guard-") as tmp:
             failures.append(("outside start accepted", outside_start))
         assert not failures, failures
         assert not select.select([app.stdout], [], [], 0.3)[0], "rejected drag reached the fixture"
+        halo = subprocess.Popen([cu, "halo", "--window", str(window), "--seconds", "30"], stdout=subprocess.PIPE, text=True, env=env)
+        assert select.select([halo.stdout], [], [], 10)[0], "halo did not start"
+        assert json.loads(halo.stdout.readline()).get("halo") == "shown"
+        time.sleep(0.4)
+        halo_windows = [w for w in run("windows").get("windows", []) if w["pid"] == halo.pid]
+        assert halo_windows, halo_windows
+        frame = max(halo_windows, key=lambda w: w["bounds"]["width"] * w["bounds"]["height"])["bounds"]
+        # The control is 28 points high and may be omitted by the regular window list.
+        control_point = f'{frame["x"] + 16 + 150},{frame["y"] + 18 + 14}'
+        blocked = run("drag", "--window", str(window), "--pid", str(pid), "--from", control_point, "--to", control_point)
+        assert blocked.get("error") == "another_window_on_top", ("stop control was not protected", blocked)
+        assert blocked.get("topWindow", {}).get("pid") == halo.pid and blocked.get("topWindow", {}).get("bounds", {}).get("height", 1000) <= 32, blocked
         end = f'{b["x"] + b["width"] / 2 + 50},{b["y"] + b["height"] / 2}'
         valid = run("drag", "--window", str(window), "--pid", str(pid), "--from", point, "--to", end)
         assert valid.get("ok") is True, ("valid drag refused", valid)
@@ -78,7 +102,19 @@ with tempfile.TemporaryDirectory(prefix="cu-drag-guard-") as tmp:
                 if "UP\n" in events:
                     break
         assert "DOWN\n" in events and "DRAG\n" in events and "UP\n" in events, events
-        print("PASS: invalid drags refused without events; valid drag reached the fixture")
+        blocker = subprocess.Popen([str(fixture), "blocker"], stdout=subprocess.PIPE, text=True)
+        assert select.select([blocker.stdout], [], [], 10)[0], "blocker did not open"
+        assert blocker.stdout.readline().startswith("BLOCKER ")
+        time.sleep(0.2)
+        blocked = run("drag", "--window", str(window), "--pid", str(pid), "--from", point, "--to", end)
+        assert blocked.get("error") == "another_window_on_top" and blocked.get("topWindow", {}).get("pid") == blocker.pid, blocked
+        print("PASS: invalid drags and real occluder refused; stop protected; valid drag passes halo")
     finally:
+        if blocker is not None and blocker.poll() is None:
+            blocker.terminate()
+            blocker.wait(timeout=5)
+        if halo is not None and halo.poll() is None:
+            halo.terminate()
+            halo.wait(timeout=5)
         app.terminate()
         app.wait(timeout=5)

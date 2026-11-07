@@ -161,7 +161,7 @@ struct WindowInfo {
     let layer: Int
 }
 
-func onScreenWindows() -> [WindowInfo] {
+func onScreenWindows(includeSmall: Bool = false) -> [WindowInfo] {
     let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
         return []
@@ -176,7 +176,7 @@ func onScreenWindows() -> [WindowInfo] {
               let pid = entry[kCGWindowOwnerPID as String] as? Int,
               let dictionary = entry[kCGWindowBounds as String] as? [String: Any],
               let rect = CGRect(dictionaryRepresentation: dictionary as CFDictionary) else { continue }
-        guard rect.width >= 40, rect.height >= 40 else { continue }
+        guard rect.width >= (includeSmall ? 1 : 40), rect.height >= (includeSmall ? 1 : 40) else { continue }
         let app = entry[kCGWindowOwnerName as String] as? String ?? ""
         let title = entry[kCGWindowName as String] as? String ?? ""
         result.append(WindowInfo(id: CGWindowID(number), pid: pid_t(pid), app: app,
@@ -1009,8 +1009,31 @@ func hostAppName() -> String? {
     return nil
 }
 
-func windowAt(_ point: CGPoint) -> WindowInfo? {
-    onScreenWindows().first { $0.bounds.contains(point) }
+func isOwnPassthroughHalo(_ window: WindowInfo, targetPid: pid_t, windows: [WindowInfo]) -> Bool {
+    var buffer = [CChar](repeating: 0, count: 4096)
+    guard proc_pidpath(window.pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+    let ownerPath = URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
+    let ownPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
+    guard ownerPath == ownPath else { return false }
+    func matches(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) < 1 && abs(a.minY - b.minY) < 1 &&
+        abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
+    }
+    // A halo process owns exactly this full-size click-through panel plus a
+    // separate, smaller input-receiving stop panel. Match both and the target
+    // frame; never ignore the stop panel or another process's window.
+    let frame = window.bounds
+    let control = CGRect(x: frame.minX + 16, y: frame.minY + 18,
+                         width: min(300, max(80, frame.width - 32)), height: 28)
+    return windows.contains { $0.pid == targetPid && matches(frame, $0.bounds.insetBy(dx: -12, dy: -12)) }
+        && windows.contains { $0.pid == window.pid && $0.id != window.id && matches($0.bounds, control) }
+}
+
+func windowAt(_ point: CGPoint, targetPid: pid_t? = nil) -> WindowInfo? {
+    let windows = onScreenWindows(includeSmall: true)
+    return windows.first { window in
+        window.bounds.contains(point) && !(targetPid.map { isOwnPassthroughHalo(window, targetPid: $0, windows: windows) } ?? false)
+    }
 }
 
 /// Bounds of the sheets/modals currently attached to the app.
@@ -1126,13 +1149,13 @@ func preflight(action: String, point: CGPoint?, pid: pid_t?, requireFocus: Bool,
                 "point": ["x": point.x, "y": point.y]].merging(extras) { $1 }
     }
     if let point {
-        if let top = windowAt(point), let pid, top.pid != pid {
+        if let top = windowAt(point, targetPid: pid), let pid, top.pid != pid {
             return ["ok": false, "error": "another_window_on_top",
                     "message": "\(top.app) is above the target at that point",
                     "topWindow": describe(top),
                     "point": ["x": point.x, "y": point.y]].merging(extras) { $1 }
         }
-        if windowAt(point) == nil {
+        if windowAt(point, targetPid: pid) == nil {
             return ["ok": false, "error": "point_outside_any_window",
                     "message": "no window is at that point",
                     "point": ["x": point.x, "y": point.y]].merging(extras) { $1 }
