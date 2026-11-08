@@ -9,6 +9,15 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
 
 ## Core Principles
 
+**-1. Discover the app's capabilities BEFORE operating it.**
+Computer use is not "click wherever". The thing that makes an app usable is knowing
+what it CAN do. A whiteboard is not "a canvas you drag on" — it has a brush with a
+separate thickness, opacity and colour control buried in a settings popover, and
+without that map a perfect robot still paints a fat blob.
+Run `cu_discover` first for any unfamiliar app (it returns the live aria-labelled
+controls, every input with type/min/max/value, the large surfaces, and the matched
+playbook). Read the playbook's `flows` and `pitfalls` before the first click.
+
 0. **Ask `cu_status` Once, Then Stop Repeating Yourself**
    - `cu_status` reports `vision.supported` (`true`/`false`/`null` with a `reason`) and `lastImage` (what the last capture actually delivered). `false` or `null` means a screenshot is a file path, not evidence: do not reason about pixels, use `cu_find`/`cu_expect`/`cu_snapshot` instead.
    - `cu_status.targets` lists every target in this chat (`targetId`, pid, windowId, appName). Pass `targetId` to keep observations, actions, previews and stops on one window; a chat may own several targets concurrently.
