@@ -45,23 +45,26 @@ test('native app names match the Freeform playbook', async () => {
   }
 });
 
-test('Freeform playbook records the lesson from the 16-minute failure', () => {
+test('Freeform playbook records the process-authenticity ruling', () => {
   const pb = PLAYBOOKS.find((p) => p.id === 'apple-freeform');
-  const exact = pb.routes.find((r) => r.id === 'exactCopy');
-  assert.ok(exact, 'pixel-exact route exists');
-  assert.equal(exact.prefer, true);
-  assert.equal(exact.cost.roundTrips, 1);
-  assert.ok(exact.steps.some((s) => s.includes('--target freeform')));
-  assert.match(exact.avoid.join(' '), /横纹|条纹/);
-  assert.ok(exact.preflight.some((p) => /前台|activate/.test(p)));
-  const hand = pb.routes.find((r) => r.id === 'handDrawn');
-  assert.ok(hand.cost.roundTrips > exact.cost.roundTrips);
+  assert.equal(pb.routes.length, 1, 'exactly one legitimate route');
+  const route = pb.routes.find((r) => r.id === 'freehandNative');
+  assert.ok(route, 'the real-stroke route exists');
+  assert.equal(route.prefer, true);
+  assert.ok(route.steps.some((s) => s.includes('cu_paint')));
+  assert.match(route.avoid.join(' '), /严禁|粘贴|上传/);
+  assert.ok(route.preflight.some((p) => /前台|activate/.test(p)));
+  assert.ok(route.acceptance.length > 0);
+  assert.equal(pb.routes.some((r) => r.id === 'exactCopy'), false, 'the PNG shortcut is gone');
+  assert.ok(pb.prohibited.length >= 3);
   assert.match(pb.pitfalls.join(' '), /跳回|重新 arm|前台/);
+  assert.match(pb.pitfalls.join(' '), /过程造假|禁止|不得/);
 });
 
 test('playbookSummary routes are JSON-safe (no regex objects)', () => {
   const s = playbookSummary(PLAYBOOKS.find((p) => p.id === 'apple-freeform'));
-  assert.equal(s.routes.length, 2);
+  assert.equal(s.routes.length, 1);
+  assert.ok(s.prohibited.length >= 3);
   const json = JSON.stringify(s);
   assert.doesNotMatch(json, /"match":\{/);
   assert.ok(s.routes.every((r) => Array.isArray(r.when.keywords)));

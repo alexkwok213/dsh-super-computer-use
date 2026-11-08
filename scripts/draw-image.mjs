@@ -1,34 +1,32 @@
 #!/usr/bin/env node
-// draw-image.mjs — reproduce a reference image into a web canvas (Canva etc.)
-// end-to-end, reliably, in one command.
+// draw-image.mjs — OFF-SCREEN COMPOSITION PREVIEW ONLY.
 //
-// Why this exists: driving a web app's freehand brush through self-drawn UI is
-// unreliable (thick default brush blobs, hidden colour/size widgets, zoom-
-// dependent coordinates, undo that key events don't reach). The deterministic
-// way is: compile the image to a layered plan with `cu drawplan`, rasterise the
-// plan to a pixel-exact PNG with `scripts/plan-to-png.py`, then place that PNG
-// into the app over CDP (upload the file into a file input and click it onto
-// the canvas, or open it in a tab). This script does all three.
+// This script compiles a reference image into a layered stroke plan and
+// rasterises that plan into a PNG so a human/agent can CHECK the posterised
+// composition and palette BEFORE painting. It deliberately CANNOT place the
+// image into an application.
+//
+// WHY THE PLACEMENT CAPABILITY WAS REMOVED (2026-11-08 user ruling):
+// Computer use means operating the target app. Rendering a picture off-screen
+// and uploading / pasting / dropping it into the canvas is process fraud — the
+// pixels match but no computer use happened. Earlier versions of this script
+// did exactly that (a CDP file-input upload for Canva, a clipboard paste for
+// Freeform). Both paths were deleted. See docs/process-authenticity-oracle.md.
+//
+// The ONLY legitimate way to get the drawing into an app is to inject real
+// strokes: `cu_paint` for native apps, `cu_cdp_paint` for web canvases. Start
+// with `cu_route` and read its `prohibited` + `acceptance` fields.
 //
 // Usage:
-//   # web canvas (Canva / Figma): CDP upload
-//   node scripts/draw-image.mjs --image ./ref.png --url https://www.canva.com/design/XXX/edit
-//   # native whiteboard (Apple Freeform): transparent PNG -> clipboard -> Cmd+V
-//   node scripts/draw-image.mjs --image ./ref.png --target freeform
+//   node scripts/draw-image.mjs --image ./ref.png [--out ./out/preview.png]
 //        [--x 150 --y 120 --width 850 --height 780] [--colors 9] [--grid 130]
-//        [--out ./out/fish.png] [--port 9333] [--no-place]
 //
-// The default (web) path launches or reuses an owned debug Chrome with the
-// user's copied logins, renders the PNG, uploads it into the design, and clicks
-// the upload thumbnail. The freeform path needs no Chrome at all: it renders a
-// transparent, locally-positioned PNG and pastes it into the frontmost
-// Freeform board. Screenshot afterwards to verify in both cases.
+// Output: a plan JSON + a transparent, locally-positioned preview PNG.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { launchDebugChrome, acquirePage, releasePages } from "../lib/cdp.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const CU = process.env.CU_BIN || join(ROOT, "bin", "cu");
@@ -38,153 +36,57 @@ function arg(name, def) {
   if (i >= 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith("--")) return process.argv[i + 1];
   return def;
 }
-const hasFlag = (name) => process.argv.includes(`--${name}`);
 
 function findPython() {
   const cands = [process.env.CU_PYTHON, process.env.PYTHON,
     "/Users/johnkwok/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/bin/python3", "python3"].filter(Boolean);
   for (const c of cands) {
-    const r = spawnSync(c, ["-c", "import PIL"], { stdio: "ignore" });
-    if (r.status === 0) return c;
+    if (spawnSync(c, ["-c", "import PIL"], { stdio: "ignore" }).status === 0) return c;
   }
   throw new Error("no Pillow-capable python found; install Pillow or set CU_PYTHON");
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Place the rendered PNG into a NATIVE Freeform board. No Chrome, no CDP.
- * Freeform accepts a PNG on the clipboard and Cmd+V creates a single image
- * object — pixel-exact, one element, no brush stripes and no colour passes.
- * Coordinates are derived from the live window bounds rather than hardcoded.
- */
-async function placeIntoFreeform(pngPath, CU) {
-  const listing = JSON.parse(
-    execFileSync(CU, ["windows"], { encoding: "utf8" }).trim().split("\n").pop()
-  );
-  const w = (listing.windows ?? []).find((x) => /Freeform/i.test(String(x.app ?? "")));
-  if (!w) throw new Error("no Freeform window found; open a board first");
-  const bx = Number(w.bounds?.x ?? 0);
-  const by = Number(w.bounds?.y ?? 0);
-  const bw = Number(w.bounds?.width ?? 1200);
-  const bh = Number(w.bounds?.height ?? 900);
-  const winId = Number(w.windowId);
-  const click = (x, y) =>
-    execFileSync(CU, ["click", "--x", String(Math.round(x)), "--y", String(Math.round(y)),
-                      "--window", String(winId), "--force"], { encoding: "utf8" });
-  const key = (name, mods) =>
-    execFileSync(CU, ["key", "--name", name, ...(mods ? ["--mods", mods] : [])], { encoding: "utf8" });
-
-  const safe = pngPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  execFileSync("osascript", ["-e", `set the clipboard to (read (POSIX file "${safe}") as «class PNGf»)`], { encoding: "utf8" });
-  execFileSync("osascript", ["-e", 'tell application "Freeform" to activate'], { encoding: "utf8" });
-  await sleep(350);
-  click(bx + bw * 0.5, by + bh * 0.45); // focus the canvas
-  await sleep(150);
-  key("a", "cmd");
-  key("delete");
-  key("v", "cmd");
-  await sleep(600);
-  click(bx + bw * 0.12, by + bh * 0.18); // deselect
-  console.log("[draw-image] pasted transparent PNG into Freeform:", pngPath);
-  console.log("[draw-image] DONE — screenshot the window to verify.");
+// Hard guardrail: the old placement flags must fail loudly instead of silently
+// producing a preview that someone might then treat as a deliverable.
+const REMOVED_FLAGS = ["--place", "--url", "--port", "--target"];
+for (const flag of REMOVED_FLAGS) {
+  if (process.argv.includes(flag)) {
+    console.error(`[draw-image] ${flag} was REMOVED: this script can no longer place images into an app.`);
+    console.error("[draw-image] To actually draw, use cu_route → cu_paint (native) / cu_cdp_paint (web) inside the target app.");
+    console.error("[draw-image] See docs/process-authenticity-oracle.md.");
+    process.exit(2);
+  }
 }
 
 async function main() {
   const image = arg("image");
-  const url = arg("url");
-  const port = Number(arg("port", "9333"));
-  if (!image || !existsSync(image)) { console.error("usage: --image <path> --url <web-canvas-url>"); process.exit(2); }
+  if (!image || !existsSync(image)) {
+    console.error("usage: node scripts/draw-image.mjs --image <path> [--out <preview.png>]");
+    process.exit(2);
+  }
   const rect = [arg("x", "150"), arg("y", "120"), arg("width", "850"), arg("height", "780")];
   const colors = arg("colors", "9");
   const grid = arg("grid", "130");
-  const target = arg("target", "web");
-  const out = arg("out", join(ROOT, "out", "draw-image.png"));
+  const out = arg("out", join(ROOT, "out", "draw-preview.png"));
   mkdirSync(dirname(out), { recursive: true });
 
-  // 1. compile plan
   const planPath = out.replace(/\.[^.]+$/, "") + ".plan.json";
-  const planRes = JSON.parse(execFileSync(CU, ["drawplan", "--image", image, "--rect", rect.join(","), "--grid", String(grid), "--colors", String(colors), "--out", planPath], { encoding: "utf8" }).trim().split("\n").pop());
+  const planRes = JSON.parse(execFileSync(CU, ["drawplan", "--image", image,
+    "--rect", rect.join(","), "--grid", String(grid), "--colors", String(colors),
+    "--out", planPath], { encoding: "utf8" }).trim().split("\n").pop());
   if (planRes.ok !== true) throw new Error("drawplan failed: " + JSON.stringify(planRes));
-  console.log("[draw-image] plan:", planPath, "layers", planRes.layers?.length, "runs", planRes.totalRuns);
 
-  // 2. rasterise to a pixel-exact PNG. A native whiteboard needs a transparent,
-  //    locally-positioned image; a web canvas is uploaded as-is.
   const py = findPython();
-  const pngArgs = [join(ROOT, "scripts", "plan-to-png.py"), planPath, out, "--scale", arg("scale", "1")];
-  if (target === "freeform") pngArgs.push("--local", "--transparent");
-  const pngRes = JSON.parse(execFileSync(py, pngArgs, { encoding: "utf8" }).trim().split("\n").pop());
+  const pngRes = JSON.parse(execFileSync(py, [join(ROOT, "scripts", "plan-to-png.py"),
+    planPath, out, "--scale", arg("scale", "1"), "--local", "--transparent"],
+    { encoding: "utf8" }).trim().split("\n").pop());
   if (pngRes.ok !== true) throw new Error("plan-to-png failed");
-  console.log("[draw-image] png:", out, pngRes.width + "x" + pngRes.height,
-              target === "freeform" ? "(local, transparent)" : "");
 
-  if (hasFlag("no-place")) { console.log("[draw-image] --no-place: skipping placement"); return; }
-  if (target === "freeform") { await placeIntoFreeform(out, CU); return; }
-  if (!url) { console.log("[draw-image] no --url: PNG only"); return; }
-
-  // 3. place into the web canvas over CDP
-  const info = await launchDebugChrome({ port, startUrl: url, timeoutMs: 25000 });
-  const designMatch = (() => {
-    const m = /\/(?:design|d)\/([A-Za-z0-9_-]+)/.exec(url);
-    return m ? m[1] : new URL(url).hostname.split(".").slice(-2).join(".");
-  })();
-  let conn;
-  try {
-    conn = await acquirePage({ wsUrl: info.browserUrl, urlMatch: designMatch });
-  } catch {
-    // No tab has the design open yet: open one, then attach.
-    const boot = await acquirePage({ wsUrl: info.browserUrl, urlMatch: "." });
-    const created = await boot.client.send("Target.createTarget", { url });
-    releasePages({});
-    for (let i = 0; i < 20; i++) {
-      await sleep(500);
-      try { conn = await acquirePage({ wsUrl: info.browserUrl, urlMatch: designMatch }); break; } catch { /* wait */ }
-    }
-    if (!conn) throw new Error("could not open the target design tab");
-  }
-  const c = conn.client;
-  await c.send("Page.bringToFront", {}).catch(() => {});
-  await sleep(4000);
-  const click = async (x, y) => {
-    await c.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
-    await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
-  };
-  // open the app's upload panel if it has one; find a file input
-  await c.send("DOM.enable", {}); await c.send("Runtime.enable", {});
-  let inputNode = 0;
-  const findInput = async () => {
-    const q = await c.send("Runtime.evaluate", { expression: `(()=>{const e=document.querySelector('input[type=file]');if(e){e.setAttribute('data-draw-up','1');return 'yes'}return 'no'})()`, returnByValue: true });
-    if (q.result.value !== "yes") return 0;
-    const doc = await c.send("DOM.getDocument", { depth: 1 });
-    const qs = await c.send("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "input[data-draw-up='1']" });
-    return qs.nodeId || 0;
-  };
-  const openUploadTab = async () => {
-    const upTab = await c.send("Runtime.evaluate", { expression: `(()=>{const e=[...document.querySelectorAll('[aria-label],[role=tab]')].find(x=>/^(上传|Upload)$/i.test((x.getAttribute('aria-label')||x.innerText||'').trim())&&x.getBoundingClientRect().width>10);if(!e)return null;const r=e.getBoundingClientRect();return JSON.stringify({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)})})()`, returnByValue: true });
-    if (upTab.result.value) { const p = JSON.parse(upTab.result.value); await click(p.x, p.y); await sleep(1200); return true; }
-    return false;
-  };
-  for (let attempt = 0; attempt < 8 && !inputNode; attempt++) {
-    inputNode = await findInput();
-    if (!inputNode) { await openUploadTab(); await sleep(500); }
-  }
-  if (!inputNode) {
-    console.log("[draw-image] no file input found; PNG rendered at", out, "— place it manually or open it in a tab");
-    releasePages({}); return;
-  }
-  await c.send("DOM.setFileInputFiles", { nodeId: inputNode, files: [out] });
-  console.log("[draw-image] uploaded", out, "into the design");
-  await sleep(4500);
-  // click the newest uploaded thumbnail to drop it on the canvas
-  const thumb = await c.send("Runtime.evaluate", { expression: `(()=>{const imgs=[...document.querySelectorAll('img')].map(e=>e.getBoundingClientRect()).filter(r=>r.width>40&&r.width<200&&r.x<620);if(!imgs.length)return null;const r=imgs[imgs.length-1];return JSON.stringify({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)})})()`, returnByValue: true });
-  if (thumb.result.value) {
-    const p = JSON.parse(thumb.result.value);
-    await click(p.x, p.y);
-    await sleep(1500);
-    console.log("[draw-image] clicked upload thumbnail to place it");
-  }
-  console.log("[draw-image] DONE — screenshot the window to verify. PNG:", out);
-  releasePages({});
+  console.log("[draw-image] plan:", planPath, "layers", planRes.layers?.length, "runs", planRes.totalRuns);
+  console.log("[draw-image] PREVIEW PNG (composition/colour check only):", out,
+              pngRes.width + "x" + pngRes.height);
+  console.log("[draw-image] WARNING: this PNG is NOT a deliverable. Uploading/pasting it into the target app is process fraud (user ruling 2026-11-08).");
+  console.log("[draw-image] To draw for real: cu_route → cu_paint (native) / cu_cdp_paint (web) inside the target app.");
 }
 
 main().then(() => process.exit(0)).catch((e) => { console.error("[draw-image] FAILED:", e.message); process.exit(1); });

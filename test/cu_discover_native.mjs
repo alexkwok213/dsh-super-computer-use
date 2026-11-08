@@ -63,7 +63,11 @@ test('native discovery by appName returns the Freeform playbook without Chrome',
   assert.equal(r.playbook.id, 'apple-freeform');
   assert.ok(r.playbook.pitfalls.length > 0);
   assert.ok(Array.isArray(r.next) && r.next.length > 0, 'flow names are returned');
-  assert.ok(r.playbook.routes.some((x) => x.id === 'exactCopy'));
+  assert.ok(r.playbook.routes.some((x) => x.id === 'freehandNative'),
+    'the only legitimate route is the real-stroke one');
+  assert.equal(r.playbook.routes.some((x) => x.id === 'exactCopy'), false,
+    'the off-screen PNG shortcut must not be discoverable');
+  assert.ok(r.playbook.prohibited.length >= 3, 'prohibited paths reach the model via discover');
   assert.equal(h.calls.some((c) => /cdp|launch|chrome/i.test(c.join(' '))), false,
     'native branch must not touch CDP or launch a browser');
 });

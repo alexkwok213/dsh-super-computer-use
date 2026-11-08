@@ -43,7 +43,7 @@ test('an operating tool result carries a bounded, useful guidance field', async 
   const h = harness();
   const r = await h.call('cu_route', { intent: '在 Freeform 上画出这幅图', appName: 'Freeform' });
   assert.equal(r.ok, true);
-  assert.equal(r.recommended.id, 'exactCopy', 'the route answer is unchanged');
+  assert.equal(r.recommended.id, 'freehandNative', 'the route answer is unchanged');
   assert.ok(Array.isArray(r.guidance), 'guidance is injected');
   assert.ok(r.guidance.length > 0 && r.guidance.length <= 3, 'at most three lines');
   assert.equal(new Set(r.guidance).size, r.guidance.length, 'no duplicates');
@@ -62,7 +62,7 @@ test('no active session means no extra field (unit-test shape stays stable)', as
   const r = await harness({ withSession: false })
     .call('cu_route', { intent: '画出这幅图', appName: 'Freeform' });
   assert.equal(r.guidance, undefined);
-  assert.equal(r.recommended.id, 'exactCopy');
+  assert.equal(r.recommended.id, 'freehandNative');
 });
 
 test('cu_windows and cu_status surface the frontmost app playbook', async () => {

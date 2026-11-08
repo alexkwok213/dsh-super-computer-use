@@ -12,14 +12,15 @@ Usage:
 
 Flags:
   --local        ignore the plan's absolute x0/y0 (screen coords) and render
-                 from (0,0). Needed when the PNG will be placed as an image
-                 object; otherwise the picture carries a useless top/left margin.
-  --transparent  RGBA with an alpha-0 background instead of opaque white.
-                 Needed for pasting into a native whiteboard (Freeform), where
-                 an opaque white rectangle would cover the grid.
+                 from (0,0), so the preview has no useless top/left margin.
+  --transparent  RGBA with an alpha-0 background instead of opaque white, so
+                 the preview can be compared against the reference cleanly.
 
-Both flags together produce the pixel-exact, transparent PNG that the
-`draw-image.mjs --target freeform` path pastes.
+IMPORTANT: this PNG is an OFF-SCREEN COMPOSITION/COLOUR PREVIEW ONLY. It must
+NEVER be uploaded, pasted or dropped into the target app as a deliverable:
+computer use requires real strokes injected into the app itself (user ruling
+2026-11-08, see docs/process-authenticity-oracle.md). `draw-image.mjs` now
+only produces this preview; its placement capability was removed.
 
 Plan format (from `cu drawplan`):
   { x0, y0, sx, sy, layers:[{index, hex, runs:[[i0,j,i1], ...]}, ...] }

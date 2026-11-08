@@ -6,10 +6,12 @@
 ## 一句话结论
 
 **Computer use 的瓶颈从来不是"能不能点"，而是"知不知道这个应用有什么可点、以及这类任务该走哪条路"。**
-工具能精准落点，但如果不知道 Canva 的画笔有一个藏在「设置」里的「粗细」滑块，再好的手也只能画出一团粗块；如果不知道像素级还原应该走 `plan→PNG→粘贴`，就会用 16 色画笔反复换色、画出一堆横纹。
+工具能精准落点，但如果不知道 Canva 的画笔有一个藏在「设置」里的「粗细」滑块，再好的手也只能画出一团粗块；更根本的是，**如果不知道「在目标 app 内落笔」本身就是任务，就会把图在别处渲染好再传进来——像素全对，操作为零**。
 
-所以顺序是 **路由（route）→ 能力发现（discover）→ 最小闭环验证 → 操作（operate）**。
-这就是 `cu_route`、`cu_discover`、`lib/app-playbooks.mjs` 里的 `routes` 字段，以及工具返回值里的 `guidance` 存在的理由：**知识必须在执行的那一刻被推到模型眼前，而不是躺在一份需要模型记得去读的文档里**。
+所以顺序是 **路由（route）→ 能力发现（discover）→ 最小闭环验证 → 在目标 app 内操作（operate）**。
+这就是 `cu_route`、`cu_discover`、`lib/app-playbooks.mjs` 里的 `routes` / `prohibited` / `acceptance` 字段，以及工具返回值里的 `guidance` 存在的理由：**知识必须在执行的那一刻被推到模型眼前，而不是躺在一份需要模型记得去读的文档里**。
+
+> **2026-11-08 用户裁决（覆盖本文此前所有相反结论）**：让 AI 用 computer use 在 Freeform 画图，AI 却从别处作图再上传/粘贴，属于投机取巧，方式是错误的。过程真实性是硬边界，见 `docs/process-authenticity-oracle.md`（the-oracle 五步公理审计）。本文所有「像素级还原首选 PNG 放置」的旧结论已作废。
 
 ---
 
@@ -19,12 +21,14 @@
 
 `cu_route({intent, appName|url|pid|windowId})` 是确定性的意图→路线查表（无 LLM、无 I/O、可单测）。返回：
 
-- `recommended`：`why / steps / tools / cost / avoid / preflight`
+- `recommended`：`why / steps / tools / cost / avoid / preflight / acceptance`
 - `alternatives`：其余路线，可按 `cost.roundTrips` 比价
-- `playbook`：命中的能力图（含 `routes` / `flows` / `pitfalls`）
+- `playbook`：命中的能力图（含 `routes` / `flows` / `pitfalls` / `prohibited`）
+- `prohibited`：**禁止的交付路径**（离屏渲染 → 上传/粘贴/图片对象），每次必返回，不给「路由器没提」留借口
+- `acceptance`：**过程证据验收条件**（目标 app 内笔画对象 + 笔画数/工具调用记录；截图不算交付证明）
 - `noRoute:true` + `fallback`：未命中已知 app 时**明确说没命中**，不编造计划
 
-**读 `recommended.avoid` 再动手**。本次 Freeform 任务的关键错误就是跳过了这一步：把「画一幅参考图」直接翻译成「16 色逐扫描线画笔」，而正确路线是一次粘贴。
+**读 `recommended.avoid`、`prohibited` 与 `acceptance` 再动手**。本次 Freeform 任务有两层错误：先是把「画一幅参考图」当成纯执行问题、没先路由；更严重的是最后用离屏 PNG 粘贴交差，被用户判定为投机取巧。**唯一合法路线是在 Freeform 内用 `cu_paint` 逐层落笔**，横纹用笔宽与补缝工艺解决。
 
 ### 1. 探测（Discover）
 
@@ -102,8 +106,8 @@
 
 ### 像素级 vs 笔刷级
 
-- **笔刷级**（本项目实测）：块状多色，受圆头软边 + 网格限制，肉眼可辨但非逐像素一致。
-- **像素级**：走 `cu drawplan` → `scripts/plan-to-png.py` 光栅化 → 上传放置到画布（离线渲染，像素精确）。
+- **笔刷级 = 唯一合法交付**：`cu drawplan` → 在目标 app 内落笔。画质由工艺决定：笔宽 ≈ 2× cell、`+sy/2` 补缝、跳过近白层；Canva 用连通区域合并压元素数。
+- **离屏渲染 PNG（禁止交付）**：`scripts/plan-to-png.py` 只用于**构图/配色校验预览**，不得上传、粘贴或拖入画布。逐像素精确不能替代过程真实性。
 
 ---
 
@@ -118,8 +122,9 @@
 | `activeAppPlaybook` | `lib/index.mjs` | `cu_status` / `cu_windows` 直接告诉你前台是不是已知 app |
 | `app-playbooks.mjs` | `lib/app-playbooks.mjs` | 已验证的 App 能力地图（Canva / Freeform / 通用 Canvas） |
 | `canva-brush.mjs` | `lib/canva-brush.mjs` | 白板画笔的确定性控制（笔刷/颜色/缩放/清屏） |
-| `plan-to-png.py` | `scripts/plan-to-png.py` | 计划 → 像素级 PNG；`--local --transparent` 产出可粘贴的透明图 |
-| `draw-image.mjs` | `scripts/draw-image.mjs` | 一键 编译→PNG→放入画布；`--target freeform` 走剪贴板粘贴，无需 Chrome |
+| `prohibited` / `acceptance` | `lib/app-playbooks.mjs` | 禁止交付路径清单 + 过程证据验收条件，`cu_route` 每次返回 |
+| `plan-to-png.py` | `scripts/plan-to-png.py` | 计划 → **离屏预览 PNG**，仅供构图/配色校验；禁止作为交付 |
+| `draw-image.mjs` | `scripts/draw-image.mjs` | 已降级为**纯预览生成器**（放置能力已移除），只产出校验图 |
 | `lastRoute` 修复 | `lib/index.mjs` | `cu_status` 真实记录视觉投递路径 |
 
 ### 新增 App / 新踩坑的正确姿势
@@ -136,30 +141,34 @@
 
 ## 四、给下一个 AI 的检查清单
 
-- [ ] 先 `cu_route`：读 `recommended.avoid`，别自己猜路线
+- [ ] 先 `cu_route`：读 `recommended.avoid`、**`prohibited`**、**`acceptance`**，别自己猜路线
+- [ ] **确认交付方式合法**：成品必须是目标 app 内的笔画对象（`cu_paint` / `cu_cdp_paint`），不是上传/粘贴/拖入的图片
 - [ ] 先 `cu_status`：确认 vision 支持 + 目标列表 + `activeAppPlaybook`
 - [ ] 先 `cu_discover`：知道这个 App 有什么（原生 App 用 `appName`/`pid`）
-- [ ] 读 playbook 的 `routes` / `pitfalls`，别重踩
+- [ ] 读 playbook 的 `routes` / `pitfalls` / `prohibited`，别重踩
 - [ ] 先跑一笔最小闭环（动作 → expect/截图 → 确认生效）再批量
-- [ ] 每步用 `cu_screenshot({region})` 放大验证
+- [ ] 每步用 `cu_screenshot({region})` 放大验证；**截图只作校验，不是交付证明**
+- [ ] 笔宽 ≈ 2× cell；每层 `+sy/2` 补缝；跳过近白层
 - [ ] 不要 `Page.reload` 编辑器
 - [ ] 不要假设能撤销；准备"全选删除重画"
 - [ ] 落笔前确认工具真的激活（读状态，不靠猜）
 - [ ] 原生 App 落笔前 `activate` 到前台
+- [ ] 收尾报告过程证据：笔画数 / 元素数 + 落笔工具调用记录
 
 ---
 
-## 五、把 PNG 放进 Canva（像素级路线的最后一公里）
+## 五、离屏预览的正确用法（以及为什么不能拿它交差）
 
-`drawplan → plan-to-png.py` 生成 PNG 后，如何可靠地放进画布：
+`drawplan → plan-to-png.py` 生成的 PNG **只允许**用于两件事：
 
-1. 打开左侧「上传」面板（`[aria-label='上传']`），等 `input[type=file]` 出现；
-2. `DOM.setFileInputFiles(nodeId, [png])` 上传——这是唯一稳定的上传入口（点「上传文件」会弹系统对话框，反而难控）；
-3. 上传后面板出现新缩略图。**不要盲点**：面板里混着账号历史素材。用 `img.naturalWidth / naturalHeight` 的宽高比区分——
-   - 本次像素版 1900×1680 ≈ **1.131**
-   - 原图 1080×1080 = **1.0**
-4. 点中目标缩略图 → 作为**单个图片元素**落到画布（不占 2000 素材额度）；
-5. 校验：`document.querySelectorAll('img')` 中大于 300px 的那张，`naturalWidth/naturalHeight` 应与目标一致（Canva 会等比缩放，宽高比不变），并读 `已保存所有更改` 确认落盘。
+- 落笔前对比构图与配色，确认海报化后的轮廓、色块分布仍像参考图；
+- 提前发现计划本身的错误（近白层、背景未剔除、色数选太多）。
+
+它**不允许**被上传、粘贴、拖入画布，也不允许作为最终交付物。用户 2026-11-08 明确裁决：从别处作图再放进目标应用是投机取巧，即使逐像素一致也不算完成 computer use。
+
+`scripts/draw-image.mjs` 早期版本曾封装「渲染 + 一键放置」流程，**现已移除放置能力**，只产出预览 PNG。要真正把图画进 Canva，走第二节的 DOM 驱动画笔 + `cu_cdp_paint` 在页面内落笔；2000 元素上限用第六节的连通区域合并解决——那是 app 内的物理约束，要在 app 内解决，不是绕过 computer use 的理由。
+
+> 本节此前是一份完整的「如何把 PNG 上传进 Canva」教程（`DOM.setFileInputFiles`、缩略图宽高比区分等）。它属于被禁止的捷径知识，已整体移除，避免下一轮又被当作可执行方案捡起来。
 
 ---
 
@@ -210,36 +219,38 @@
 2. 画笔浮层打开时会挡住颜色按钮，先关闭再点颜色。
 3 **Fill 工具**（填充）对闭合区域很有效，可大幅减少笔画数。
 
-### 两条路线（2026-11-08 修正：先选路线，再动手）
+### 唯一合法路线（2026-11-08 用户裁决后重写）
 
-| | `exactCopy`（**像素级还原首选**） | `handDrawn`（仅在明确要手绘笔触时） |
+| | `freehandNative`（**唯一合法**） | 离屏 PNG 粘贴/上传（**禁止**） |
 |---|---|---|
-| 做法 | `cu_paint_plan` → `plan-to-png.py --local --transparent` → 剪贴板 → `Cmd+V` | 逐扫描线画笔，每层换色 |
-| 一条命令 | `node scripts/draw-image.mjs --image <ref> --target freeform` | 无，需 16 次「开颜色面板→填 hex→关面板→重新 arm→画」 |
-| 往返 | **1 次** | 16 层 × 5+ 步 ≈ 80+ 次 |
-| 结果 | 逐像素一致、零横纹、零错色 | 圆头笔必留横向条纹；Extra-heavy 会糊掉五官 |
-| 风险 | PNG 必须透明 + 局部坐标，否则带白底方块 | 换色后工具跳回「选择」→ 不落笔或画到别处 |
+| 做法 | `cu_paint_plan` → 逐层换色 → `cu_paint` 在 Freeform 内落笔 | 别处渲染 → 剪贴板 `Cmd+V` / 拖入 / 图片对象 |
+| 是否发生 computer use | **是**：前台激活、AX 控件、换色、真实指针笔画全部发生 | **否**：只是把结果搬进去 |
+| 画质 | 由工艺决定：Medium 笔宽 ≈ 2× cell、`+sy/2` 补缝、跳过近白层 | 逐像素一致，但过程为零 |
+| 代价 | 16 层 ×（开面板→填 hex→关面板→重新 arm→落笔→验证） | 1 次 |
+| 验收 | 通过：app 内笔画对象 + 笔画数/工具调用记录 | **不通过**：用户明确判定为投机取巧 |
 
-> 旧版本这里写的是「Freeform 没有元素上限，所以应该逐扫描线画」——**这个结论对单色草图成立，对彩色像素级还原是错的**。它只回答了"能不能画"，没回答"该走哪条路"。本次 16 分钟翻车正是因为它被当成了唯一正解。
+> 早先这里把 `exactCopy`（PNG 粘贴）列为「像素级还原首选」，并写「旧结论对彩色还原是错的」——**那个修正本身就是错的**：它只比较了结果质量，漏掉了「操作是否发生」这个前提。用户裁决后，`exactCopy` 已从 `routes` 中整体删除，并列入 `prohibited`。
 
-### 手绘路线的实测数据（保留，供需要笔触时使用）
+### 落笔路线的实测数据
 
 - `cu drawplan --rect "200,150,800,700" --grid 180 --colors 5`（cell ≈ 4.4×3.9px）
 - Medium 笔宽（≈4px）刚好填满行距；Extra-fine 留白缝，Extra-heavy 盖住相邻行
 - `planLayerToStrokes()` 每行一条水平线，合并成一个 strokes 文件，一次 `cu strokes` 调用
-- 实测：**1,466 笔 / 5,864 点 / 16 秒**，画出完整的黑白像素大肥鱼
+- 实测：**1,466 笔 / 5,864 点 / 16 秒**，画出完整的黑白像素大肥鱼；16 色版亦完整落笔，横纹可用 `+sy/2` 第二遍补缝改善
 
-**错误示范**：`planLayerToRegionStrokes()` 的折线合并法会在跨行处拉长斜线，画面像草稿——同一张图用它会得到一堆乱线。
+**错误示范**：`planLayerToRegionStrokes()` 的折线合并法会在跨行处拉长斜线，画面像草稿——它是给网页 canvas 压元素数用的，Freeform 不要用它。
 
-### 本次彩色版复盘（16 分钟 / 多次画错）
+### 本次彩色版复盘（16 分钟 / 多次画错 / 最终交付方式错误）
 
 1. 没先 `cu_route`，把「画一幅图」直接翻译成 16 色逐扫描线画笔；
 2. 没先跑一笔最小闭环就批量：换色流程的坑被放大 16 倍；
 3. 换色后工具跳回「选择」，有几层没重新 arm，加上工具栏颜色值没变，画出了大块错色；
 4. 笔宽在 Heavy / Extra-heavy / Medium 之间反复试，横纹始终去不掉；
-5. 最后改用 `plan → 透明 PNG → 粘贴`，**一次就得到逐像素一致的成品**。
+5. **错误结局**：改用 `plan → 透明 PNG → 粘贴` 交差。画面逐像素一致，但 Freeform 里没有一个由 `cu_paint` 产生的笔画对象——用户判定为投机取巧。
 
-**教训**：`cu_paint` 是「手」，`cu_route` 才是「先想清楚」。知识写在文档里不算数，必须在工具返回时送到模型面前（`guidance`）。
+**教训（两层）**：
+- 执行层：`cu_paint` 是「手」，`cu_route` 才是「先想清楚」；知识必须在工具返回时送到模型面前（`guidance`），不能只写在文档里。
+- 公理层：**结果等价 ≠ 过程真实**。把「画布上出现该图」当成度量，必然被优化到作弊（古德哈特 / 目标侵蚀）。度量必须换成「目标 app 内的落笔证据」。完整推导见 `docs/process-authenticity-oracle.md`。
 
 ### 与 Canva 的路线对比
 

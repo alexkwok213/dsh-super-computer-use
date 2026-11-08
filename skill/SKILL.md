@@ -1,6 +1,6 @@
 ---
 name: dsh-super-computer-use
-description: macOS Computer Use / 桌面操控与自动化（剪映、微信、Finder、备忘录、Freeform 等后台操作、绘图与内嵌观看预览），含 cu_route/cu_discover 能力路由：先查应用有什么、这类任务该走哪条路，再动手。Control macOS desktop applications using background AX actions, a deterministic strategy router, floating status capsule/halo, and inline target window previews.
+description: macOS Computer Use / 桌面操控与自动化（剪映、微信、Finder、备忘录、Freeform 等后台操作、绘图与内嵌观看预览），含 cu_route/cu_discover 能力路由与过程真实性硬约束：绘图必须在目标 app 内落笔，禁止离屏渲染后上传/粘贴。Control macOS desktop applications using background AX actions, a deterministic strategy router, real in-app strokes (never uploaded images), floating status capsule/halo, and inline target window previews.
 ---
 
 # macOS Computer Use (`cu_*` Tools)
@@ -9,20 +9,48 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
 
 ## Core Principles
 
+**-2. Process authenticity — computer use means OPERATING the target app.**
+A task is NOT complete because the desired pixels appear inside the app. It is
+complete because **the app was driven to produce them**. Rendering an image
+off-screen and uploading / pasting / dropping it into the canvas is process
+fraud: no computer use happened, even when the result is pixel-perfect. This is
+a hard constraint from the user (2026-11-08), not a style preference.
+
+For ANY drawing task, all of the following hold:
+
+- The finished artwork **must consist of stroke objects created inside the target
+  app** by `cu_paint` (native) or `cu_cdp_paint` (web canvas). There is no other
+  legitimate delivery channel.
+- `cu_paint_plan`, its preview PNG, and any off-screen render are for
+  **composition and colour checking ONLY**. Never a deliverable.
+- A screenshot is **verification, never a delivery proof**. Keep process
+  evidence: stroke/element counts and the painting tool calls.
+- A physical limit inside the app (e.g. Canva's 2,000-item cap) must be solved
+  **inside the app** — merge strokes into connected regions with
+  `planLayerToRegionStrokes()` — not by switching to an upload.
+- "The brush leaves stripes / costs 16 colour changes" is a **craft problem**
+  (fix with brush width ≈ 2× cell and a `+sy/2` second pass), never a licence
+  to bypass the app.
+
+`cu_route` returns `prohibited` (forbidden delivery paths) and `acceptance`
+(evidence required). Read both before the first click. First-principles audit:
+`docs/process-authenticity-oracle.md`.
+
 **-1. Route first, then discover, then verify one step, then batch.**
 Computer use is not "click wherever". The thing that makes an app usable is knowing
-what it CAN do, and knowing which of several possible routes is worth taking. A
-whiteboard is not "a canvas you drag on" — it has a brush with separate thickness,
-opacity and colour controls buried in a popover; and a pixel-exact copy should be
-placed as a rendered PNG, not painted in 16 colour passes.
+what it CAN do, and knowing which route is worth taking. A whiteboard is not
+"a canvas you drag on" — it has a brush with separate thickness, opacity and
+colour controls buried in a popover.
 For ANY non-trivial task, in this order:
 
 1. `cu_route({intent, appName|url|pid|windowId})` — deterministic intent → route
-   lookup. Read `recommended.why`, `recommended.avoid` and `preflight` **before
-   the first click**. If `noRoute:true`, follow `fallback` (the generic method).
+   lookup. Read `recommended.why`, `recommended.avoid`, `prohibited`,
+   `acceptance` and `preflight` **before the first click**. If `noRoute:true`,
+   follow `fallback` (the generic method).
 2. `cu_discover` — `urlMatch` for web pages (CDP DOM enumeration), or
    `appName`/`pid`/`windowId` for **native apps** (AX tree + native playbook).
-   Native discovery needs no Chrome. Read `playbook.flows` / `pitfalls` / `routes`.
+   Native discovery needs no Chrome. Read `playbook.flows` / `pitfalls` /
+   `routes` / `prohibited`.
 3. **Minimum closed loop on ONE step**: act → `expect` or screenshot → confirm it
    actually took effect. Do not start a 16-step batch before this passes.
 4. Only then `cu_batch` the remaining deterministic steps. A missing step 3 is
@@ -30,12 +58,12 @@ For ANY non-trivial task, in this order:
 
 ### Route quick-reference (the decision the router encodes)
 
-| Intent | Preferred route | Avoid |
+| Intent | Only legitimate route | Prohibited |
 |---|---|---|
-| 像素级还原一幅参考图 | `cu_paint_plan` → PNG (`plan-to-png.py --local --transparent`) → 放置/粘贴；一条命令是 `scripts/draw-image.mjs --target freeform` | 16 色逐扫描线画笔（横纹 + 逐层换色 + 易错色） |
-| 明确要手绘笔触 | 画笔逐层，先验证 arm/换色闭环 | 用 PNG 冒充手绘 |
-| 网页 canvas（Canva / Figma） | `cu_cdp_paint`（CDP `Input.dispatchMouseEvent`） | `cu_paint`（CGEvent 被渲染循环丢弃） |
-| 原生 App（Freeform / 剪映） | `cu_paint` / AX 操作，**app 必须前台** | 后台发 hid-events（不落笔） |
+| 在 Freeform / 原生白板画参考图 | `cu_paint_plan` → 逐层换色 + `cu_paint` 落笔（Medium 笔宽、`+sy/2` 补缝、每色重新 arm） | 离屏 PNG 粘贴 / 上传 / 拖入；剪贴板 `Cmd+V` |
+| 在 Canva / 网页 canvas 画参考图 | `cu_paint_plan` → DOM 驱动画笔 + 连通区域蛇形合并 + `cu_cdp_paint` 落笔 | 上传图片对象；`cu_paint`（CGEvent 被渲染循环丢弃） |
+| 明确要手绘笔触 | 同上，保留笔宽与笔触质感 | 用外部图片冒充手绘 |
+| 任何绘图任务的验收 | 目标 app 内存在笔画对象 + 过程证据（笔画数 / 工具调用记录） | 只交截图、只交一个图片对象 |
 
 Mutating tools now return a short `guidance` field (channel/cost + the matched
 playbook's route and first pitfall); `cu_status` / `cu_windows` return
@@ -117,21 +145,22 @@ context at execution time, not a document you have to remember to open.
     - Different targets can be observed and previewed concurrently. Same-target operations stay ordered. Never send global keyboard/mouse/clipboard input concurrently to fake parallel control of several apps.
     - Stopping A leaves B alive. After stop-all, no queued input may run and no late result may reopen a target.
 
-12. **Drawing a Reference Image (Canva / Web Canvas / Freeform)**
-    - **Start with `cu_route`** (see -1 above). For a pixel-exact copy it will recommend the PNG route, not the brush route. On Freeform the paste route is `scripts/draw-image.mjs --image <ref> --target freeform`, which needs no Chrome.
-    - Use `cu_paint_plan` first. It posterizes the reference, removes the border-connected background, assigns a palette, and writes a plan of horizontal brush runs. Give it the drawing rect. Inspect its returned preview: it must look like the reference.
-    - **Two execution channels — choose by target:**
-      - **Web canvas (Canva / Figma whiteboard / tldraw): use `cu_cdp_paint`, NOT `cu_paint`.** A browser canvas filters CGEvent/pid pointer events; `cu_paint`'s native strokes report ok but paint nothing (verified). `cu_cdp_paint` injects `Input.dispatchMouseEvent` over CDP and does paint.
-      - **Native app (Freeform, Photoshop, Preview): `cu_paint`** with the real pointer and `paceMs` >= 13. Freeform additionally requires `osascript -e 'tell application "Freeform" to activate'` before any stroke, and its colour panel is a separate axOnly window — see the playbook's `pitfalls`.
-      - **Native whiteboard, pixel-exact copy: do not paint at all.** Render the plan to a transparent, locally-positioned PNG and paste it (`--target freeform`). A round-tipped brush leaves horizontal stripes that no width tuning removes.
+12. **Drawing a Reference Image (Freeform / Canva / Web Canvas)**
+    - **Start with `cu_route`** (see -1). It returns ONE legitimate route (`freehandNative` / `freehandCdp`), plus `prohibited` and `acceptance`. There is no fast path that skips painting — see Principle -2.
+    - Use `cu_paint_plan` first. It posterizes the reference, removes the border-connected background, assigns a palette, and writes a plan of horizontal brush runs. Give it the drawing rect. Its **preview PNG is for composition/colour checking only, never a deliverable**.
+    - **The only two delivery channels — choose by target:**
+      - **Native app (Freeform, Photoshop, Preview): `cu_paint`** with the real pointer. Freeform requires `osascript -e 'tell application "Freeform" to activate'` before any stroke; its colour panel is a separate axOnly window (`windowId 0`), needs a foreground real click, and **after every colour change the tool jumps back to "选择" — re-arm Drawing tool before each layer**. See playbook `pitfalls`.
+      - **Web canvas (Canva / Figma whiteboard / tldraw): `cu_cdp_paint`, NOT `cu_paint`.** A browser canvas filters CGEvent/pid pointer events; `cu_paint` reports ok but paints nothing (verified). `cu_cdp_paint` injects `Input.dispatchMouseEvent` over CDP into the page.
+    - **Craft, not shortcuts — how to make real strokes good:**
+      - Brush width ≈ **2× the plan cell** so rows overlap: `grid 180` → cell 4px → Medium (≈4px). Extra-fine leaves white seams; Extra-heavy covers adjacent rows and smudges facial details.
+      - Run a **`+sy/2` second pass** per layer to close horizontal seams; skip near-white layers (invisible on white).
+      - **Verify ONE stroke's closed loop first**: set colour → re-arm brush → paint → screenshot → confirm both colour and stroke landed. Only then batch the remaining layers. This is what prevents 16× wrong-colour errors.
+      - Canva's **2,000-item cap** is an in-app constraint: use `planLayerToRegionStrokes()` to merge each layer into connected serpentine strokes (measured 3,321 runs → 350 elements). Never solve it by uploading.
+      - A round-tipped brush leaves faint horizontal stripes; that is a craft problem to fix with width and the second pass, **not** a reason to switch to an off-screen render.
     - **CDP channel setup (macOS):** `cu_cdp_paint {launch:true, startUrl:"<url>"}` launches an owned Chrome with a dedicated profile and, by default, copies the daily Chrome's cookies/logins/localStorage into it (`syncLogin:true`) so it starts already signed in — never attach to the user's everyday browser for repeated work (Chrome 144+ re-prompts "Allow remote debugging?" on every attach). Reuse the pooled session; `action:"disconnect"` drops it.
-    - **The brush UI is scriptable — drive the DOM, not pixel coordinates.** Codex draws with the same CDP `Input.dispatchMouseEvent` path loop; the difference is operating the target's brush. On Canva whiteboard the controls are real DOM nodes with aria-labels (verified 2026-11): the rail `画笔` button's background turns `rgba(57,70,96,.14)` when armed; `设置` opens two `<input type=range>` sliders — **[0]=thickness (default 36 px), [1]=opacity (default 50 %)**; `颜色` → `添加新颜色` reveals a hex text input (`#rrggbb`). Set them with the native value setter plus `input`/`change` events (React ignores a plain `value=` assignment). `lib/canva-brush.mjs` implements exactly this: `armBrush`, `setBrushStyle({thickness, opacity})`, `setBrushColor(hex)`, `clearCanvas`, `closePopovers`.
-      - Thickness must be ~2× the planned cell so rows overlap: for `grid 140` (cell ~5.3 px) use **10 px**; 5 px leaves white seams.
+    - **The brush UI is scriptable — drive the DOM, not pixel coordinates.** On Canva whiteboard the controls are real DOM nodes with aria-labels (verified 2026-11): the rail `画笔` button's background turns `rgba(57,70,96,.14)` when armed; `设置` opens two `<input type=range>` sliders — **[0]=thickness (default 36 px), [1]=opacity (default 50 %)**; `颜色` → `添加新颜色` reveals a hex text input (`#rrggbb`). Set them with the native value setter plus `input`/`change` events (React ignores a plain `value=` assignment). `lib/canva-brush.mjs` implements exactly this: `armBrush`, `setBrushStyle({thickness, opacity})`, `setBrushColor(hex)`, `clearCanvas`, `closePopovers`.
       - A typed hex is applied only after the palette chip/Enter commits — read back the `[role=img][aria-label="#rrggbb"]` swatch to verify.
       - There is no usable undo (`Cmd+Z` via CDP keys does not reach Canva); clear with select-all + delete twice. **Beware `clearCanvas` click targets near the zoom slider — keep the click inside the artboard, and re-assert zoom=100% before painting.**
       - Never `Page.reload` the editor: it drops to the template/landing page and loses the canvas.
-    - Coordinates are CSS viewport px and only align at **100% zoom**; confirm zoom first.
-    - Result of the true freehand route is a blocky single-colour drawing (the realistic ceiling of a fat web brush). For a crisp faithful copy, prefer the off-screen plan→PNG→upload path below.
-    - **Most reliable pixel-exact recipe that avoids all of the above:** compile the plan, then **render the plan to a PNG off-screen** (fill each `runs` entry as a rect on an HTML5 `<canvas>` or with PIL), then place the PNG into the app (upload/drop). This is deterministic and pixel-perfect; the freehand brush route is only worth it when the deliverable must be hand-drawn strokes.
-    - Coordinate space: `cu_cdp_paint` stroke points are **CSS viewport pixels**; at Canva zoom Z, one design unit = Z CSS px, so a fixed rect only lines up when zoom is 100%. Reset zoom before painting; a zoom change between planning and painting shifts every stroke.
-    - A `dispatched`/`ok` result is not a drawing. Screenshot and compare against the plan preview; if it is a blob, the brush is too thick or the zoom is wrong — do not replay the whole layer.
+    - Coordinates are CSS viewport px and only align at **100% zoom**; confirm zoom first. `cu_cdp_paint` stroke points are **CSS viewport pixels**; at Canva zoom Z, one design unit = Z CSS px, so a fixed rect only lines up when zoom is 100%. Reset zoom before painting; a zoom change between planning and painting shifts every stroke.
+    - A `dispatched`/`ok` result is not a drawing. Screenshot and compare against the plan preview; if it is a blob, the brush is too thick or the zoom is wrong — do not replay the whole layer. **Finish by reporting process evidence (stroke/element count + the `cu_paint`/`cu_cdp_paint` calls), not just a screenshot.**
