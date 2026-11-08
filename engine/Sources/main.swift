@@ -313,7 +313,7 @@ func activate(pid: pid_t) -> Bool {
     }
     let deadline = Date().addingTimeInterval(1.6)
     while Date() < deadline {
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return true }
+        if frontmost().pid == pid || NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return true }
         usleep(50_000)
     }
     // Cooperative activation is often refused when another app holds focus.
@@ -326,15 +326,16 @@ func activate(pid: pid_t) -> Bool {
         task.waitUntilExit()
         let second = Date().addingTimeInterval(1.6)
         while Date() < second {
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return true }
+            if frontmost().pid == pid || NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return true }
             usleep(50_000)
         }
     }
-    return NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+    return frontmost().pid == pid || NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
 }
 
 func frontmostPID() -> pid_t {
-    NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+    let top = frontmost().pid
+    return top != 0 ? top : (NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)
 }
 
 // MARK: - staying in the background
@@ -595,6 +596,7 @@ func clickToPid(_ pid: pid_t, x: Double, y: Double, button: String, count: Int) 
         up?.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
         up?.flags = []
         postToPid(up, pid)
+        if clickIndex < count { usleep(50_000) }
     }
 }
 
@@ -733,6 +735,7 @@ func click(x: Double, y: Double, button: String, count: Int) {
         up?.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
         up?.flags = []
         post(up)
+        if clickIndex < count { usleep(50_000) }
     }
 }
 
@@ -757,10 +760,80 @@ func drag(from: CGPoint, to: CGPoint) {
         dragged?.post(tap: .cghidEventTap)
         usleep(9_000)
     }
+    usleep(30_000)
     let up = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp,
                      mouseCursorPosition: to, mouseButton: .left)
     up?.flags = []
     up?.post(tap: .cghidEventTap)
+}
+
+// MARK: - stroke streams
+
+/// Strokes arrive as JSON so thousands of points never travel through argv.
+/// Accepted shapes:
+///   {"paceMs":14,"strokes":[{"points":[[x,y],…]},…]}
+///   {"paceMs":14,"strokes":[[[x,y],…],…]}
+func parseStrokePayload(_ object: Any) -> ([[CGPoint]], Int?)? {
+    guard let root = object as? [String: Any] else { return nil }
+    let pace = (root["paceMs"] as? NSNumber)?.intValue
+    guard let raw = root["strokes"] as? [Any] else { return nil }
+    var strokes: [[CGPoint]] = []
+    for entry in raw {
+        var points: [CGPoint] = []
+        if let dict = entry as? [String: Any], let list = dict["points"] as? [Any] {
+            for value in list {
+                guard let pair = value as? [Any], pair.count >= 2,
+                      let x = (pair[0] as? NSNumber)?.doubleValue,
+                      let y = (pair[1] as? NSNumber)?.doubleValue else { return nil }
+                points.append(CGPoint(x: x, y: y))
+            }
+        } else if let list = entry as? [Any] {
+            for value in list {
+                guard let pair = value as? [Any], pair.count >= 2,
+                      let x = (pair[0] as? NSNumber)?.doubleValue,
+                      let y = (pair[1] as? NSNumber)?.doubleValue else { return nil }
+                points.append(CGPoint(x: x, y: y))
+            }
+        } else {
+            return nil
+        }
+        guard points.count >= 2 else { continue }
+        strokes.append(points)
+    }
+    return (strokes, pace)
+}
+
+/// Expand one layer of a `drawplan` file into absolute screen strokes.
+func strokePaths(fromPlan path: String, layerIndex: Int, inset: Double) -> ([[CGPoint]], String)? {
+    guard let data = FileManager.default.contents(atPath: path),
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let x0 = (root["x0"] as? NSNumber)?.doubleValue,
+          let y0 = (root["y0"] as? NSNumber)?.doubleValue,
+          let sx = (root["sx"] as? NSNumber)?.doubleValue,
+          let sy = (root["sy"] as? NSNumber)?.doubleValue,
+          let layers = root["layers"] as? [[String: Any]] else { return nil }
+    let layer = layers.first { ($0["index"] as? NSNumber)?.intValue == layerIndex }
+        ?? (layerIndex >= 0 && layerIndex < layers.count ? layers[layerIndex] : nil)
+    guard let layer, let runs = layer["runs"] as? [[Any]] else { return nil }
+    let hex = layer["hex"] as? String ?? ""
+    var strokes: [[CGPoint]] = []
+    strokes.reserveCapacity(runs.count)
+    for run in runs {
+        guard run.count >= 3,
+              let i0 = (run[0] as? NSNumber)?.doubleValue,
+              let j = (run[1] as? NSNumber)?.doubleValue,
+              let i1 = (run[2] as? NSNumber)?.doubleValue else { continue }
+        let y = y0 + (j + 0.5) * sy
+        var xa = x0 + i0 * sx + inset * sx
+        var xb = x0 + (i1 + 1) * sx - inset * sx
+        if xb <= xa {
+            let middle = (xa + xb) / 2
+            xa = middle - 0.5
+            xb = middle + 0.5
+        }
+        strokes.append([CGPoint(x: xa, y: y), CGPoint(x: xb, y: y)])
+    }
+    return (strokes, hex)
 }
 
 func dragToPid(_ pid: pid_t, from: CGPoint, to: CGPoint, button: String, steps: Int = 18) {
@@ -2900,12 +2973,14 @@ func orderedChildren(_ element: AXUIElement, level: Int) -> [AXUIElement] {
     let kids = children(element)
     guard level == 0 else { return kids }
     func key(_ element: AXUIElement) -> String {
+        let role = stringAttribute(element, kAXRoleAttribute)
+        let priority = (role == "AXWindow" || role == "AXSheet" || role == "AXDialog") ? "0" : (role == "AXMenuBar" ? "9" : "5")
         let frame = frame(of: element).map {
             "\(Int($0.origin.x)),\(Int($0.origin.y)),\(Int($0.width)),\(Int($0.height))"
         } ?? ""
         // Document and identifier separate windows that share a title (Chrome's
         // many "about:blank" windows), which keeps path refs stable.
-        return stringAttribute(element, kAXRoleAttribute) + "|"
+        return priority + "|" + role + "|"
             + stringAttribute(element, kAXTitleAttribute) + "|"
             + stringAttribute(element, kAXDocumentAttribute) + "|"
             + stringAttribute(element, "AXIdentifier") + "|" + frame
@@ -2951,13 +3026,22 @@ func windowRoot(pid: pid_t, root: AXUIElement,
     if frameMatches.count == 1, let index = frameMatches.first {
         return (topLevel[index], index)
     }
-    guard frameMatches.isEmpty, !target.title.isEmpty else { return nil }
-    let titleMatches = candidates.filter { index in
-        let axTitle = stringAttribute(topLevel[index], kAXTitleAttribute)
-        return axTitle == target.title || axTitle.hasPrefix(target.title + " - ")
+    if !candidates.isEmpty && !target.title.isEmpty {
+        let titleMatches = candidates.filter { index in
+            let axTitle = stringAttribute(topLevel[index], kAXTitleAttribute)
+            return axTitle == target.title || axTitle.hasPrefix(target.title + " - ")
+        }
+        if titleMatches.count == 1, let index = titleMatches.first {
+            return (topLevel[index], index)
+        }
     }
-    guard titleMatches.count == 1, let index = titleMatches.first else { return nil }
-    return (topLevel[index], index)
+    // Fallback for custom GUI apps (Qt / Metal like 剪映, or accessory apps) that
+    // don't expose AXWindow role at root: if the target window is verified on-screen,
+    // the first top-level element provides a valid walk anchor rather than fatal refusal.
+    if !topLevel.isEmpty {
+        return (topLevel[0], 0)
+    }
+    return nil
 }
 
 func snapshotNodes(pid: pid_t, includeZeroSize: Bool = false,
@@ -5203,6 +5287,7 @@ case "clicktext", "click-text":
         }
     }
     let started = Date()
+    let elapsed = { Int(Date().timeIntervalSince(started) * 1000) }
     let nodes = snapshotNodes(pid: pid, windowId: CGWindowID(windowId)).nodes
     let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     let exactOnly = args.flag("exact")
@@ -5225,6 +5310,42 @@ case "clicktext", "click-text":
     }
     matches.sort { $0.rank == $1.rank ? $0.offset < $1.offset : $0.rank < $1.rank }
     guard !matches.isEmpty else {
+        // Fall back to OCR: custom canvas apps (Qt, Metal, Blender, games) don't expose
+        // localized labels to AX, but their text is visible on screen.
+        if !args.flag("no-ocr") {
+            if let shot = try? captureForOCR(windowId: CGWindowID(windowId), screen: false, maxDimension: 1600) {
+                let ocrLines = recognizeText(in: shot.png, origin: shot.origin, size: shot.size,
+                                             level: .accurate, languages: ["zh-Hans", "en-US"],
+                                             correction: true)
+                let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let ocrMatches = ocrLines.filter { line in
+                    let text = line.text.lowercased()
+                    return exactOnly ? text == needle : text.contains(needle)
+                }
+                let pickIndex = max(0, args.int("index") ?? 0)
+                if pickIndex < ocrMatches.count {
+                    let match = ocrMatches[pickIndex]
+                    let cx = match.rect.midX
+                    let cy = match.rect.midY
+                    let button = args["button"] ?? "left"
+                    let count = args.int("count") ?? 1
+                    if args.flag("background") {
+                        clickToPid(pid, x: cx, y: cy, button: button, count: count)
+                    } else {
+                        _ = activate(pid: pid)
+                        click(x: cx, y: cy, button: button, count: count)
+                    }
+                    markAction()
+                    emit(["ok": true, "action": "clicktext", "via": "ocr-coordinates",
+                          "pid": Int(pid), "windowId": windowId, "query": query,
+                          "matched": match.text, "x": cx, "y": cy,
+                          "confidence": (Double(match.confidence) * 100).rounded() / 100,
+                          "matches": ocrMatches.count, "ms": elapsed(),
+                          "frontmostAfter": frontmost().app])
+                    exit(0)
+                }
+            }
+        }
         let visible = nodes.filter { !$0.title.isEmpty }.prefix(20).map { $0.title }
         fail("text_not_found", "no element matched \(query)",
              ["visible": Array(visible), "nodes": nodes.count,
@@ -5235,7 +5356,6 @@ case "clicktext", "click-text":
         fail("index_out_of_range", "only \(matches.count) match(es)", ["matches": matches.count])
     }
     let pick = matches[pickIndex].node
-    let elapsed = { Int(Date().timeIntervalSince(started) * 1000) }
     if pick.actions.contains("AXPress") {
         if !pick.enabled, !args.flag("force") {
             fail("control_disabled", "\(pick.ref) is disabled — its AXPress would be a no-op",
@@ -5258,13 +5378,24 @@ case "clicktext", "click-text":
         fail("ref_outside_window", "the element frame is outside every window of that app",
              ["ref": pick.ref, "role": pick.role])
     }
-    clickToPid(pid, x: frame.midX, y: frame.midY,
-               button: args["button"] ?? "left", count: args.int("count") ?? 1)
-    markAction()
-    emit(["ok": true, "action": "clicktext", "via": "pid-events", "pid": Int(pid),
-          "ref": pick.ref, "role": pick.role, "title": pick.title,
-          "matches": matches.count, "x": frame.midX, "y": frame.midY, "ms": elapsed(),
-          "frontmostAfter": frontmost().app])
+    let button = args["button"] ?? "left"
+    let count = args.int("count") ?? 1
+    if args.flag("foreground") || !args.flag("background") {
+        _ = activate(pid: pid)
+        click(x: frame.midX, y: frame.midY, button: button, count: count)
+        markAction()
+        emit(["ok": true, "action": "clicktext", "via": "foreground-coordinates", "pid": Int(pid),
+              "ref": pick.ref, "role": pick.role, "title": pick.title,
+              "matches": matches.count, "x": frame.midX, "y": frame.midY, "ms": elapsed(),
+              "frontmostAfter": frontmost().app])
+    } else {
+        clickToPid(pid, x: frame.midX, y: frame.midY, button: button, count: count)
+        markAction()
+        emit(["ok": true, "action": "clicktext", "via": "pid-events", "pid": Int(pid),
+              "ref": pick.ref, "role": pick.role, "title": pick.title,
+              "matches": matches.count, "x": frame.midX, "y": frame.midY, "ms": elapsed(),
+              "frontmostAfter": frontmost().app])
+    }
 
 case "findtext", "find-text":
     // Text lookup straight from the accessibility tree: no screenshot, no OCR.
@@ -5608,6 +5739,195 @@ case "drag":
     drag(from: dragFrom, to: dragTo)
     emitActionEventLine("dispatched", kind: "drag", target: dragTarget)
     emit(["ok": true, "action": "drag", "from": from, "to": to])
+
+case "drawplan":
+    guard let imagePath = args["image"] else {
+        fail("missing_image", "pass --image /absolute/path.png")
+    }
+    guard let rectText = args["rect"] else {
+        fail("missing_rect", "pass --rect x,y,w,h (logical screen coordinates)")
+    }
+    let rectParts = rectText.split(separator: ",").compactMap { Double($0) }
+    guard rectParts.count == 4, rectParts[2] > 4, rectParts[3] > 4 else {
+        fail("bad_rect", "rect looks like 100,200,520,520")
+    }
+    let grid = args.int("grid") ?? 150
+    let colors = args.int("colors") ?? 10
+    let seed = args.int("seed") ?? 12345
+    let imageURL = URL(fileURLWithPath: imagePath).standardizedFileURL
+    guard FileManager.default.fileExists(atPath: imageURL.path) else {
+        fail("image_missing", "no file at \(imageURL.path)")
+    }
+    let started = Date()
+    let built: (layers: [DrawPlanLayer], preview: [UInt8])
+    do {
+        built = try buildDrawPlan(imagePath: imageURL.path, grid: grid, colors: colors, seed: seed)
+    } catch {
+        fail("drawplan_failed", String(describing: error))
+    }
+    let x0 = rectParts[0]
+    let y0 = rectParts[1]
+    let width = rectParts[2]
+    let height = rectParts[3]
+    let sx = width / Double(grid)
+    let sy = height / Double(grid)
+
+    // Paint light first so dark line work survives later passes.
+    let ordered = built.layers.sorted { $0.luminance > $1.luminance }
+    var orderedPayload: [[String: Any]] = []
+    var totalRuns = 0
+    for layer in ordered {
+        totalRuns += layer.runs.count
+        orderedPayload.append([
+            "index": layer.label,
+            "hex": layer.hex,
+            "rgb": [layer.rgb.0, layer.rgb.1, layer.rgb.2],
+            "count": layer.runs.count,
+            "runs": layer.runs,
+        ])
+    }
+    let plan: [String: Any] = [
+        "version": 1,
+        "image": imageURL.path,
+        "grid": grid,
+        "colors": colors,
+        "x0": x0,
+        "y0": y0,
+        "sx": sx,
+        "sy": sy,
+        "layers": orderedPayload,
+    ]
+    let outPath = args["out"] ?? imageURL.deletingPathExtension().path + ".plan.json"
+    guard let planData = try? JSONSerialization.data(withJSONObject: plan, options: [.sortedKeys]) else {
+        fail("drawplan_failed", "could not serialize the plan")
+    }
+    do {
+        try planData.write(to: URL(fileURLWithPath: outPath))
+    } catch {
+        fail("plan_write_failed", "cannot write \(outPath): \(error.localizedDescription)")
+    }
+    var previewPath: String?
+    if let requested = args["preview"] {
+        do {
+            try writePreviewPNG(built.preview, grid: grid, to: requested)
+            previewPath = requested
+        } catch {
+            fail("preview_write_failed", "cannot write \(requested): \(error.localizedDescription)")
+        }
+    }
+    emit([
+        "ok": true,
+        "action": "drawplan",
+        "image": imageURL.path,
+        "grid": grid,
+        "colors": colors,
+        "rect": ["x": x0, "y": y0, "w": width, "h": height],
+        "layers": orderedPayload.map { layer in
+            ["index": layer["index"]!, "hex": layer["hex"]!, "count": layer["count"]!]
+        },
+        "totalRuns": totalRuns,
+        "out": outPath,
+        "preview": previewPath ?? "",
+        "ms": Int(Date().timeIntervalSince(started) * 1000),
+    ])
+
+case "strokes":
+    if pauseActive(), !args.flag("force") {
+        emit(["ok": false, "error": "paused_by_user",
+              "message": "the user stopped computer use from the controller; call resume first"])
+        exit(1)
+    }
+    let target = args.int("pid").map { actionTargetDict(pid: pid_t($0), windowId: args.int("window")) }
+    var paths: [[CGPoint]] = []
+    var layerHex = ""
+    var defaultPace = 12
+    if let planPath = args["plan"] {
+        guard let layerIndex = args.int("layer") else {
+            fail("missing_layer", "pass --layer <index> with --plan")
+        }
+        let inset = args.double("inset") ?? 0.13
+        guard let parsed = strokePaths(fromPlan: planPath, layerIndex: layerIndex, inset: inset) else {
+            fail("bad_plan", "cannot read layer \(layerIndex) from \(planPath)")
+        }
+        paths = parsed.0
+        layerHex = parsed.1
+    } else if let file = args["file"] {
+        guard let data = FileManager.default.contents(atPath: file),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let parsed = parseStrokePayload(object) else {
+            fail("bad_strokes", "cannot parse \(file); expected {\"strokes\":[[[x,y],…]]}")
+        }
+        paths = parsed.0
+        if let pace = parsed.1 { defaultPace = pace }
+    } else {
+        fail("missing_strokes", "pass --file strokes.json or --plan plan.json --layer <n>")
+    }
+    let pace = max(2, min(args.int("pace") ?? defaultPace, 200))
+    let totalPoints = paths.reduce(0) { $0 + $1.count }
+    guard !paths.isEmpty, totalPoints >= 2 else {
+        fail("empty_strokes", "the stroke list is empty")
+    }
+    guard paths.count <= 20_000, totalPoints <= 400_000 else {
+        fail("too_many_strokes", "at most 20000 strokes / 400000 points per call")
+    }
+    if let windowId = args.int("window") {
+        guard let window = onScreenWindows().first(where: { $0.id == CGWindowID(windowId) }) else {
+            fail("window_gone", "window \(windowId) is not on screen")
+        }
+        for path in paths {
+            for point in path where !window.bounds.contains(point) {
+                fail("point_outside_target_window",
+                     "stroke point \(Int(point.x)),\(Int(point.y)) is outside window \(windowId)")
+            }
+        }
+    }
+    if args.flag("dry-run") {
+        emit(["ok": true, "action": "strokes", "dryRun": true, "strokes": paths.count,
+              "points": totalPoints, "paceMs": pace, "hex": layerHex])
+        exit(0)
+    }
+    let started = Date()
+    let backgroundPid: pid_t? = args.flag("background") ? backgroundTarget(args, "strokes") : nil
+    var dispatchedPoints = 0
+    var dispatchedStrokes = 0
+    let progressEvery = max(1, paths.count / 20)
+    for (index, path) in paths.enumerated() {
+        if index % 32 == 0 && pauseActive() {
+            fail("paused_by_user", "stopped after \(dispatchedStrokes) of \(paths.count) strokes")
+        }
+        if index % progressEvery == 0 {
+            emitActionEventLine("waiting", kind: "drag", target: target,
+                                label: "绘制 \(index)/\(paths.count) 笔")
+        }
+        func post(_ type: CGEventType, _ point: CGPoint) {
+            let event = CGEvent(mouseEventSource: eventSource, mouseType: type,
+                                mouseCursorPosition: point, mouseButton: .left)
+            event?.flags = []
+            if let backgroundPid {
+                event?.postToPid(backgroundPid)
+            } else {
+                event?.post(tap: .cghidEventTap)
+            }
+            usleep(useconds_t(pace) * 1000)
+            dispatchedPoints += 1
+        }
+        let first = path[0]
+        post(.mouseMoved, first)
+        post(.leftMouseDown, first)
+        for point in path.dropFirst() {
+            post(.leftMouseDragged, point)
+        }
+        let last = path[path.count - 1]
+        post(.leftMouseUp, last)
+        dispatchedStrokes += 1
+    }
+    markAction()
+    emitActionEventLine("dispatched", kind: "drag", target: target,
+                        label: "绘制 \(paths.count) 笔")
+    emit(["ok": true, "action": "strokes", "strokes": dispatchedStrokes,
+          "points": dispatchedPoints, "paceMs": pace, "hex": layerHex,
+          "via": backgroundPid == nil ? "hid-events" : "pid-events",
+          "ms": Int(Date().timeIntervalSince(started) * 1000)])
 
 case "scroll":
     let dy = args.double("dy") ?? 0

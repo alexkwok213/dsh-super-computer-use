@@ -15,6 +15,7 @@ struct AXRetainedRecord {
     var role: String
     var title: String
     var containerToken: String
+    var node: SnapNode? = nil
 }
 
 final class AXSessionWorker {
@@ -43,10 +44,11 @@ final class AXSessionWorker {
     }
 
     /// One observation: retain each AX object and mint a stable per-session token.
-    func observeAndRetain() -> [AXCandidate] {
+    func observeAndRetain() -> (candidates: [AXCandidate], richNodes: [[String: Any]]) {
         observationSeq += 1
         let (_, nodes, _) = snapshotNodes(pid: pid, includeZeroSize: true, windowId: windowId)
         var candidates: [AXCandidate] = []
+        var richNodes: [[String: Any]] = []
         for node in nodes {
             tokenSeq += 1
             let tokenId = "w\(epoch)-\(tokenSeq)"
@@ -57,14 +59,17 @@ final class AXSessionWorker {
             retained[tokenId] = node.element
             records[tokenId] = AXRetainedRecord(epoch: epoch, pid: pid, windowId: windowId,
                                                 role: node.role, title: node.title,
-                                                containerToken: container)
+                                                containerToken: container, node: node)
             candidates.append(AXCandidate(path: node.ref, epoch: epoch, pid: Int(pid),
                                           windowId: Int(windowId), role: node.role, title: node.title,
                                           containerToken: container, elementToken: tokenId,
                                           enabled: node.enabled, frameValid: node.frame != nil,
                                           frame: node.frame))
+            var dict = nodeLine(node, in: nodes)
+            dict["elementToken"] = tokenId
+            richNodes.append(dict)
         }
-        return candidates
+        return (candidates, richNodes)
     }
 
     func identity(_ tokenId: String) -> AXElementIdentity? {
@@ -91,7 +96,7 @@ final class AXSessionWorker {
 
     /// R3: validate the retained object AND write its value in ONE command, so
     /// "proven" and "acted on" are the same object with no path re-resolution.
-    func input(tokenId: String, text: String) -> [String: Any] {
+    func input(tokenId: String, text: String, foreground: Bool = false) -> [String: Any] {
         guard let element = retained[tokenId], let record = records[tokenId] else {
             return ["ok": false, "error": "identity_unproven", "message": "no retained object for token"]
         }
@@ -102,7 +107,30 @@ final class AXSessionWorker {
         let enabled = (attribute(element, kAXEnabledAttribute) as? Bool) ?? true
         guard enabled else { return ["ok": false, "error": "identity_unproven", "message": "disabled"] }
         let status = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
-        if status == .success { return ["ok": true, "token": tokenId, "wrote": true] }
+        if status == .success { return ["ok": true, "token": tokenId, "wrote": true, "via": "ax-setvalue"] }
+        if let targetFrame = record.node?.frame ?? frame(of: element), targetFrame.width >= 2, targetFrame.height >= 2 {
+            let cx = Double(targetFrame.midX)
+            let cy = Double(targetFrame.midY)
+            if foreground {
+                activate(pid: pid)
+                click(x: cx, y: cy, button: "left", count: 1)
+                usleep(50_000)
+                press(name: "a", modifiers: .maskCommand)
+                usleep(30_000)
+                pasteText(text)
+                usleep(30_000)
+                press(name: "return", modifiers: [])
+            } else {
+                clickToPid(pid, x: cx, y: cy, button: "left", count: 1)
+                usleep(50_000)
+                pressToPid(pid, name: "a", modifiers: .maskCommand)
+                usleep(30_000)
+                typeToPid(pid, text)
+                usleep(30_000)
+                pressToPid(pid, name: "return", modifiers: [])
+            }
+            return ["ok": true, "token": tokenId, "wrote": true, "via": "focus-and-type"]
+        }
         return ["ok": false, "error": "input_failed", "status": Int(status.rawValue)]
     }
 
@@ -123,7 +151,7 @@ final class AXSessionWorker {
     }
 
     /// Validate the retained object itself, then act. Never looks up by path.
-    func resolveAndDispatch(tokenId: String, action: String) -> [String: Any] {
+    func resolveAndDispatch(tokenId: String, action: String, button: String = "left", count: Int = 1, foreground: Bool = false) -> [String: Any] {
         guard let element = retained[tokenId], let record = records[tokenId] else {
             return ["ok": false, "error": "identity_unproven", "message": "no retained object for token"]
         }
@@ -135,9 +163,44 @@ final class AXSessionWorker {
         // a demo button whose title counts clicks must still resolve and press.
         let enabled = (attribute(element, kAXEnabledAttribute) as? Bool) ?? true
         guard enabled else { return ["ok": false, "error": "identity_unproven", "message": "disabled"] }
-        let status = AXUIElementPerformAction(element, action as CFString)
-        if status == .success { return ["ok": true, "action": action, "token": tokenId] }
-        return ["ok": false, "error": "action_failed", "status": Int(status.rawValue)]
+        let availableActions = actionNames(element)
+        let isNativeButton = ["AXButton", "AXMenuItem", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXDisclosureTriangle"].contains(record.role)
+        if action == "AXPress" && isNativeButton && availableActions.contains("AXPress") {
+            let status = AXUIElementPerformAction(element, "AXPress" as CFString)
+            if status == .success {
+                return ["ok": true, "action": "AXPress", "token": tokenId, "via": "AXPress"]
+            }
+        }
+        let targetFrame = record.node?.frame ?? frame(of: element)
+        guard let frame = targetFrame, frame.width >= 1, frame.height >= 1 else {
+            return ["ok": false, "error": "no_frame", "message": "element has no frame and no AXPress", "token": tokenId]
+        }
+        var clickPoint = CGPoint(x: frame.midX, y: frame.midY)
+        if let node = record.node {
+            let (pt, blocker) = resolveVisibleClickPoint(node: node, pid: pid)
+            if let blocker {
+                return ["ok": false, "error": "element_occluded", "occludedBy": blocker, "token": tokenId,
+                        "x": Double(pt.x), "y": Double(pt.y)]
+            }
+            clickPoint = pt
+        }
+        var via = "coordinates"
+        if foreground {
+            activate(pid: pid)
+            click(x: Double(clickPoint.x), y: Double(clickPoint.y), button: button, count: count)
+        } else {
+            via = "pid-events"
+            clickToPid(pid, x: Double(clickPoint.x), y: Double(clickPoint.y), button: button, count: count)
+        }
+        var payload: [String: Any] = [
+            "ok": true, "action": "click", "token": tokenId,
+            "x": Double(clickPoint.x), "y": Double(clickPoint.y), "via": via,
+            "role": record.role, "title": record.title
+        ]
+        if let hit = axHitInfo(pid: pid, at: clickPoint) {
+            payload["hit"] = ["role": hit.role, "title": hit.title]
+        }
+        return payload
     }
 }
 
@@ -153,7 +216,7 @@ func runAXWorkerProbe(pid: pid_t, windowId: CGWindowID) -> Never {
     }
     let worker = AXSessionWorker()
     worker.beginSession(pid: pid, windowId: windowId)
-    let candidates = worker.observeAndRetain()
+    let (candidates, _) = worker.observeAndRetain()
     guard let button = candidates.first(where: { $0.title.hasPrefix("Demo Button") }) else {
         emit(["ok": false, "error": "no_demo_button"]); exit(1)
     }
@@ -207,16 +270,7 @@ func runAXWorker(pid: pid_t, windowId: CGWindowID) -> Never {
 
         switch cmd {
         case "observe":
-            let candidates = worker.observeAndRetain()
-            let nodes: [[String: Any]] = candidates.map { c in
-                var row: [String: Any] = ["ref": c.path, "role": c.role, "title": c.title,
-                                          "enabled": c.enabled, "elementToken": c.elementToken]
-                if let f = c.frame {
-                    row["x"] = Double(f.origin.x); row["y"] = Double(f.origin.y)
-                    row["w"] = Double(f.size.width); row["h"] = Double(f.size.height)
-                }
-                return row
-            }
+            let (candidates, richNodes) = worker.observeAndRetain()
             let rows: [[String: Any]] = candidates.map {
                 ["path": $0.path, "role": $0.role, "title": $0.title,
                  "elementToken": $0.elementToken, "enabled": $0.enabled]
@@ -224,13 +278,16 @@ func runAXWorker(pid: pid_t, windowId: CGWindowID) -> Never {
             reply(["ok": true, "cmd": "observe", "epoch": worker.epoch,
                    "pid": Int(pid), "windowId": Int(windowId),
                    "observationId": "w\(worker.epoch)-obs\(worker.observationSeq)",
-                   "nodes": nodes, "candidates": rows], requestId: requestId)
+                   "nodes": richNodes, "candidates": rows], requestId: requestId)
         case "click":
             guard let tokenId = obj["elementToken"] as? String else {
                 reply(["ok": false, "cmd": "click", "error": "missing_token"], requestId: requestId); continue
             }
             let action = (obj["action"] as? String) ?? "AXPress"
-            var result = worker.resolveAndDispatch(tokenId: tokenId, action: action)
+            let button = (obj["button"] as? String) ?? "left"
+            let count = (obj["count"] as? Int) ?? 1
+            let foreground = (obj["foreground"] as? Bool) ?? false
+            var result = worker.resolveAndDispatch(tokenId: tokenId, action: action, button: button, count: count, foreground: foreground)
             result["cmd"] = "click"
             reply(result, requestId: requestId)
         case "verify":
@@ -242,7 +299,10 @@ func runAXWorker(pid: pid_t, windowId: CGWindowID) -> Never {
             guard let it = obj["elementToken"] as? String, let text = obj["text"] as? String else {
                 reply(["ok": false, "cmd": "input", "error": "missing_token_or_text"], requestId: requestId); continue
             }
-            var ir = worker.input(tokenId: it, text: text); ir["cmd"] = "input"; reply(ir, requestId: requestId)
+            let foreground = (obj["foreground"] as? Bool) ?? false
+            var ir = worker.input(tokenId: it, text: text, foreground: foreground)
+            ir["cmd"] = "input"
+            reply(ir, requestId: requestId)
         case "invalidate":
             worker.invalidate()
             reply(["ok": true, "cmd": "invalidate", "epoch": worker.epoch], requestId: requestId)

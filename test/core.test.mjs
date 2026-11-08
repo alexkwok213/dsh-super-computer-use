@@ -240,7 +240,7 @@ test(
   }
 });
 
-test("DSH plugin apply() registers 15 cu_* tools, skill, inline image preview, and capsule session", async (t) => {
+test("DSH plugin apply() registers 17 cu_* tools, skill, inline image preview, and capsule session", async (t) => {
   // Own the target instead of racing whichever user window happens to be first.
   const fixtureDir = mkdtempSync(join(tmpdir(), "cu-plugin-fixture-"));
   t.after(() => rmSync(fixtureDir, { recursive: true, force: true }));
@@ -313,8 +313,11 @@ test("DSH plugin apply() registers 15 cu_* tools, skill, inline image preview, a
   };
 
   await apply(mockCtx, { autoDockDsh: false, previewBudgetMs: 2000 });
-  assert.equal(registeredTools.size, 15);
+  assert.equal(registeredTools.size, 18);
   assert.ok(registeredTools.has("cu_drag"));
+  assert.ok(registeredTools.has("cu_paint_plan"));
+  assert.ok(registeredTools.has("cu_paint"));
+  assert.ok(registeredTools.has("cu_cdp_paint"));
   const skillNames = registeredSkills.map((s) => s.name).sort();
   assert.deepEqual(skillNames, ["dsh-super-computer-use"]);
 

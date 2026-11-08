@@ -5,7 +5,7 @@ DeepSeek Harness 专属 macOS 桌面智能操控插件。
 ```
 DeepSeek Harness 宿主
 └─ DSH 插件 (dsh-super-computer-use)
-    ├─ 13 个 cu_* 工具、Agent 技能、参数校验与权限引导
+    ├─ 17 个 cu_* 工具、Agent 技能、参数校验与权限引导
     ├─ 聊天内嵌观看卡片、实时画面流（ScreenCaptureKit）、用户安全停止闸门
     └─ 内置受管原生 Helper (bin/cu)
         ├─ 进程生命周期：按需启动、心跳与异常自毁回收（--watch-parent）、退出清理
@@ -18,7 +18,7 @@ DeepSeek Harness 宿主
 | 路径 | 作用 |
 |---|---|
 | `bin/` | 预编译 macOS Universal Binary（Apple Silicon + Intel，开箱即用，免 Xcode） |
-| `lib/` | Cordis 插件：13 个 `cu_*` 工具、进程自管理、会话管理、附件预览 |
+| `lib/` | Cordis 插件：17 个 `cu_*` 工具、进程自管理、会话管理、附件预览 |
 | `client.js` | Harness 内嵌观看 UI：输入框上方卡片、全帧预览、状态、停止、一键系统授权 |
 | `locale/` `skill/` | 插件文案与技能说明 |
 | `test/` | 插件测试（Node） |
@@ -88,11 +88,14 @@ npm run dev:sync -- --wait-idle=30    # 活跃 CU 会话时最多等待 30 秒
 
 ## 能力
 
-**插件工具（15）**
+**插件工具（17）**
 `cu_status` `cu_windows` `cu_launch` `cu_snapshot` `cu_expect` `cu_click` `cu_click_text`
 `cu_type` `cu_key` `cu_scroll` `cu_drag` `cu_screenshot` `cu_session` `cu_find` `cu_batch`
+`cu_paint_plan` `cu_paint`
 
 `cu_drag` 接受同一目标窗口内的起点和终点（屏幕逻辑坐标），默认后台派发；真实鼠标拖拽须显式授权前台操作。窗口边界、进程与观察后的位置变化会在派发前检查。事件派发不代表剪映等画布接受了拖拽，必须通过后置条件或新画面核实。
+
+`cu_paint_plan` 把参考图编译成“调色板 + 分层水平笔画”计划，并返回一张 posterized 预览；它只读图，不碰屏幕。`cu_paint` 在一个原生进程里按节奏喷完一层，避免每笔画一次模型往返。Canva / Chromium 画布会丢弃 PID 定向的后台拖拽，因此绘画默认真实 HID 指针并要求 `authorizeForeground:true`；`background:true` 只给确实支持后台拖拽的应用。`paceMs` 低于约 10ms 时 Canvas 容易漏点，默认 13ms。
 
 **视觉反馈**
 - 边缘呼吸光：只在 agent 真正操作时出现的屏幕四边窄光带（蓝→青→紫，约 72pt），停手约 2 秒后自动淡出
@@ -152,7 +155,7 @@ cu service [--port 47777]                         # 本地 HTTP 引擎后端
 - **默认不改布局**：启动观察/预览/后台动作不会缩窗、移动或激活目标；需要并排观看时显式传 `dockDsh`/`splitScreen`
 - **录屏有提醒**：会话期间 DSH 内嵌卡片显示实时录制与操作状态，同时 macOS 升起系统屏幕录制安全指示；结束时自动释放
 - **无感生命周期**：原生 Helper 仅在执行期间运行，DSH 退出或插件停用时秒级回收，不留孤儿进程
-- **完整回归测试**：内置 253 项自动化回归测试，覆盖生命周期、认证隔离、权限指引、多目标隔离、受控并发和无障碍操控
+- **完整回归测试**：内置 300+ 项自动化回归测试，覆盖生命周期、认证隔离、权限指引、多目标隔离、受控并发、无障碍操控与分层绘画计划
 - **光效不常驻**：边缘呼吸光只在动作时亮起；overlay 进程 2 小时无活动自动退出，不会遗留常驻光斑
 - **授权可自愈**：缺权限时给系统设置深链 + 可拖拽应用卡片的引导浮窗；失效授权只在日志有证据且确实缺权限时才重置
 
@@ -185,7 +188,7 @@ readlink ~/.dsh/profiles/<profile>/node_modules/dsh-super-computer-use
 ```
 
 DSH 从 profile 的 `package.json` 解析 `dsh-super-computer-use`（`link:<仓库路径>`），重启时按这个路径加载。
-如果它指向一个空目录（例如另一个同名工作区），插件整包解析失败，13 个工具和技能会一起消失，日志里不会留明显错误。
+如果它指向一个空目录（例如另一个同名工作区），插件整包解析失败，17 个工具和技能会一起消失，日志里不会留明显错误。
 把链接改回真实仓库后重装再重启：
 
 ```bash
@@ -199,7 +202,7 @@ pnpm add link:/path/to/super-computer-use    # 或手改 package.json 里的 lin
 **重启后工具还是没起来？先看 `~/.cu/plugin-boot.log`**
 
 宿主在注册每个工具时校验 `parameters` 的 schema DSL，不合法就**抛错**。而注册发生在插件的 `apply()` 里，
-所以一个参数写错会让整个插件的 13 个工具一起消失，界面上没有任何错误提示。日志里会留下：
+所以一个参数写错会让整个插件的 17 个工具一起消失，界面上没有任何错误提示。日志里会留下：
 
 ```
 module evaluated (pid 12345)
@@ -209,7 +212,7 @@ tool cu_click rejected: parameters.expect.additionalProperties must be explicitl
 
 DSL 里最容易踩的三条：`type: "object"` 必须显式写 `additionalProperties: true|false`；
 每个参数的 `required` 只能写 `true`（不能写 `false` 或数组）；对象的嵌套属性同样要满足这两条。
-`npm test` 里的 `test/tool_schema.mjs` 会把全部 13 个工具按同一套规则验一遍，改 schema 后先跑它。
+`npm test` 里的 `test/tool_schema.mjs` 会把全部 17 个工具按同一套规则验一遍，改 schema 后先跑它。
 
 
 **本插件与旧版独立 Computer Use.app 的区别？**
