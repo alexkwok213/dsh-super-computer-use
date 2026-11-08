@@ -111,3 +111,17 @@ node scripts/draw-image.mjs \
 6. 坐标是 **CSS 视口像素**，且只在 **100% 缩放**下与设计坐标对齐；先确认缩放=100%。
 
 实操配方（一条脚本内做，别中途 reload）：`drawplan(grid≈30)` → 清屏(全选删) → 确保 brush 激活 → 逐层 `paintStrokes(inset≈0.5, paceMs≈15)`。结果为单色块状画，粗笔刷下这是 Canva 白板的现实上限；要高清成品仍推荐 plan→PNG→上传。
+
+## 最终可用配方（实测画出实心多色鱼）
+
+1. `cu drawplan --image ref.png --rect "170,120,800,740" --grid 140 --colors 8`（格子 ≈5.3px）
+2. `lib/canva-brush.mjs`：
+   - `clearCanvas(client)`（全选删两次 + Esc 解除选择，否则下一次拖拽变框选）
+   - `setZoom(client, 100)`（清屏会触发 fit 到 15%，必须重置，否则坐标全错）
+   - `armBrush(client)`（真实鼠标点左栏「画笔」，校验背景 `rgba(57,70,96,.14)`）
+   - `setBrushStyle(client, {thickness: 24, opacity: 100})`（设置面板：「粗细」+「不透明度」两个 range；默认 36/50，36→粗块、50→半透明发白）
+3. 逐层 `setBrushColor(client, layer.hex)` → `closePopovers` → `armBrush` → `paintStrokes(..., paceMs 5)`
+4. **跳过近白色层**（`#fcf5f5` / `#f1e3e2`）——白底上看不见，画了等于没画；让白纸当最亮色。
+5. 结果：100% 缩放下为实心多色块状画（蓝发/浅脸/蓝裙可辨）。
+
+关键坑：换色不会重置粗细（已验证 25 保持 25）；但**每次开颜色面板后工具会回到「选择」**，所以落笔前必须再 `armBrush`。
