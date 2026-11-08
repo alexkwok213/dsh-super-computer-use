@@ -139,3 +139,26 @@ test('syncProfileLogin copies login state into a dedicated profile', async () =>
     rmSync(dst, { recursive: true, force: true });
   }
 });
+
+test('serpentine/region strokes collapse thousands of runs into a few elements', async () => {
+  const { planLayerToSerpentine, planLayerToRegionStrokes } = await import('../lib/cdp.mjs');
+  const runs = [];
+  for (let j = 0; j < 20; j++) runs.push([0, j, 9]);
+  const plan = { x0: 0, y0: 0, sx: 5, sy: 5, layers: [{ index: 1, hex: '#123456', runs }] };
+  const one = planLayerToSerpentine(plan, 1, 0.5);
+  assert.equal(one.points.length > 20, true, 'one continuous polyline');
+  const regions = planLayerToRegionStrokes(plan, 1, 0.5);
+  // A solid 10x20 block is ONE connected region -> one stroke, not 20.
+  assert.equal(regions.strokes.length, 1);
+  assert.ok(regions.strokes[0].length >= 40);
+});
+
+test('region grouping keeps far-apart blocks in separate strokes', async () => {
+  const { planLayerToRegionStrokes } = await import('../lib/cdp.mjs');
+  const plan = {
+    x0: 0, y0: 0, sx: 5, sy: 5,
+    layers: [{ index: 1, hex: '#111111', runs: [[0, 0, 1], [50, 0, 51], [0, 1, 1], [50, 1, 51]] }],
+  };
+  const r = planLayerToRegionStrokes(plan, 1, 0.5);
+  assert.equal(r.strokes.length, 2, 'two disjoint blocks -> two strokes');
+});
