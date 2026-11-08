@@ -161,3 +161,41 @@
 **取舍**：
 - 整层一条最省元素，但远端 run 之间的连接线会横穿画面（可见长划线）。
 - 按连通区域是**最佳平衡**：连接线只在各自区域内，元素数仍远低于上限。
+
+---
+
+## 七、Apple Freeform（原生 App 绘图）实测
+
+与 Canva（网页/CDP）完全不同的通道：**Freeform 是原生 App，用真实指针（CGEvent）就能画**。
+
+### 能力清单（`cu_snapshot` 读 AX 树得到）
+
+| 控件 | AX 标识 | 内容 |
+|---|---|---|
+| Drawing Tools | `AXCheckBox "Drawing Tools"` | 工具栏铅笔图标，勾选后出现底部绘图条 |
+| Drawing tool | `AXButton "Drawing tool"` | 当前笔型（value=Pen） |
+| Choose a drawing tool | `AXButton "Choose a drawing tool"` | **5 档笔宽**：Extra-fine / Fine / Medium / Heavy / Extra-heavy；**10 种笔**：Pen / Monoline / Marker / Pencil / Crayon / Fountain Pen / Reed / Watercolor / **Fill** / Eraser |
+| Choose a color | `AXButton "Choose a color"` | 颜色选择，value 显示当前色名 |
+
+### 关键坑
+
+1. **必须先把 Freeform 激活到前台**：`osascript -e 'tell application "Freeform" to activate'`。
+   否则 `cu strokes`（hid-events）会发给别的窗口——实测第一次完全没反应，activate 后立刻画出线。
+2. 画笔浮层打开时会挡住颜色按钮，先关闭再点颜色。
+3 **Fill 工具**（填充）对闭合区域很有效，可大幅减少笔画数。
+
+### 实测结果
+
+用 `cu drawplan --rect "220,160,780,680" --grid 110 --colors 4` → `planLayerToRegionStrokes` → `cu strokes` 逐层绘制：
+- 4 层共 **91 笔**（29+31+11+20），约 1,784 个点
+- 在 Freeform 白板上画出可辨认的鱼形轮廓（发/脸/身体/饭团）
+
+### 与 Canva 的路线对比
+
+| | Canva 白板 | Freeform |
+|---|---|---|
+| 通道 | CDP `Input.dispatchMouseEvent` | 原生 `CGEvent`（cu strokes / cu_paint） |
+| 前提 | Chrome 带调试端口（owned profile） | **App 必须前台** |
+| 元素上限 | **2,000**（超了不能保存） | 无此限制 |
+| 画笔控制 | 自绘 UI，读 DOM 驱动 | AX 树直接暴露按钮/复选框 |
+| 适合 | 需要登录态的网页设计 | 本地快速草图、原生体验 |

@@ -33,3 +33,14 @@ test('playbookSummary strips the matcher regex', () => {
   assert.equal(s.id, 'canva-whiteboard');
   assert.ok(Array.isArray(s.flows.drawImage));
 });
+
+test('native app names match the Freeform playbook', async () => {
+  const { detectNativePlaybook } = await import('../lib/app-playbooks.mjs');
+  const pb = detectNativePlaybook('Freeform', 'Untitled');
+  assert.equal(pb.id, 'apple-freeform');
+  assert.equal(detectNativePlaybook('Finder', 'Desktop'), null);
+  const names = pb.controls.map((c) => c.name);
+  for (const expected of ['Drawing Tools', 'Choose a drawing tool', 'Choose a color']) {
+    assert.ok(names.includes(expected), `control ${expected} documented`);
+  }
+});
