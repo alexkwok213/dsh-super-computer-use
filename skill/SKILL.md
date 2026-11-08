@@ -1,6 +1,6 @@
 ---
 name: dsh-super-computer-use
-description: macOS Computer Use / 桌面操控与自动化（剪映、微信、Finder、备忘录等后台操作与内嵌观看预览）。Control macOS desktop applications using background AX actions, floating status capsule/halo, and inline target window previews.
+description: macOS Computer Use / 桌面操控与自动化（剪映、微信、Finder、备忘录、Freeform 等后台操作、绘图与内嵌观看预览），含 cu_route/cu_discover 能力路由：先查应用有什么、这类任务该走哪条路，再动手。Control macOS desktop applications using background AX actions, a deterministic strategy router, floating status capsule/halo, and inline target window previews.
 ---
 
 # macOS Computer Use (`cu_*` Tools)
@@ -9,14 +9,38 @@ Use `cu_*` tools to inspect and operate macOS desktop applications. For ordinary
 
 ## Core Principles
 
-**-1. Discover the app's capabilities BEFORE operating it.**
+**-1. Route first, then discover, then verify one step, then batch.**
 Computer use is not "click wherever". The thing that makes an app usable is knowing
-what it CAN do. A whiteboard is not "a canvas you drag on" — it has a brush with a
-separate thickness, opacity and colour control buried in a settings popover, and
-without that map a perfect robot still paints a fat blob.
-Run `cu_discover` first for any unfamiliar app (it returns the live aria-labelled
-controls, every input with type/min/max/value, the large surfaces, and the matched
-playbook). Read the playbook's `flows` and `pitfalls` before the first click.
+what it CAN do, and knowing which of several possible routes is worth taking. A
+whiteboard is not "a canvas you drag on" — it has a brush with separate thickness,
+opacity and colour controls buried in a popover; and a pixel-exact copy should be
+placed as a rendered PNG, not painted in 16 colour passes.
+For ANY non-trivial task, in this order:
+
+1. `cu_route({intent, appName|url|pid|windowId})` — deterministic intent → route
+   lookup. Read `recommended.why`, `recommended.avoid` and `preflight` **before
+   the first click**. If `noRoute:true`, follow `fallback` (the generic method).
+2. `cu_discover` — `urlMatch` for web pages (CDP DOM enumeration), or
+   `appName`/`pid`/`windowId` for **native apps** (AX tree + native playbook).
+   Native discovery needs no Chrome. Read `playbook.flows` / `pitfalls` / `routes`.
+3. **Minimum closed loop on ONE step**: act → `expect` or screenshot → confirm it
+   actually took effect. Do not start a 16-step batch before this passes.
+4. Only then `cu_batch` the remaining deterministic steps. A missing step 3 is
+   how a wrong colour or a deactivated brush gets multiplied 16 times.
+
+### Route quick-reference (the decision the router encodes)
+
+| Intent | Preferred route | Avoid |
+|---|---|---|
+| 像素级还原一幅参考图 | `cu_paint_plan` → PNG (`plan-to-png.py --local --transparent`) → 放置/粘贴；一条命令是 `scripts/draw-image.mjs --target freeform` | 16 色逐扫描线画笔（横纹 + 逐层换色 + 易错色） |
+| 明确要手绘笔触 | 画笔逐层，先验证 arm/换色闭环 | 用 PNG 冒充手绘 |
+| 网页 canvas（Canva / Figma） | `cu_cdp_paint`（CDP `Input.dispatchMouseEvent`） | `cu_paint`（CGEvent 被渲染循环丢弃） |
+| 原生 App（Freeform / 剪映） | `cu_paint` / AX 操作，**app 必须前台** | 后台发 hid-events（不落笔） |
+
+Mutating tools now return a short `guidance` field (channel/cost + the matched
+playbook's route and first pitfall); `cu_status` / `cu_windows` return
+`activeAppPlaybook`. Read them — they are the router pushing knowledge into your
+context at execution time, not a document you have to remember to open.
 
 0. **Ask `cu_status` Once, Then Stop Repeating Yourself**
    - `cu_status` reports `vision.supported` (`true`/`false`/`null` with a `reason`) and `lastImage` (what the last capture actually delivered). `false` or `null` means a screenshot is a file path, not evidence: do not reason about pixels, use `cu_find`/`cu_expect`/`cu_snapshot` instead.
@@ -93,11 +117,13 @@ playbook). Read the playbook's `flows` and `pitfalls` before the first click.
     - Different targets can be observed and previewed concurrently. Same-target operations stay ordered. Never send global keyboard/mouse/clipboard input concurrently to fake parallel control of several apps.
     - Stopping A leaves B alive. After stop-all, no queued input may run and no late result may reopen a target.
 
-12. **Drawing a Reference Image (Canva / Web Canvas)**
+12. **Drawing a Reference Image (Canva / Web Canvas / Freeform)**
+    - **Start with `cu_route`** (see -1 above). For a pixel-exact copy it will recommend the PNG route, not the brush route. On Freeform the paste route is `scripts/draw-image.mjs --image <ref> --target freeform`, which needs no Chrome.
     - Use `cu_paint_plan` first. It posterizes the reference, removes the border-connected background, assigns a palette, and writes a plan of horizontal brush runs. Give it the drawing rect. Inspect its returned preview: it must look like the reference.
     - **Two execution channels — choose by target:**
       - **Web canvas (Canva / Figma whiteboard / tldraw): use `cu_cdp_paint`, NOT `cu_paint`.** A browser canvas filters CGEvent/pid pointer events; `cu_paint`'s native strokes report ok but paint nothing (verified). `cu_cdp_paint` injects `Input.dispatchMouseEvent` over CDP and does paint.
-      - **Native app (Photoshop, Preview): `cu_paint`** with the real pointer and `paceMs` >= 13.
+      - **Native app (Freeform, Photoshop, Preview): `cu_paint`** with the real pointer and `paceMs` >= 13. Freeform additionally requires `osascript -e 'tell application "Freeform" to activate'` before any stroke, and its colour panel is a separate axOnly window — see the playbook's `pitfalls`.
+      - **Native whiteboard, pixel-exact copy: do not paint at all.** Render the plan to a transparent, locally-positioned PNG and paste it (`--target freeform`). A round-tipped brush leaves horizontal stripes that no width tuning removes.
     - **CDP channel setup (macOS):** `cu_cdp_paint {launch:true, startUrl:"<url>"}` launches an owned Chrome with a dedicated profile and, by default, copies the daily Chrome's cookies/logins/localStorage into it (`syncLogin:true`) so it starts already signed in — never attach to the user's everyday browser for repeated work (Chrome 144+ re-prompts "Allow remote debugging?" on every attach). Reuse the pooled session; `action:"disconnect"` drops it.
     - **The brush UI is scriptable — drive the DOM, not pixel coordinates.** Codex draws with the same CDP `Input.dispatchMouseEvent` path loop; the difference is operating the target's brush. On Canva whiteboard the controls are real DOM nodes with aria-labels (verified 2026-11): the rail `画笔` button's background turns `rgba(57,70,96,.14)` when armed; `设置` opens two `<input type=range>` sliders — **[0]=thickness (default 36 px), [1]=opacity (default 50 %)**; `颜色` → `添加新颜色` reveals a hex text input (`#rrggbb`). Set them with the native value setter plus `input`/`change` events (React ignores a plain `value=` assignment). `lib/canva-brush.mjs` implements exactly this: `armBrush`, `setBrushStyle({thickness, opacity})`, `setBrushColor(hex)`, `clearCanvas`, `closePopovers`.
       - Thickness must be ~2× the planned cell so rows overlap: for `grid 140` (cell ~5.3 px) use **10 px**; 5 px leaves white seams.

@@ -8,6 +8,18 @@ into the target app (upload / drop). Deterministic and pixel-exact.
 
 Usage:
   python3 scripts/plan-to-png.py plan.json out.png [--scale 1] [--bg "#ffffff"]
+         [--local] [--transparent]
+
+Flags:
+  --local        ignore the plan's absolute x0/y0 (screen coords) and render
+                 from (0,0). Needed when the PNG will be placed as an image
+                 object; otherwise the picture carries a useless top/left margin.
+  --transparent  RGBA with an alpha-0 background instead of opaque white.
+                 Needed for pasting into a native whiteboard (Freeform), where
+                 an opaque white rectangle would cover the grid.
+
+Both flags together produce the pixel-exact, transparent PNG that the
+`draw-image.mjs --target freeform` path pastes.
 
 Plan format (from `cu drawplan`):
   { x0, y0, sx, sy, layers:[{index, hex, runs:[[i0,j,i1], ...]}, ...] }
@@ -18,9 +30,13 @@ import sys
 from PIL import Image, ImageDraw
 
 
-def render(plan, scale=1, bg=(255, 255, 255)):
+def render(plan, scale=1, bg=(255, 255, 255), local=False, transparent=False):
     layers = plan["layers"]
-    x0, y0, sx, sy = plan["x0"], plan["y0"], plan["sx"], plan["sy"]
+    sx, sy = plan["sx"], plan["sy"]
+    # x0/y0 are absolute screen coords of the drawing rect. They are correct for
+    # stroke painting but must be dropped when rasterising a standalone image.
+    x0 = 0 if local else plan["x0"]
+    y0 = 0 if local else plan["y0"]
     maxx = x0
     maxy = y0
     for l in layers:
@@ -29,7 +45,10 @@ def render(plan, scale=1, bg=(255, 255, 255)):
             maxy = max(maxy, y0 + (r[1] + 1) * sy)
     w = int(maxx + 20)
     h = int(maxy + 20)
-    img = Image.new("RGB", (max(1, int(w * scale)), max(1, int(h * scale))), bg)
+    size = (max(1, int(w * scale)), max(1, int(h * scale)))
+    mode = "RGBA" if transparent else "RGB"
+    fill_bg = (0, 0, 0, 0) if transparent else bg
+    img = Image.new(mode, size, fill_bg)
     d = ImageDraw.Draw(img)
     # light -> dark so darker detail lands on top
     def lum(hexc):
@@ -40,7 +59,7 @@ def render(plan, scale=1, bg=(255, 255, 255)):
         for run in l["runs"]:
             i0, j, i1 = run[0], run[1], run[2]
             X = (x0 + i0 * sx) * scale
-            Y = (y0 + (j + 0.5) * sy - sy / 2) * scale
+            Y = (y0 + j * sy) * scale
             W = (i1 - i0 + 1) * sx * scale
             H = sy * scale
             d.rectangle([X, Y, X + W, Y + H], fill=col)
@@ -54,6 +73,8 @@ def main(argv):
     plan_path, out_path = argv[1], argv[2]
     scale = 1.0
     bg = (255, 255, 255)
+    local = False
+    transparent = False
     i = 3
     while i < len(argv):
         if argv[i] == "--scale":
@@ -61,13 +82,19 @@ def main(argv):
         elif argv[i] == "--bg":
             h = argv[i + 1].lstrip("#")
             bg = (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)); i += 2
+        elif argv[i] == "--local":
+            local = True; i += 1
+        elif argv[i] == "--transparent":
+            transparent = True; i += 1
         else:
             i += 1
     with open(plan_path) as f:
         plan = json.load(f)
-    img = render(plan, scale=scale, bg=bg)
+    img = render(plan, scale=scale, bg=bg, local=local, transparent=transparent)
     img.save(out_path)
-    print(json.dumps({"ok": True, "out": out_path, "width": img.width, "height": img.height}))
+    print(json.dumps({"ok": True, "out": out_path, "width": img.width,
+                      "height": img.height, "mode": img.mode,
+                      "local": local, "transparent": transparent}))
     return 0
 
 

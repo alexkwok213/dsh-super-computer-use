@@ -44,3 +44,25 @@ test('native app names match the Freeform playbook', async () => {
     assert.ok(names.includes(expected), `control ${expected} documented`);
   }
 });
+
+test('Freeform playbook records the lesson from the 16-minute failure', () => {
+  const pb = PLAYBOOKS.find((p) => p.id === 'apple-freeform');
+  const exact = pb.routes.find((r) => r.id === 'exactCopy');
+  assert.ok(exact, 'pixel-exact route exists');
+  assert.equal(exact.prefer, true);
+  assert.equal(exact.cost.roundTrips, 1);
+  assert.ok(exact.steps.some((s) => s.includes('--target freeform')));
+  assert.match(exact.avoid.join(' '), /横纹|条纹/);
+  assert.ok(exact.preflight.some((p) => /前台|activate/.test(p)));
+  const hand = pb.routes.find((r) => r.id === 'handDrawn');
+  assert.ok(hand.cost.roundTrips > exact.cost.roundTrips);
+  assert.match(pb.pitfalls.join(' '), /跳回|重新 arm|前台/);
+});
+
+test('playbookSummary routes are JSON-safe (no regex objects)', () => {
+  const s = playbookSummary(PLAYBOOKS.find((p) => p.id === 'apple-freeform'));
+  assert.equal(s.routes.length, 2);
+  const json = JSON.stringify(s);
+  assert.doesNotMatch(json, /"match":\{/);
+  assert.ok(s.routes.every((r) => Array.isArray(r.when.keywords)));
+});

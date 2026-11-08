@@ -11,13 +11,18 @@
 // the canvas, or open it in a tab). This script does all three.
 //
 // Usage:
+//   # web canvas (Canva / Figma): CDP upload
 //   node scripts/draw-image.mjs --image ./ref.png --url https://www.canva.com/design/XXX/edit
+//   # native whiteboard (Apple Freeform): transparent PNG -> clipboard -> Cmd+V
+//   node scripts/draw-image.mjs --image ./ref.png --target freeform
 //        [--x 150 --y 120 --width 850 --height 780] [--colors 9] [--grid 130]
 //        [--out ./out/fish.png] [--port 9333] [--no-place]
 //
-// It launches (or reuses) an owned debug Chrome with the user's copied logins,
-// renders the PNG, uploads it into the design, and clicks the upload thumbnail
-// so a real image element lands on the canvas. Screenshot afterwards to verify.
+// The default (web) path launches or reuses an owned debug Chrome with the
+// user's copied logins, renders the PNG, uploads it into the design, and clicks
+// the upload thumbnail. The freeform path needs no Chrome at all: it renders a
+// transparent, locally-positioned PNG and pastes it into the frontmost
+// Freeform board. Screenshot afterwards to verify in both cases.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -47,6 +52,44 @@ function findPython() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Place the rendered PNG into a NATIVE Freeform board. No Chrome, no CDP.
+ * Freeform accepts a PNG on the clipboard and Cmd+V creates a single image
+ * object — pixel-exact, one element, no brush stripes and no colour passes.
+ * Coordinates are derived from the live window bounds rather than hardcoded.
+ */
+async function placeIntoFreeform(pngPath, CU) {
+  const listing = JSON.parse(
+    execFileSync(CU, ["windows"], { encoding: "utf8" }).trim().split("\n").pop()
+  );
+  const w = (listing.windows ?? []).find((x) => /Freeform/i.test(String(x.app ?? "")));
+  if (!w) throw new Error("no Freeform window found; open a board first");
+  const bx = Number(w.bounds?.x ?? 0);
+  const by = Number(w.bounds?.y ?? 0);
+  const bw = Number(w.bounds?.width ?? 1200);
+  const bh = Number(w.bounds?.height ?? 900);
+  const winId = Number(w.windowId);
+  const click = (x, y) =>
+    execFileSync(CU, ["click", "--x", String(Math.round(x)), "--y", String(Math.round(y)),
+                      "--window", String(winId), "--force"], { encoding: "utf8" });
+  const key = (name, mods) =>
+    execFileSync(CU, ["key", "--name", name, ...(mods ? ["--mods", mods] : [])], { encoding: "utf8" });
+
+  const safe = pngPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  execFileSync("osascript", ["-e", `set the clipboard to (read (POSIX file "${safe}") as «class PNGf»)`], { encoding: "utf8" });
+  execFileSync("osascript", ["-e", 'tell application "Freeform" to activate'], { encoding: "utf8" });
+  await sleep(350);
+  click(bx + bw * 0.5, by + bh * 0.45); // focus the canvas
+  await sleep(150);
+  key("a", "cmd");
+  key("delete");
+  key("v", "cmd");
+  await sleep(600);
+  click(bx + bw * 0.12, by + bh * 0.18); // deselect
+  console.log("[draw-image] pasted transparent PNG into Freeform:", pngPath);
+  console.log("[draw-image] DONE — screenshot the window to verify.");
+}
+
 async function main() {
   const image = arg("image");
   const url = arg("url");
@@ -55,6 +98,7 @@ async function main() {
   const rect = [arg("x", "150"), arg("y", "120"), arg("width", "850"), arg("height", "780")];
   const colors = arg("colors", "9");
   const grid = arg("grid", "130");
+  const target = arg("target", "web");
   const out = arg("out", join(ROOT, "out", "draw-image.png"));
   mkdirSync(dirname(out), { recursive: true });
 
@@ -64,13 +108,18 @@ async function main() {
   if (planRes.ok !== true) throw new Error("drawplan failed: " + JSON.stringify(planRes));
   console.log("[draw-image] plan:", planPath, "layers", planRes.layers?.length, "runs", planRes.totalRuns);
 
-  // 2. rasterise to a pixel-exact PNG
+  // 2. rasterise to a pixel-exact PNG. A native whiteboard needs a transparent,
+  //    locally-positioned image; a web canvas is uploaded as-is.
   const py = findPython();
-  const pngRes = JSON.parse(execFileSync(py, [join(ROOT, "scripts", "plan-to-png.py"), planPath, out, "--scale", arg("scale", "1")], { encoding: "utf8" }).trim().split("\n").pop());
+  const pngArgs = [join(ROOT, "scripts", "plan-to-png.py"), planPath, out, "--scale", arg("scale", "1")];
+  if (target === "freeform") pngArgs.push("--local", "--transparent");
+  const pngRes = JSON.parse(execFileSync(py, pngArgs, { encoding: "utf8" }).trim().split("\n").pop());
   if (pngRes.ok !== true) throw new Error("plan-to-png failed");
-  console.log("[draw-image] png:", out, pngRes.width + "x" + pngRes.height);
+  console.log("[draw-image] png:", out, pngRes.width + "x" + pngRes.height,
+              target === "freeform" ? "(local, transparent)" : "");
 
   if (hasFlag("no-place")) { console.log("[draw-image] --no-place: skipping placement"); return; }
+  if (target === "freeform") { await placeIntoFreeform(out, CU); return; }
   if (!url) { console.log("[draw-image] no --url: PNG only"); return; }
 
   // 3. place into the web canvas over CDP

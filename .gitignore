@@ -1,6 +1,9 @@
 .DS_Store
 node_modules/
 __pycache__/
+# Scratch space for one-off experiments (reference images, rendered plans,
+# test screenshots, ad-hoc scripts). Never part of a release.
+tmp/
 *.py[cod]
 *.log
 *.bak
