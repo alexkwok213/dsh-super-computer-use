@@ -36,6 +36,9 @@ test('setBrushStyle arms the brush then drives the two settings sliders', async 
       const expr = params.expression || '';
       // brush already armed -> armBrush returns early
       if (expr.includes("aria-label')==='画笔'") && expr.includes('backgroundColor')) return { result: { value: 'rgba(57, 70, 96, 0.14)' } };
+      // brush flyout already open -> openBrushPanel returns early
+      if (expr.includes("aria-label')==='设置'") && expr.includes("'yes'")) return { result: { value: 'yes' } };
+      if (expr.includes("aria-label')==='设置'")) return { result: { value: 'clicked' } };
       if (expr.includes('rs.length>=2')) return { result: { value: 'true' } };
       if (expr.includes('fire(rs[0]')) return { result: { value: '["10","100"]' } };
       return { result: { value: 'ok' } };
