@@ -35,6 +35,8 @@
 | **未知窗口** | `cu_windows` → 拿 windowId/pid → 再 discover/snapshot/截图 |
 
 > 2026-11-08 之前 `cu_discover` 只支持 CDP/网页，而 `detectNativePlaybook` 定义了却从未被生产代码调用——Freeform 的 playbook 是「测试通过但运行时拿不到」的死知识。这是本次翻车的根因之一。
+>
+> 还有更硬的一层：`cu_discover` 的 `output` 只声明了 JSON schema、**没有 `render` 函数**，真实宿主一调用就报 `userRender is not a function`。单元测试直接调 `execute()` 发现不了，只有端到端跑才会暴露——所以这个工具当时等于不存在。已补 `renderWithOptionalImage()`，并在 `test/tool_schema.mjs` 加了「每个工具必须有可用 renderer」的回归断言。**能力 discover 不可用，是「先 discover 再操作」这条原则写了却做不到的直接原因。**
 
 **关键**：网页的 AX 树通常只到 Chrome 外壳（实测只有 49 个节点，全是浏览器 UI），页面内控件必须**读 DOM**，不能靠 `cu_click_text`。
 

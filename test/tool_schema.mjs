@@ -185,6 +185,20 @@ test("every cu_* tool declares a parameter schema the host will accept", () => {
   }
 });
 
+test("every tool declares a usable output renderer", () => {
+  // Regression: a tool with `output: {schema}` but no `render` looked fine in
+  // unit tests (which call execute() directly) but failed in the real host with
+  // "userRender is not a function", making cu_discover unusable in practice.
+  const tools = collectTools();
+  for (const tool of tools) {
+    assert.equal(typeof tool.output?.render, "function",
+      `${tool.name}.output.render must be a function`);
+  }
+  for (const name of ["cu_route", "cu_discover"]) {
+    assert.ok(tools.some((t) => t.name === name), `${name} must be registered`);
+  }
+});
+
 test("object parameters carry an explicit openness contract", () => {
   // Regression: `expect` was declared as a bare `{type: "object"}` and took the
   // whole plugin down at load time.
