@@ -91,3 +91,23 @@ node scripts/draw-image.mjs \
 - `cu_paint_plan` + `cu_cdp_paint`（逐笔画）能画，但 Canva 画笔默认极粗 + 缩放相关性 + 颜色/撤销控件不可靠 → 逐笔复刻难出好效果。
 - **plan→PNG→上传放置** 稳定、像素级、可复现，是推荐路径。
 - 全链路零 "Allow remote debugging" 弹框（owned profile）。
+
+## Codex 实测源码结论（为什么"能用 CDP 落笔画但仍不好看"）
+
+翻 `ChatGPT.app/.../@oai/browser-desktop/scripts/browser-service.mjs`：
+- Codex 的绘制命令 `cua_drag { path:[{x,y},…] }` → `dragPath` → 依次
+  `dispatchMouseMove(first)` → `dispatchMouseDown` → 对 path 每个点
+  `dispatchPressedMouseMove` → `dispatchMouseUp`。
+- 而 `dispatchPressedMouseMove` 底层就是 **`Input.dispatchMouseEvent({type:"mouseMoved",button:"left",buttons:1})`**
+  —— **与 `cu_cdp_paint` 完全同一机制**。Codex 没有魔法，也不是系统指针画图；它就是"模型给多点 path，CDP 逐点注入"。
+
+所以差距不在落笔机制，而在打磨。Canva 白板上实测出的硬边界：
+
+1. **笔刷约 28px（100% 缩放时）**：网格单元必须 ≈ 24–28px（用 `grid≈30` 配目标矩形）。更细（grid 60）会糊成一整团黑；更粗会太稀。
+2. **没有可用撤销**：CDP 发的 Cmd+Z 进不了 Canva 撤销栈。重画前用 **全选+删除**（`Cmd+A` 然后 `Delete`，连做两次）清空——实测可删 86 个元素。
+3. **颜色/粗细是自绘控件**，无 aria/输入框可稳定驱动；单色是现实上限。若要多色，靠多次"换色后整块重画"，且换色本身不可靠。
+4. **画笔就绪状态**：点左侧栏"画笔"后其背景变 `rgba(57,70,96,.14)`；点画笔浮动面板里的图标会取消选中。**每次落笔前先读背景确认已激活**。
+5. **绝不要 `Page.reload`** 编辑器页——会被踢到模板/落地页，画布丢失。
+6. 坐标是 **CSS 视口像素**，且只在 **100% 缩放**下与设计坐标对齐；先确认缩放=100%。
+
+实操配方（一条脚本内做，别中途 reload）：`drawplan(grid≈30)` → 清屏(全选删) → 确保 brush 激活 → 逐层 `paintStrokes(inset≈0.5, paceMs≈15)`。结果为单色块状画，粗笔刷下这是 Canva 白板的现实上限；要高清成品仍推荐 plan→PNG→上传。
