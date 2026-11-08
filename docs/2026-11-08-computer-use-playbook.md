@@ -120,3 +120,17 @@
 - [ ] 不要 `Page.reload` 编辑器
 - [ ] 不要假设能撤销；准备"全选删除重画"
 - [ ] 落笔前确认工具真的激活（读状态，不靠猜）
+
+---
+
+## 五、把 PNG 放进 Canva（像素级路线的最后一公里）
+
+`drawplan → plan-to-png.py` 生成 PNG 后，如何可靠地放进画布：
+
+1. 打开左侧「上传」面板（`[aria-label='上传']`），等 `input[type=file]` 出现；
+2. `DOM.setFileInputFiles(nodeId, [png])` 上传——这是唯一稳定的上传入口（点「上传文件」会弹系统对话框，反而难控）；
+3. 上传后面板出现新缩略图。**不要盲点**：面板里混着账号历史素材。用 `img.naturalWidth / naturalHeight` 的宽高比区分——
+   - 本次像素版 1900×1680 ≈ **1.131**
+   - 原图 1080×1080 = **1.0**
+4. 点中目标缩略图 → 作为**单个图片元素**落到画布（不占 2000 素材额度）；
+5. 校验：`document.querySelectorAll('img')` 中大于 300px 的那张，`naturalWidth/naturalHeight` 应与目标一致（Canva 会等比缩放，宽高比不变），并读 `已保存所有更改` 确认落盘。
