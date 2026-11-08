@@ -27,13 +27,17 @@ test('isBrushArmed reads the rail button background', async () => {
   assert.equal(await mod.isBrushArmed(idle), false);
 });
 
-test('setBrushStyle drives only the two settings sliders', async () => {
+test('setBrushStyle arms the brush then drives the two settings sliders', async () => {
   let evalCount = 0;
   const client = {
     send: async (method, params) => {
+      if (method === 'Input.dispatchMouseEvent') return {};
       evalCount += 1;
-      if (params.expression.includes('rs.length>=2')) return { result: { value: 'true' } };
-      if (params.expression.includes('fire(rs[0]')) return { result: { value: '["10","100"]' } };
+      const expr = params.expression || '';
+      // brush already armed -> armBrush returns early
+      if (expr.includes("aria-label')==='画笔'") && expr.includes('backgroundColor')) return { result: { value: 'rgba(57, 70, 96, 0.14)' } };
+      if (expr.includes('rs.length>=2')) return { result: { value: 'true' } };
+      if (expr.includes('fire(rs[0]')) return { result: { value: '["10","100"]' } };
       return { result: { value: 'ok' } };
     },
   };
