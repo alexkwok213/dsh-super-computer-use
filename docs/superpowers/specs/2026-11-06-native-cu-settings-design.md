@@ -2,6 +2,8 @@
 
 日期：2026-11-06。状态：**已批准实施（用户「按你判断的做」）**。范围：M0 首版；M1 明确留待后续。
 
+> **后续变更（2026-11-09）**：用户确认「电脑控制」选项已能在「设置」里看到，插件栏不必再展示该一级入口。M0 的 `sidebar.panellist` + `main` 两个插槽注册及对应组件（SidebarIcon / NativePanel）已移除，`settings.section` 保留为唯一入口；`/api/scu/settings` 路由与工具闸门不变。以下正文记录 M0 首版当时的设计决策，仅作历史参考。
+
 ## 1. 意图与为什么
 
 用户看到 Claude Desktop 的 Settings → System → Computer use 一组开关，以及本机 `dsh-github-flow` 的「GitHub 全景驾驶舱」一级入口，希望 Computer Use 也「像系统自带」：开关、权限状态、允许/拒绝应用收在一处，并且有一个不依赖聊天窗口的常驻入口。

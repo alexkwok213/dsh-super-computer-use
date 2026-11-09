@@ -201,7 +201,7 @@ test("disabled master switch really refuses a registered cu_* action", async () 
   manager.dispose();
 });
 
-test("client registers the sidebar entry, central panel and settings section", () => {
+test("client registers only the settings section, not a plugin-bar entry or central panel", () => {
   const code = readFileSync(new URL("../client.js", import.meta.url), "utf8");
   let captured = null;
   const style = { dataset: {}, textContent: "", remove() {} };
@@ -258,18 +258,19 @@ test("client registers the sidebar entry, central panel and settings section", (
   const sidebar = registrations.find((r) => r.options.name === "sidebar.panellist");
   const main = registrations.find((r) => r.options.name === "main");
   const section = registrations.find((r) => r.options.name === "settings.section");
-  assert.ok(sidebar, "sidebar.panellist registration missing");
-  assert.ok(main, "main registration missing");
+  // Computer Use lives in Settings now. A sidebar.panellist row would put it
+  // back in the plugin bar, and a main panel would be unreachable without it.
+  assert.equal(sidebar, undefined, "no plugin-bar (sidebar.panellist) entry may be registered");
+  assert.equal(main, undefined, "no orphaned central panel (main) may be registered");
   assert.ok(section, "settings.section registration missing");
-  assert.equal(sidebar.options.id, "computer-use");
-  assert.equal(main.options.key, "computer-use", "main key must match the sidebar id");
   assert.equal(section.options.id, "computer-use");
-  assert.equal(typeof sidebar.options.label, "function");
-  assert.equal(sidebar.options.label(), "Computer Use");
+  assert.equal(typeof section.options.label, "function");
+  assert.equal(section.options.label(), "Computer Use");
   sandbox.navigator.language = "zh-CN";
-  assert.equal(sidebar.options.label(), "电脑控制", "Chinese shell must label the entry in Chinese");
+  assert.equal(section.options.label(), "电脑控制", "Chinese shell must label the settings section in Chinese");
   sandbox.navigator.language = "en";
-  assert.equal(typeof sidebar.component, "function");
-  assert.equal(typeof main.component, "function");
   assert.equal(typeof section.component, "function");
+  // Removing the plugin-bar entry must not take the ambient card or overlay with it.
+  assert.ok(registrations.some((r) => r.options.name === "conversation.input.dock"));
+  assert.ok(registrations.some((r) => r.options.name === "shell.overlay"));
 });

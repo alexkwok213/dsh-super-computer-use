@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { CuSessionManager } from '../lib/core.mjs';
 import { registerCuTools } from '../lib/index.mjs';
-import { planLayerToStrokes, readDevToolsActivePort } from '../lib/cdp.mjs';
+import { planLayerToStrokes, buildLayerStrokes, isNearWhiteHex, readDevToolsActivePort } from '../lib/cdp.mjs';
 
 const ROOT = resolve(new URL('..', import.meta.url).pathname);
 
@@ -96,11 +96,25 @@ test('owned debug Chrome: launch, attach, and paint a canvas (skipped without Ch
   const { launchDebugChrome, acquirePage, paintStrokes, releasePages } = await import('../lib/cdp.mjs');
   const dir = mkdtempSync(join(tmpdir(), 'cu-cdp-e2e-'));
   const port = 9777;
-  const html = "data:text/html,<canvas id=c width=300 height=200 style=border:1px solid red></canvas><script>const c=document.getElementById('c'),x=c.getContext('2d');let d=false;c.addEventListener('mousedown',()=>{d=true;x.beginPath()});c.addEventListener('mousemove',e=>{if(d){x.lineTo(e.offsetX,e.offsetY);x.stroke()}});c.addEventListener('mouseup',()=>d=false);</script>";
+  // Chrome 136+ (verified on 156) refuses CDP Input.dispatchMouseEvent on
+  // opaque data: URLs with "Internal error (-32603)". A file:// page has a real
+  // origin, so the end-to-end stroke still runs against the real browser.
+  const pagePath = join(dir, 'page.html');
+  writeFileSync(pagePath, "<!doctype html><html><body><canvas id=c width=300 height=200 style='border:1px solid red'></canvas><script>const c=document.getElementById('c'),x=c.getContext('2d');let d=false;c.addEventListener('mousedown',()=>{d=true;x.beginPath()});c.addEventListener('mousemove',e=>{if(d){x.lineTo(e.offsetX,e.offsetY);x.stroke()}});c.addEventListener('mouseup',()=>d=false);</script></body></html>");
+  const startUrl = 'file://' + pagePath;
   try {
-    const info = await launchDebugChrome({ profileDir: dir, port, startUrl: html, timeoutMs: 20000 });
+    let info;
+    try {
+      info = await launchDebugChrome({ profileDir: dir, port, startUrl, timeoutMs: 20000 });
+    } catch (err) {
+      if (err && (err.code === 'EPERM' || /EPERM|cdp_launch_timeout/.test(String(err.message ?? err)))) {
+        t.skip(`sandbox blocks launching Chrome (${err.code || err.message})`);
+        return;
+      }
+      throw err;
+    }
     assert.ok(info.browserUrl.includes('/devtools/browser/'));
-    const conn = await acquirePage({ wsUrl: info.browserUrl, urlMatch: 'data:text/html' });
+    const conn = await acquirePage({ wsUrl: info.browserUrl, urlMatch: 'page.html' });
     const r = await paintStrokes(conn.client, [[[40, 40], [120, 90], [200, 50]]], { paceMs: 20 });
     assert.equal(r.strokes, 1);
     const ev = await conn.client.send('Runtime.evaluate', {
@@ -111,8 +125,6 @@ test('owned debug Chrome: launch, attach, and paint a canvas (skipped without Ch
     releasePages({});
   } finally {
     try { (await import('node:child_process')).execSync(`pkill -f "remote-debugging-port=${port}"`); } catch { /* ignore */ }
-    // Give Chrome a moment to release files, then remove with retries (it may
-    // still be writing into the profile when pkill lands).
     await new Promise((r) => setTimeout(r, 600));
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch { /* ignore */ }
   }
@@ -161,4 +173,26 @@ test('region grouping keeps far-apart blocks in separate strokes', async () => {
   };
   const r = planLayerToRegionStrokes(plan, 1, 0.5);
   assert.equal(r.strokes.length, 2, 'two disjoint blocks -> two strokes');
+});
+
+test('buildLayerStrokes supports regions mode and +sy/2 seamPass', () => {
+  const plan = {
+    x0: 10, y0: 20, sx: 4, sy: 4,
+    layers: [{ index: 0, hex: '#1f2937', runs: [[0, 0, 2], [0, 1, 2]] }],
+  };
+  const single = buildLayerStrokes(plan, 0, { mode: 'regions', seamPass: false });
+  assert.equal(single.strokes.length, 1);
+  assert.equal(single.seamPassApplied, false);
+
+  const seamed = buildLayerStrokes(plan, 0, { mode: 'regions', seamPass: true });
+  assert.equal(seamed.strokes.length, 2, 'seamPass doubles the region strokes with +sy/2 offset');
+  assert.equal(seamed.seamPassApplied, true);
+  assert.equal(seamed.strokes[1][0][1] - seamed.strokes[0][0][1], 2, 'shifted by sy/2 = 2px');
+});
+
+test('isNearWhiteHex identifies near-white background layers', () => {
+  assert.equal(isNearWhiteHex('#fcf5f5'), true);
+  assert.equal(isNearWhiteHex('#ffffff'), true);
+  assert.equal(isNearWhiteHex('#1e1e1e'), false);
+  assert.equal(isNearWhiteHex('#3b82f6'), false);
 });

@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } = React;
 
     const NS = "dsh-super-computer-use";
-    const CLIENT_VERSION = "0.18.0";
+    const CLIENT_VERSION = "0.19.0";
     const STATE_PATH = "/api/scu/state";
     const CONTROL_PATH = "/api/scu/control";
     const PREVIEW_PATH = "/api/scu/preview";
@@ -168,11 +168,6 @@ window.__ModuleLoader__.load({
         "native.unknown": "Unknown",
         "native.storage": "Storage",
         "native.storageHint": "Space used by Computer Use on this Mac (top-level files).",
-        "native.activity": "Current activity",
-        "native.idle": "Idle",
-        "native.active": "Controlling {app}",
-        "native.targets": "{count} targets",
-        "native.stopAll": "Stop all",
         "native.save": "Save",
         "native.saving": "Saving…",
         "native.saved": "Saved",
@@ -269,11 +264,6 @@ window.__ModuleLoader__.load({
         "native.unknown": "未知",
         "native.storage": "存储",
         "native.storageHint": "Computer Use 在这台 Mac 上占用的空间（仅顶层文件）。",
-        "native.activity": "当前状态",
-        "native.idle": "空闲",
-        "native.active": "正在操控 {app}",
-        "native.targets": "{count} 个目标",
-        "native.stopAll": "全部停止",
         "native.save": "保存",
         "native.saving": "保存中…",
         "native.saved": "已保存",
@@ -1640,8 +1630,8 @@ window.__ModuleLoader__.load({
 @keyframes scu-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes scu-rise { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
 @keyframes scu-pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
-/* Native settings section + first-class sidebar panel. Inherit the host theme:
-   these surfaces live outside the chat card, so they use the shell's tokens. */
+/* Native settings section. Inherit the host theme: this surface lives outside
+   the chat card, so it uses the shell's tokens. */
 .scu-native { color: var(--scu-fg, inherit); font-size: 13px; line-height: 1.55; }
 .scu-native-wrap { max-width: 760px; margin: 0 auto; padding: 28px 26px 48px; }
 .scu-native-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 22px; }
@@ -1670,10 +1660,6 @@ window.__ModuleLoader__.load({
 .scu-native-badge { flex: 0 0 auto; font-size: 11px; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--scu-line, rgba(127,127,127,.35)); }
 .scu-native-badge[data-ok="true"] { color: #17803d; border-color: rgba(23,128,61,.45); background: rgba(23,128,61,.09); }
 .scu-native-badge[data-ok="false"] { color: #b3472e; border-color: rgba(179,71,46,.45); background: rgba(179,71,46,.09); }
-.scu-native-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-.scu-native-stat { border: 1px solid var(--scu-line, rgba(127,127,127,.22)); border-radius: 11px; padding: 12px 14px; }
-.scu-native-stat b { display: block; font-size: 16px; font-weight: 650; }
-.scu-native-stat small { color: var(--scu-fg2, #888); font-size: 11px; }
 .scu-native-note { color: var(--scu-fg2, #888); font-size: 11.5px; margin-top: 10px; }
 .scu-native-error { color: #b3472e; font-size: 12px; margin-bottom: 12px; }
 @media (prefers-reduced-motion: reduce) {
@@ -2485,9 +2471,10 @@ window.__ModuleLoader__.load({
 
     // ---------------------------------------------------------------- native UI
     //
-    // A first-class sidebar entry (sidebar.panellist + main) and a real settings
-    // page (settings.section). Both read one authenticated route, so the panel
-    // and the page can never disagree about what is enabled.
+    // One surface only: the real settings page (settings.section). The plugin
+    // bar deliberately has no "Computer Use" entry — every control lives in
+    // Settings, so the sidebar stays uncluttered. The page reads the single
+    // authenticated route, so it can never disagree with the tool gate.
 
     const NativeUI = { ctx: null };
     const SETTINGS_PATH = "/api/scu/settings";
@@ -2546,15 +2533,6 @@ window.__ModuleLoader__.load({
       }
     }
 
-    async function stopAllFromPanel(ownerSessionId) {
-      if (!ownerSessionId) return;
-      try {
-        await postJson(CONTROL_PATH, { hostSessionId: ownerSessionId, command: "stop" });
-      } catch {
-        // The poll reports the honest stopped/unknown state afterwards.
-      }
-    }
-
     function PermissionRow({ t, label, value, available, target }) {
       const known = available === true;
       return h(
@@ -2578,150 +2556,6 @@ window.__ModuleLoader__.load({
             onClick: () => openPermissionSettings(target),
           },
           t("native.openSettings"),
-        ),
-      );
-    }
-
-    function SidebarIcon(props) {
-      const size = props && typeof props.size === "number" ? props.size : 16;
-      // The host draws the row, selected state, tooltip and aria-label. Only a
-      // bare glyph here: a fixed-size wrapper would misalign the icon column.
-      return h(
-        "svg",
-        {
-          viewBox: "0 0 24 24",
-          width: size,
-          height: size,
-          "aria-hidden": "true",
-          style: {
-            display: "block",
-            fill: "none",
-            stroke: "currentColor",
-            strokeWidth: 1.7,
-            strokeLinecap: "round",
-            strokeLinejoin: "round",
-          },
-        },
-        h("rect", { x: 2.5, y: 4, width: 19, height: 13, rx: 2 }),
-        h("path", { d: "M8 21h8" }),
-        h("path", { d: "M12 17v4" }),
-        h("path", { d: "m9.5 9 3 3-1.3 1.3L14.5 14" }),
-      );
-    }
-
-    /** Central panel selected by the sidebar entry. Root-scoped: no session id. */
-    function NativePanel() {
-      const t = useNativeT();
-      const snap = useNativeSnapshot();
-      const [busy, setBusy] = useState(false);
-      const data = snap.data;
-      return h(
-        "div",
-        { className: "scu-native" },
-        h(
-          "div",
-          { className: "scu-native-wrap" },
-          h(
-            "div",
-            { className: "scu-native-head" },
-            h(
-              "div",
-              null,
-              h("h2", null, t("native.nav")),
-              h("p", null, t("native.subtitle")),
-            ),
-            h(
-              "div",
-              { className: "scu-native-actions" },
-              h(
-                "button",
-                { className: "scu-native-btn", type: "button", onClick: snap.reload },
-                t("native.refresh"),
-              ),
-              h(
-                "button",
-                {
-                  className: "scu-native-btn",
-                  type: "button",
-                  disabled: !data?.ownerSessionId || busy,
-                  onClick: async () => {
-                    setBusy(true);
-                    await stopAllFromPanel(data?.ownerSessionId);
-                    setBusy(false);
-                    snap.reload();
-                  },
-                },
-                t("native.stopAll"),
-              ),
-            ),
-          ),
-          snap.error
-            ? h("div", { className: "scu-native-error" }, t("native.error", { error: snap.error }))
-            : null,
-          !data && snap.loading
-            ? h("div", { className: "scu-native-note" }, t("native.loading"))
-            : null,
-          data
-            ? h(
-                "div",
-                { className: "scu-native-grid" },
-                h(
-                  "div",
-                  { className: "scu-native-stat" },
-                  h(
-                    "b",
-                    null,
-                    data.activity?.active
-                      ? t("native.active", { app: data.activity.app || "—" })
-                      : t("native.idle"),
-                  ),
-                  h("small", null, t("native.targets", { count: data.activity?.targetCount ?? 0 })),
-                ),
-                h(
-                  "div",
-                  { className: "scu-native-stat" },
-                  h(
-                    "b",
-                    null,
-                    data.settings?.enabled === false ? t("native.notGranted") : t("native.granted"),
-                  ),
-                  h("small", null, t("native.section.enable")),
-                ),
-                h(
-                  "div",
-                  { className: "scu-native-stat" },
-                  h(
-                    "b",
-                    null,
-                    data.storageBytes == null
-                      ? "—"
-                      : t("native.kb", { kb: Math.round(data.storageBytes / 1024) }),
-                  ),
-                  h("small", null, t("native.storage")),
-                ),
-              )
-            : null,
-          data
-            ? h(
-                "div",
-                { className: "scu-native-card" },
-                h("h3", null, t("native.permissions")),
-                h(PermissionRow, {
-                  t,
-                  label: t("native.accessibility"),
-                  value: data.permissions?.accessibility,
-                  available: data.permissions?.available,
-                  target: "accessibility",
-                }),
-                h(PermissionRow, {
-                  t,
-                  label: t("native.screenRecording"),
-                  value: data.permissions?.screenRecording,
-                  available: data.permissions?.available,
-                  target: "screenRecording",
-                }),
-              )
-            : null,
         ),
       );
     }
@@ -2968,7 +2802,7 @@ window.__ModuleLoader__.load({
       // cheaper and more honest than a second copy of the lifecycle logic.
       __test: {
         SessionStore, PreviewController, CuCard, Overlay, ControlDeck,
-        NativePanel, SettingsSection, SidebarIcon,
+        SettingsSection,
         storeFor, expansion, activeDeckSession,
       },
       apply(ctx) {
@@ -3030,26 +2864,8 @@ window.__ModuleLoader__.load({
           };
         });
 
-        // First-class entry + real settings page. Both are declared root-scoped
-        // list/keyed slots: the host owns the sidebar row, the central panel
-        // switch and the settings navigation, so no shell UI is replaced.
-        ctx.slots.inject("sidebar.panellist", () =>
-          ctx.slots.register(
-            {
-              name: "sidebar.panellist",
-              id: "computer-use",
-              order: 25,
-              label: nativeNavLabel,
-            },
-            SidebarIcon,
-          ),
-        );
-        ctx.slots.inject("main", () =>
-          ctx.slots.register(
-            { name: "main", key: "computer-use" },
-            NativePanel,
-          ),
-        );
+        // Settings is the only first-class surface. The host owns the settings
+        // navigation, so no shell UI is replaced and the plugin bar stays clean.
         ctx.slots.inject("settings.section", () =>
           ctx.slots.register(
             {
