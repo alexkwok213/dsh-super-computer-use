@@ -199,6 +199,50 @@ test('native replacement depends on the actual helper, not an earlier Host disk 
   assert.equal(nativeReplacementRequired(null, 'current'), true);
 });
 
+test('HMR resolves through root scope when the current fiber is isolated', async () => {
+  const { detectHmr, resolveHmr } = await import('../lib/dev-sync.mjs');
+  const service = {
+    runExclusive(fn) { return fn(); },
+    reconcileProfile() { return Promise.resolve({}); },
+    watchConfig() {},
+    executing: { getStore: () => false, exit: (fn) => fn() },
+  };
+  // ctx.get misses (isolate key mismatch), root provides it.
+  const ctx = {
+    get: () => undefined,
+    root: { get: (name) => (name === 'hmr' ? service : undefined) },
+    reflect: { get: () => undefined },
+    hmr: undefined,
+  };
+  const info = detectHmr(ctx);
+  assert.equal(info.available, true);
+  assert.equal(info.source, 'ctx.root.get');
+  assert.equal(info.runExclusive, true);
+  assert.equal(info.reconcileProfile, true);
+  assert.equal(resolveHmr(ctx).service, service);
+  assert.equal(info.probes.length, 4);
+});
+
+test('HMR probing is honest when no service exists and tolerates a throwing proxy', async () => {
+  const { detectHmr } = await import('../lib/dev-sync.mjs');
+  const missing = detectHmr({ get: () => undefined, root: { get: () => undefined } });
+  assert.equal(missing.available, false);
+  assert.equal(missing.source, null);
+  const partial = detectHmr({
+    get: () => ({ runExclusive() {} }),
+    root: { get: () => undefined },
+  });
+  assert.equal(partial.available, false, 'runExclusive alone must not count as usable');
+  const throwing = {
+    get: () => undefined,
+    root: { get: () => undefined },
+    get hmr() { throw new Error('cannot get property "hmr" without inject'); },
+  };
+  const probed = detectHmr(throwing);
+  assert.equal(probed.available, false);
+  assert.ok(probed.probes.some((p) => p.source === 'ctx.hmr' && p.error));
+});
+
 test('HMR is required only when a generation actually needs replacing', () => {
   const withoutHmr = { hmr: { available: false }, phase: 'ready' };
   const withHmr = { hmr: { available: true }, phase: 'ready' };

@@ -43,7 +43,7 @@ npm run dev:sync -- --json             # 输出机器可读结果
 1. **校验链接**：`~/.dsh/profiles/desktop/node_modules/dsh-super-computer-use` 必须 realpath 到本仓库；不会自动改链接。
 2. **运行测试**：`scripts/test-isolated.mjs` 使用临时 `CU_STATE_DIR`，串行执行，单个测试 120 秒上限。失败会自动重试一次；两次都失败则不重载，退出 1。真实 `~/.cu/config.json` 与 `pause` 不会被测试修改。
 3. **必要时构建原生 helper**：仅当 `engine/Sources/*.swift` 或 `scripts/build-universal.sh` 的哈希与构建记录不同，或 `bin/cu`/`bin/cu-preview` 与记录不一致时，运行 `scripts/build-universal.sh`。只改 JS/Client 不会重复编译。构建失败会用新 inode 恢复旧二进制（macOS 的 provenance/签名缓存拒绝原地覆盖）。
-4. **请求运行中插件重载**：CLI 把请求写入运行插件发布的 generation request 文件；插件检查 CU 空闲后，使用官方 `ctx.hmr.runExclusive(() => ctx.hmr.reconcileProfile([...]))`。Host 模块变化时同进程替换，不重启 DSH。
+4. **请求运行中插件重载**：CLI 把请求写入运行插件发布的 generation request 文件；插件检查 CU 空闲后，使用 `runExclusive(() => reconcileProfile([...]))` 同进程替换 Host 代次，不重启 DSH。服务由 `lib/dev-sync.mjs` 的 `resolveHmr(ctx)` **在使用时动态解析**，见下方「HMR 动态解析」。
 5. **Client 更新**：依赖 DSH 自带的 `dsh-client-hmr`。新 bundle 执行后通过已认证的 `/api/scu/client-hello` 上报实际执行的 bundle `rev` 和 `dev-sync-hello` capability；Host 将其与当前 client graph entry/batch rev 比对。
 6. **原生 helper 更新**：Host 重载会回收并重启 plugin 管理的 helper；仅原生变化、Host 未重载时，插件会先回收自己管理的旧 helper，再启动 `bin/cu`。`buildId` 必须等于磁盘 `bin/cu` 的 SHA-256，旧 pid 必须退出。
 7. **核验**：CLI 再独立读取运行插件写的 runtime/client 报告、查询 helper `/v1/status`、检查进程路径与遗留进程。任一必需项不匹配都退出非 0。
@@ -79,7 +79,8 @@ npm run dev:sync -- --json             # 输出机器可读结果
 - **页面必须打开**：Client 更新依赖页面的 `dsh-client-hmr` SSE 连接。若连接已关闭，命令会以 `needs_client` 退出 3；刷新 DSH 页面后重跑。当前实现不会自动刷新页面，也不会把“文件已写”当成“浏览器已执行”。
 - **Client bundle 必须可重复执行**：`client.js` 外层使用 IIFE。Client HMR 会在同一个全局词法环境再次执行 classic script；顶层 `const` 会触发 `Identifier has already been declared`，导致第二次 swap 静默失败。
 - **活跃 CU 会话不强制**：插件检查 `manager.activeSession`、在飞工具和最近 1.5 秒的 mutating 工具活动。忙时写 `deferred`，CLI 以退出码 3 报告；不会杀会话或强重启。
-- **HMR 能力因宿主版本而异**：某些桌面版已验证存在 `ctx.hmr.runExclusive/watchConfig/reconcileProfile`；若当前宿主没有这些 API（`runtime.hmr.available` 为 false，DSH 0.2.2-rc.2 桌面版即如此），**有变更待重载时**命令退出 3 并要求正常重启 DSH，不得伪造同进程重载。按提示重启后，宿主会直接加载当前 checkout；此时 `plan.anyChange` 为 false，命令只核验四代身份并返回 0，不需要 HMR。注意：重启本身不产生 HMR 能力，因此重启后若又改了代码，仍会再次被门控拦下，直到宿主提供该 API 或补一条不依赖 HMR 的重载路径。
+- **HMR 动态解析（2026-11-12）**：`resolveHmr(ctx)` 每次使用时依次探测 `ctx.get("hmr")` / `ctx.root.get("hmr")` / `ctx.reflect.get("hmr")` / `ctx.hmr`，并把 JSON 安全的 `probes` 写进 runtime 报告。原因有两个：Cordis 的 `ReflectService._getImpl` 按**当前 fiber 的 isolate key** 查服务，isolated 子 fiber 可能看不到根作用域提供的服务；而 `dsh-hmr` 注入 `loader`/`timer`，可能在本插件 `apply()` 之后才激活。因此 Host 侧不再把一次性检测结果存成常量：每次 `writeRuntime` 都重探测，并监听 Cordis 的 `internal/service` 事件，服务晚挂载时自动补装 request watcher。`ctx.root.get` 命中后，`runtime.hmr.available` 变 true，CLI 门控放行，`dev:sync` 就能同进程重载，**不再需要每轮版本升级重启 DSH**。
+- **仍不支持时如实报告**：如果四条路径都拿不到服务（`runtime.hmr.probes` 会列出各自结果），**有变更待重载时**命令仍退出 3 并要求正常重启 DSH，不得伪造同进程重载。重启后宿主直接加载当前 checkout，`plan.anyChange` 为 false 时只核验四代身份并返回 0。重载本身始终走 `runExclusive` + `reconcileProfile`，取不到服务时 `reconcileFromNormalTurn` 抛错而非假装完成。
 - **原生构建**：需要 Xcode Command Line Tools（`swiftc`、`lipo`）和可用签名身份（`engine/signing-identity`，或 ad-hoc）。构建产物写在仓库 `bin/`，构建记录在 `~/.cu/dev-sync/<repo-key>/build.json`。
 - **测试抖动**：套件在系统高负载下出现过 helper 启停竞态。`dev:sync` 已改为串行、单测 120s 上限、失败重试一次；若两次都失败，仍应视为失败并排查，而不是跳过。
 - **状态目录**：开发控制文件在 `~/.cu/dev-sync/<repo-key>/`（runtime/status/client/request/build）。若设置了 `CU_STATE_DIR`，Host 和 CLI 必须使用同一个值。
