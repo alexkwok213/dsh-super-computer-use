@@ -10,7 +10,7 @@
 
 对照官方 `@deepseek-ai/dsh-cua` 的 `PermissionPanel` / `controller` / `mount` 与宿主插槽契约，本轮完成：
 
-- **P0 详情页载体**：`locale/*.json` 增加 `meta.detail`，新增 `docs/DETAIL.md` / `DETAIL.zh.md` 与 `docs/preview.svg` / `preview.zh.svg`，`icon.svg` 替换 `assets/icon.png` 作为包图标；`package.json` 的 `files` 精确列出这些文件（`docs/` 目录 351MB，不能整目录打包）；README 中过时的「17 个工具」统一修正为 20 个。
+- **P0 详情页载体**：`locale/*.json` 增加 `meta.detail`，新增 `docs/DETAIL.md` / `DETAIL.zh.md` 与 `docs/preview.svg` / `preview.zh.svg`，`icon.svg` 替换 `assets/icon.png` 作为包图标；`package.json` 的 `files` 精确列出这些文件（当时 `docs/` 含 351MB 演示录屏，不能整目录打包；这批素材已于 2026-11-12 清理，`docs/` 现为 1.3MB，但精确列文件仍是发布包的最小化约定）；README 中过时的「17 个工具」统一修正为 20 个。
 - **P1 宿主设计系统**：`client.js` 的 `scu-native-*` 样式改用 `--dsw-alias-*` tokens（l3 边框、radius、32px 区块间距、min-height 80px 行、168px 等宽按钮、骨架占位）。
 - **P1 入口**：注册 `plugins.bundle.config`（key = 包名）把设置放到插件详情页，与官方「给 Computer Use 授权」同一位置；`plugins.bundle.activation` 提供启用后引导；`settings.section.icon` 补导航图标。已核实宿主 `config-ledger.ts` 按所有注册 key 生成 bundles 集合，第三方 bundle 可用。
 - **P1 状态与交互**：骨架占位、查询失败保留上次观测并标为未确认 + 分区重试、焦点与 `connection/reset` 刷新、全局 Toast、已完成态保存按钮、8 语言字典（en/zh 完整，ja/es/fr/de/ru/pt 覆盖设置区文案并从英文补全键集）。

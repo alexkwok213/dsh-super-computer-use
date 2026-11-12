@@ -1,3 +1,8 @@
+// HISTORICAL BASELINE — currently not runnable.
+// This benchmark spawns `cu demo --seconds 900`, a self-built mock window that
+// was removed together with the old standalone console app. `bin/cu demo` now
+// returns `unknown_command`. The numbers in README.md are an archived
+// 2026-11-03 baseline; do not treat them as a reproducible current result.
 // A repeatable task set for the execution loop, deliberately small and local.
 // F5 fixes: every round is kept as a sample {scenario,buildId,timings,evidence,
 // error}; a missing measurement stays null (never 0 ms); a click must move the

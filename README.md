@@ -26,8 +26,7 @@ DeepSeek Harness 宿主
 | `engine/Sources/` | 原生引擎源码（Swift） |
 | `assets/icon.png` | 插件产品图标 |
 | `engine/tests/` | 原生回归测试（光环/抓屏/窗口查询/控制台界面） |
-| `docs/` | 设计与验证记录；`docs/legacy/` 为合并前两个仓库的历史文档；`docs/demo/` 为演示素材 |
-| `docs/ui/` | 控制台界面的对照参考（`reference/`）与改造后截图（`console-after/`） |
+| `docs/` | 设计与验证记录；`docs/legacy/` 为合并前两个仓库的历史文档 |
 
 ## Harness 内嵌观看
 
@@ -122,8 +121,10 @@ cu service [--port 47777]                         # 本地 HTTP 引擎后端
 
 ## 实测性能
 
-`npm run bench` 是一套固定任务集的基准（demo 窗口，无需第三方 app），数字直接取自工具返回的
-`timings`，可重复跑、可比较模型和引擎版本。2026-11-03 的基线（每项 12 次）：
+> **`npm run bench` 目前不可运行**：它依赖的自建演示窗口命令 `cu demo` 已随旧版独立控制台一起移除（`bin/cu demo` 现在返回 `unknown_command`）。下面的数字是 2026-11-03 的历史基线，仅作存档，不要再当成可复跑的当前结果。
+
+`npm run bench` 曾是一套固定任务集的基准（demo 窗口，无需第三方 app），数字直接取自工具返回的
+`timings`。2026-11-03 的历史基线（每项 12 次，仅供存档）：
 
 | 任务 | 成功率 | P50 | P95 |
 |---|---|---|---|

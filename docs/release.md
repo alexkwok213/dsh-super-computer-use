@@ -60,6 +60,6 @@ GitHub-hosted macOS runner 偶尔会在任务开始前被取消（run 显示 `ca
 ## 注意
 
 - **不要手工移动 tag**：发布后如需修复，升 `patch` 重新发布，不复用旧 tag。
-- 大体积本地录屏（`docs/demo/two-apps-background.mov`、`docs/demo/zcode-claude-cu-demo.mov`）已加入 `.gitignore`，不进入版本库。
+- 演示录屏与旧版独立控制台的截图/验证素材不属于发布物，已从版本库移除；`.gitignore` 仍保留对大体积本地录屏的忽略规则。
 - `dev:sync` 仍是可单独运行的内部步骤，用于排障；它不是一轮工作的完成标志。
 - 发布依赖 `gh` 登录与 `workflow` 权限；缺权限时脚本会失败并如实报告。

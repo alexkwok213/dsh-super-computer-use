@@ -118,7 +118,7 @@ ui stop cleanup cleanup_unknown in 1ms cleanup=unknown
 
 ## 10. 演示录像
 
-`docs/demo/2026-11-04-harness-integrated-cu-demo.mov`（45.0 s，仅 Harness 窗口，14 MB）：
+当时的演示录像 `docs/demo/2026-11-04-harness-integrated-cu-demo.mov`（45.0 s，仅 Harness 窗口，14 MB）已在旧版控制台素材清理中移除；以下为当年记录的画面要点，供追溯：
 
 - 0–10 s：TextEdit 实时预览，画面内可见已输入文本 `— typed by Harness CU from the recorded demo` / `— live demo`，Carrier `dsh-app://app`，Probe 142 ms / 2 chunks，8 fps，Frames 54。
 - 10–26 s：切换到第二个 TextEdit 窗口，面板标题/画面/Generation 更新。

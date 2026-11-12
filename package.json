@@ -1,7 +1,7 @@
 {
   "name": "dsh-super-computer-use",
   "description": "Pure DeepSeek Harness plugin for macOS Computer Use: 20 cu_* tools including cu_route/cu_discover capability routing, floating capsule, target halo, and inline web preview. Zero external dependencies, prebuilt universal binary, no Xcode or launchd required.",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.mjs",
