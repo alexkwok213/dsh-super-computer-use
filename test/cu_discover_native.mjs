@@ -29,7 +29,7 @@ const AX = {
   ],
 };
 
-function harness() {
+function harness(axOverride = AX) {
   const tools = new Map();
   const calls = [];
   const ctx = {
@@ -49,7 +49,7 @@ function harness() {
   manager.exec = async (argv) => {
     calls.push(argv.slice());
     if (argv[0] === 'windows') return WINDOWS;
-    if (argv[0] === 'ax') return AX;
+    if (argv[0] === 'snapshot' || argv[0] === 'ax') return axOverride;
     if (argv[0] === 'ocr') {
       return {
         ok: true,
@@ -98,7 +98,8 @@ test('native discovery by pid/windowId enumerates AX controls and builds 5 spati
   assert.equal(r.zones.bottomBarOrTimeline.length, 2, 'Freeform bottom drawing tools land in bottomBarOrTimeline');
   assert.ok(r.onboarding && Array.isArray(r.onboarding.steps), 'onboarding plan is returned');
   assert.ok(h.calls.some((c) => c[0] === 'windows'));
-  assert.ok(h.calls.some((c) => c[0] === 'ax'));
+  assert.ok(h.calls.some((c) => c[0] === 'snapshot'), 'discover reads the full AX snapshot');
+  assert.equal(h.calls.some((c) => c[0] === 'ax'), false, 'the shallow ax walk is no longer used');
 });
 
 test('native discovery with includeOcr enriches self-drawn canvas apps like 剪映', async () => {
@@ -120,4 +121,51 @@ test('an unknown native app is reported as unmatched, not silently guessed', asy
   assert.equal(r.playbook.id, 'web-canvas-generic');
   assert.match(r.hint, /no verified playbook/);
   assert.ok(r.onboarding && r.onboarding.knownPlaybook === null);
+});
+
+// 剪映 11.x 把 automation ID 写在 AXDescription；完整快照的 title 字段已经是
+// description 兜底后的 label。回归：discover 与 find 必须走完整快照，不能再
+// 退回只读 AXTitle/AXValue 的浅层 ax 遍历（否则会误判成自绘界面）。
+const JIANYING_AX = {
+  ok: true,
+  count: 6,
+  nodes: [
+    { role: 'AXWindow', title: '剪映专业版', x: 20, y: 33, w: 1203, h: 994 },
+    { role: 'AXStaticText', title: 'root_素材', x: 33, y: 70, w: 40, h: 42 },
+    { role: 'AXStaticText', title: 'root_文本', x: 131, y: 70, w: 40, h: 42 },
+    { role: 'AXStaticText', title: 'automationtextArea', value: '默认文本', x: 898, y: 170, w: 304, h: 64 },
+    { role: 'AXButton', title: 'MainWindowTitleBarExportBtn', x: 1159, y: 40, w: 54, h: 22 },
+    { role: 'AXStaticText', title: 'PlayerPlayBtn', x: 663, y: 546, w: 28, h: 28 },
+  ],
+};
+
+test('剪映式 AXDescription 控件进入完整快照的 discover 分区', async () => {
+  const h = harness(JIANYING_AX);
+  const r = await h.call('cu_discover', { pid: 63103, windowId: 10429, appName: '剪映专业版' });
+  assert.equal(r.ok, true);
+  assert.equal(r.playbook.id, 'jianying-pro');
+  assert.equal(r.counts.axNodes, 6);
+  const labels = r.controls.buttons.map((c) => c.title);
+  assert.ok(labels.includes('root_素材'), 'automation-ID tab is visible');
+  assert.ok(labels.includes('automationtextArea'), 'inspector text field is visible');
+  assert.ok(r.zones.topToolbar.length > 0, 'top toolbar zone is populated');
+  assert.equal(r.onboarding.uiArchitecture, 'native_accessibility_tree',
+    'a full AX tree must not be misclassified as a self-drawn canvas');
+  assert.ok(h.calls.some((c) => c[0] === 'snapshot'));
+  assert.equal(h.calls.some((c) => c[0] === 'ax'), false);
+});
+
+test('cu_find(ax) matches automation-ID controls from the full snapshot', async () => {
+  const h = harness(JIANYING_AX);
+  const r = await h.call('cu_find', { query: 'root_素材', pid: 63103, windowId: 10429, mode: 'ax' });
+  assert.equal(r.ok, true);
+  assert.equal(r.engine, 'ax');
+  assert.ok(r.matches.some((m) => m.title === 'root_素材'));
+  assert.ok(h.calls.some((c) => c[0] === 'snapshot'));
+});
+
+test('sparse controls but a full AX tree is not flagged as self-drawn', async () => {
+  const { buildOnboardingPlan } = await import('../lib/app-playbooks.mjs');
+  const plan = buildOnboardingPlan({ channel: 'native', controlsCount: 4, axNodesCount: 190 });
+  assert.equal(plan.uiArchitecture, 'native_accessibility_tree');
 });
