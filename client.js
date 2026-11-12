@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } = React;
 
     const NS = "dsh-super-computer-use";
-    const CLIENT_VERSION = "0.22.0";
+    const CLIENT_VERSION = "0.23.0";
     const STATE_PATH = "/api/scu/state";
     const CONTROL_PATH = "/api/scu/control";
     const PREVIEW_PATH = "/api/scu/preview";
@@ -165,7 +165,7 @@ window.__ModuleLoader__.load({
         "native.screenRecording": "Screen recording",
         "native.granted": "Granted",
         "native.notGranted": "Not granted",
-        "native.unknown": "Unknown",
+        "native.unknown": "Unconfirmed",
         "native.storage": "Storage",
         "native.storageHint": "Space used by Computer Use on this Mac (top-level files).",
         "native.save": "Save",
@@ -174,6 +174,9 @@ window.__ModuleLoader__.load({
         "native.close": "Close",
         "native.kb": "{kb} KB",
         "native.openSettings": "Open System Settings",
+        "native.permissionHint": "Manage Accessibility and Screen Recording in System Settings",
+        "native.saveTitle": "Save preferences",
+        "native.saveBody": "Changes take effect after you save.",
         "native.authorize": "Authorize Super Computer Use",
         "native.authorizeHint": "Manage Accessibility and Screen Recording in System Settings, then set preferences below.",
         "native.preferences": "Preferences",
@@ -192,7 +195,7 @@ window.__ModuleLoader__.load({
         "native.setupQueryFailed": "System permissions could not be checked. Open the plugin details to see the reason and retry.",
         "native.later": "Later",
         "native.openSetup": "Open setup",
-        "native.configured": "No pending changes",
+        "native.configured": "Saved",
       },
       zh: {
         "card.expand": "展开",
@@ -278,9 +281,9 @@ window.__ModuleLoader__.load({
         "native.permissions": "权限",
         "native.accessibility": "辅助功能",
         "native.screenRecording": "屏幕录制",
-        "native.granted": "已授权",
+        "native.granted": "已允许",
         "native.notGranted": "未授权",
-        "native.unknown": "未知",
+        "native.unknown": "未确认",
         "native.storage": "存储",
         "native.storageHint": "Computer Use 在这台 Mac 上占用的空间（仅顶层文件）。",
         "native.save": "保存",
@@ -289,6 +292,9 @@ window.__ModuleLoader__.load({
         "native.close": "关闭",
         "native.kb": "{kb} KB",
         "native.openSettings": "打开系统设置",
+        "native.permissionHint": "在系统设置中管理辅助功能和屏幕录制权限",
+        "native.saveTitle": "保存偏好",
+        "native.saveBody": "修改后需保存才会生效。",
         "native.authorize": "给 Super Computer Use 授权",
         "native.authorizeHint": "在系统设置中管理辅助功能和屏幕录制权限，并在下方设置偏好。",
         "native.preferences": "偏好",
@@ -307,7 +313,7 @@ window.__ModuleLoader__.load({
         "native.setupQueryFailed": "暂时无法检测系统权限。请打开插件详情页查看原因并重试。",
         "native.later": "稍后",
         "native.openSetup": "前往设置",
-        "native.configured": "没有待保存的修改",
+        "native.configured": "已保存",
       },
     };
 
@@ -1829,7 +1835,6 @@ window.__ModuleLoader__.load({
 .scu-native-btn { border: 1px solid var(--scu-line, rgba(127,127,127,.35)); background: transparent; color: inherit; border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
 .scu-native-btn:hover { background: rgba(127,127,127,.1); }
 .scu-native-btn:disabled { opacity: .5; cursor: default; }
-.scu-native-btn-primary { background: #2f7cf6; border-color: #2f7cf6; color: #fff; }
 .scu-native-textarea { width: 100%; min-height: 74px; box-sizing: border-box; resize: vertical; border-radius: 9px; border: 1px solid var(--scu-line, rgba(127,127,127,.35)); background: transparent; color: inherit; padding: 9px 11px; font: inherit; font-size: 12px; }
 .scu-native-badge { flex: 0 0 auto; font-size: 11px; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--scu-line, rgba(127,127,127,.35)); }
 .scu-native-badge[data-ok="true"] { color: #17803d; border-color: rgba(23,128,61,.45); background: rgba(23,128,61,.09); }
@@ -1869,7 +1874,6 @@ window.__ModuleLoader__.load({
   padding: 6px 12px; font-size: 12px; font-weight: 500; cursor: pointer; }
 .scu-native-btn:hover { background: var(--dsw-alias-bg-hover, rgba(127,127,127,.08)); }
 .scu-native-btn:disabled { opacity: .5; cursor: default; }
-.scu-native-btn-primary { background: var(--dsw-alias-brand-primary, #4b70e2); border-color: transparent; color: #fff; }
 .scu-native-btn[data-configured]:disabled { opacity: 1; color: var(--dsw-alias-label-primary, var(--scu-fg)); cursor: default; }
 .scu-native-badge { font-size: 12px; padding: 3px 9px; border-radius: var(--dsw-radius-sm, 6px);
   border: .5px solid var(--dsw-alias-border-l2, var(--scu-line)); color: var(--dsw-alias-label-secondary, var(--scu-fg2)); background: transparent; }
@@ -1890,6 +1894,28 @@ window.__ModuleLoader__.load({
 .scu-native-skeleton[data-w="wide"] { width: 168px; height: 28px; }
 .scu-native-skeleton[data-w="text"] { width: 60%; }
 .scu-native-hint { font-size: 13px; color: var(--dsw-alias-label-secondary, var(--scu-fg2)); }
+/* Exact built-in PermissionPanel geometry for the rewritten panel. */
+.scu-native-permission, .scu-native-card > .scu-native-notice {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  padding: 16px; min-height: 80px; box-sizing: border-box;
+}
+.scu-native-permission-main { flex: 1 1 auto; min-width: 140px; }
+.scu-native-permission-main strong { display: block; font-size: 13px; font-weight: 500; color: var(--dsw-alias-label-primary, var(--scu-fg)); }
+.scu-native-permission-main p { margin: 0; color: var(--dsw-alias-label-secondary, var(--scu-fg2)); font-size: 13px; line-height: 1.6; }
+.scu-native-panel strong { font-weight: 500; }
+.scu-native-panel > p { margin: 0; color: var(--dsw-alias-label-secondary, var(--scu-fg2)); line-height: 1.6; }
+.scu-native-app-badge { display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 2px 6px; border: .5px solid var(--dsw-alias-border-l1, var(--scu-line));
+  border-radius: var(--dsw-radius-sm, 6px); color: var(--dsw-alias-label-primary, var(--scu-fg)); vertical-align: middle; }
+.scu-native-app-badge > span { min-width: 0; overflow-wrap: anywhere; }
+.scu-native-gear { flex: 0 0 auto; opacity: .7; }
+.scu-native-value { font-size: 13px; color: var(--dsw-alias-label-primary, var(--scu-fg)); font-variant-numeric: tabular-nums; }
+.scu-native-btn[data-variant="outline"] { background: transparent; border-color: var(--dsw-alias-border-l2, var(--scu-line)); color: var(--dsw-alias-label-primary, var(--scu-fg)); }
+.scu-native-btn[data-variant="primary"] { background: var(--dsw-alias-brand-primary, #4b70e2); border-color: transparent; color: #fff; }
+.scu-native-btn[data-variant="primary"]:disabled { opacity: .5; }
+.scu-native-btn[data-configured]:disabled { opacity: 1; color: var(--dsw-alias-label-primary, var(--scu-fg)); background: transparent; cursor: default; }
+.scu-native-btn-sm { width: auto; padding: 5px 10px; }
+.scu-native-toolbar { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 4px; }
 .scu-modal-backdrop { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 24px;
   background: rgba(8,10,16,.42); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 .scu-modal { width: min(420px, 100%); box-sizing: border-box; padding: 24px; border-radius: var(--dsw-radius-lg, 16px);
@@ -1922,13 +1948,47 @@ window.__ModuleLoader__.load({
     const NOOP_SUBSCRIBE = () => () => {};
     const EMPTY_SNAPSHOT_GET = () => EMPTY_SNAPSHOT;
 
+    // Cordis resolves services under the current fiber's isolate key, so a
+    // plain ctx.get("locale") can miss a root-provided service (the same trap
+    // as the Host HMR probe). Try every scope, then fall back to the shell's
+    // own language so a Chinese DSH never renders English copy.
+    function resolveLocaleService(ctx) {
+      const attempts = [
+        () => ctx?.get?.("locale"),
+        () => ctx?.root?.get?.("locale"),
+        () => ctx?.reflect?.get?.("locale", false),
+        () => ctx?.locale,
+      ];
+      for (const attempt of attempts) {
+        try {
+          const value = attempt();
+          if (value && typeof value.getLocale === "function") return value;
+        } catch {
+          // A proxy read without inject throws; that is a probe result.
+        }
+      }
+      return null;
+    }
+
+    function shellLocaleId() {
+      const nav = typeof navigator !== "undefined" ? String(navigator.language || "") : "";
+      const doc = typeof document !== "undefined" ? String(document.documentElement?.lang || "") : "";
+      return [nav, doc].some((value) => value.toLowerCase().startsWith("zh")) ? "zh-CN" : "en";
+    }
+
     function useLocale(ctx) {
-      const locale = ctx.get("locale");
+      const locale = resolveLocaleService(ctx);
       const subscribe = useCallback(
         (fn) => (locale?.subscribe ? locale.subscribe(fn) : () => {}),
         [locale],
       );
-      const get = useCallback(() => (locale?.getLocale ? locale.getLocale().id : "en"), [locale]);
+      const get = useCallback(() => {
+        if (locale?.getLocale) {
+          const id = locale.getLocale().id;
+          if (id) return id;
+        }
+        return shellLocaleId();
+      }, [locale]);
       const id = useSyncExternalStore(subscribe, get, get);
       return { id, t: (key, params) => tFor(id, key, params) };
     }
@@ -2772,262 +2832,6 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function PermissionRow({ t, label, value, available, target }) {
-      const known = available === true;
-      return h(
-        "div",
-        { className: "scu-native-row" },
-        h("div", { className: "scu-native-row-main" }, h("b", null, label)),
-        h(
-          "span",
-          { className: "scu-native-badge", "data-ok": known ? String(Boolean(value)) : "null" },
-          known
-            ? value === true
-              ? t("native.granted")
-              : t("native.notGranted")
-            : t("native.unknown"),
-        ),
-        h(
-          "button",
-          {
-            className: "scu-native-btn",
-            type: "button",
-            onClick: () => openPermissionSettings(target),
-          },
-          t("native.openSettings"),
-        ),
-      );
-    }
-
-    /** The real settings.section page. Host passes { close }. */
-    function SettingsSection(props) {
-      const t = useNativeT();
-      const snap = useNativeSnapshot();
-      const [draft, setDraft] = useState(null);
-      const [saving, setSaving] = useState(false);
-      const [message, setMessage] = useState("");
-      const current = snap.data?.settings ?? null;
-      const effective = draft ?? current;
-      const patch = (key, value) => setDraft({ ...(effective ?? {}), [key]: value });
-      const deniedText = (effective?.deniedApps ?? []).join("\n");
-
-      const save = async () => {
-        if (!draft || !effective) return;
-        setSaving(true);
-        setMessage("");
-        try {
-          await postJson(SETTINGS_PATH, {
-            action: "set",
-            patch: {
-              enabled: effective.enabled !== false,
-              controlMode: effective.controlMode === "full" ? "full" : "background",
-              deniedApps: Array.isArray(effective.deniedApps) ? effective.deniedApps : [],
-              unhideOnFinish: effective.unhideOnFinish !== false,
-            },
-          });
-          setDraft(null);
-          setMessage(t("native.saved"));
-          await snap.reload();
-        } catch (error) {
-          setMessage(String(error?.message ?? error));
-        } finally {
-          setSaving(false);
-        }
-      };
-
-      return h(
-        "div",
-        { className: "scu-native" },
-        h(
-          "div",
-          { className: "scu-native-wrap" },
-          h(
-            "div",
-            { className: "scu-native-head" },
-            h(
-              "div",
-              null,
-              h("h2", null, t("native.nav")),
-              h("p", null, t("native.subtitle")),
-            ),
-            h(
-              "div",
-              { className: "scu-native-actions" },
-              h(
-                "button",
-                { className: "scu-native-btn", type: "button", onClick: snap.reload },
-                t("native.refresh"),
-              ),
-              h(
-                "button",
-                {
-                  className: "scu-native-btn scu-native-btn-primary",
-                  type: "button",
-                  disabled: !draft || saving,
-                  onClick: save,
-                },
-                saving ? t("native.saving") : t("native.save"),
-              ),
-              typeof props?.close === "function"
-                ? h(
-                    "button",
-                    { className: "scu-native-btn", type: "button", onClick: props.close },
-                    t("native.close"),
-                  )
-                : null,
-            ),
-          ),
-          snap.error
-            ? h("div", { className: "scu-native-error" }, t("native.error", { error: snap.error }))
-            : null,
-          !effective && snap.loading
-            ? h("div", { className: "scu-native-note" }, t("native.loading"))
-            : null,
-          message ? h("div", { className: "scu-native-note" }, message) : null,
-          effective
-            ? h(
-                "div",
-                { className: "scu-native-card" },
-                h(
-                  "div",
-                  { className: "scu-native-row" },
-                  h(
-                    "div",
-                    { className: "scu-native-row-main" },
-                    h("b", null, t("native.section.enable")),
-                    h("small", null, t("native.section.enableHint")),
-                  ),
-                  h("button", {
-                    className: "scu-native-switch",
-                    type: "button",
-                    "aria-pressed": String(effective.enabled !== false),
-                    "aria-label": t("native.section.enable"),
-                    onClick: () => patch("enabled", effective.enabled === false),
-                  }),
-                ),
-                h(
-                  "div",
-                  { className: "scu-native-row" },
-                  h(
-                    "div",
-                    { className: "scu-native-row-main" },
-                    h("b", null, t("native.section.mode")),
-                    h("small", null, t("native.section.modeHint")),
-                  ),
-                  h(
-                    "div",
-                    { className: "scu-native-seg" },
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        "aria-pressed": String(effective.controlMode !== "full"),
-                        onClick: () => patch("controlMode", "background"),
-                      },
-                      t("native.mode.background"),
-                    ),
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        "aria-pressed": String(effective.controlMode === "full"),
-                        onClick: () => patch("controlMode", "full"),
-                      },
-                      t("native.mode.full"),
-                    ),
-                  ),
-                ),
-                h(
-                  "div",
-                  { className: "scu-native-row" },
-                  h(
-                    "div",
-                    { className: "scu-native-row-main" },
-                    h("b", null, t("native.section.denied")),
-                    h("small", null, t("native.section.deniedHint")),
-                    h("textarea", {
-                      className: "scu-native-textarea",
-                      value: deniedText,
-                      "aria-label": t("native.section.denied"),
-                      onChange: (event) =>
-                        patch(
-                          "deniedApps",
-                          String(event?.target?.value ?? "")
-                            .split("\n")
-                            .map((line) => line.trim())
-                            .filter(Boolean),
-                        ),
-                    }),
-                    deniedText ? null : h("small", null, t("native.section.deniedEmpty")),
-                  ),
-                ),
-                h(
-                  "div",
-                  { className: "scu-native-row" },
-                  h(
-                    "div",
-                    { className: "scu-native-row-main" },
-                    h("b", null, t("native.section.unhide")),
-                    h("small", null, t("native.section.unhideHint")),
-                  ),
-                  h("button", {
-                    className: "scu-native-switch",
-                    type: "button",
-                    "aria-pressed": String(effective.unhideOnFinish !== false),
-                    "aria-label": t("native.section.unhide"),
-                    onClick: () => patch("unhideOnFinish", effective.unhideOnFinish === false),
-                  }),
-                ),
-              )
-            : null,
-          snap.data
-            ? h(
-                "div",
-                { className: "scu-native-card" },
-                h("h3", null, t("native.permissions")),
-                h(PermissionRow, {
-                  t,
-                  label: t("native.accessibility"),
-                  value: snap.data.permissions?.accessibility,
-                  available: snap.data.permissions?.available,
-                  target: "accessibility",
-                }),
-                h(PermissionRow, {
-                  t,
-                  label: t("native.screenRecording"),
-                  value: snap.data.permissions?.screenRecording,
-                  available: snap.data.permissions?.available,
-                  target: "screenRecording",
-                }),
-              )
-            : null,
-          snap.data
-            ? h(
-                "div",
-                { className: "scu-native-card" },
-                h("h3", null, t("native.storage")),
-                h(
-                  "div",
-                  { className: "scu-native-row" },
-                  h(
-                    "div",
-                    { className: "scu-native-row-main" },
-                    h(
-                      "b",
-                      null,
-                      snap.data.storageBytes == null
-                        ? t("native.unknown")
-                        : t("native.kb", { kb: Math.round(snap.data.storageBytes / 1024) }),
-                    ),
-                    h("small", null, t("native.storageHint")),
-                  ),
-                ),
-              )
-            : null,
-        ),
-      );
-    }
-
     function nativeNavLabel() {
       return nativeIsChinese("") ? "电脑控制" : "Computer Use";
     }
@@ -3065,35 +2869,64 @@ window.__ModuleLoader__.load({
         h("span", null, item.text));
     }
 
+    // Mirrors the built-in PermissionPanel: skeleton rows keep the 168px
+    // action seat occupied while the single settings query is in flight.
     function SkeletonRow() {
-      return h("div", { className: "scu-native-row", "aria-hidden": "true" },
-        h("div", { className: "scu-native-row-main" },
+      return h("div", { className: "scu-native-permission", "aria-hidden": "true" },
+        h("div", { className: "scu-native-permission-main" },
           h("div", { className: "scu-native-skeleton", "data-w": "text" }),
           h("div", { className: "scu-native-skeleton", "data-w": "text", style: { marginTop: "8px", width: "45%" } })),
         h("div", { className: "scu-native-skeleton", "data-w": "wide" }));
     }
 
-    function HostPermissionRow({ t, label, description, value, available, target }) {
+    // Mirrors PermissionDescription: the responsible application is an l1
+    // bordered badge inside the sentence, not a separate status chip.
+    function PermissionDescription({ template, helper }) {
+      const parts = String(template).split("{application}");
+      return h("p", null,
+        parts[0],
+        h("span", { className: "scu-native-app-badge" }, helper),
+        parts.length > 1 ? parts[1] : null);
+    }
+
+    function GearIcon() {
+      return h("svg", { className: "scu-native-gear", width: 14, height: 14, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
+        h("circle", { cx: 8, cy: 8, r: 2.3, stroke: "currentColor", "stroke-width": 1.2 }),
+        h("path", { d: "M8 1.4v1.7M8 12.9v1.7M1.4 8h1.7M12.9 8h1.7M3.3 3.3l1.2 1.2M11.5 11.5l1.2 1.2M12.7 3.3l-1.2 1.2M4.5 11.5l-1.2 1.2", stroke: "currentColor", "stroke-width": 1.2, "stroke-linecap": "round" }));
+    }
+
+    // Mirrors PermissionAction: a denied permission gets a primary "request"
+    // button; a granted/unknown one gets an outline status button with a gear.
+    function HostPermissionRow({ t, label, description, value, available, target, helper }) {
       const known = available === true;
       const granted = known && value === true;
-      return h("div", { className: "scu-native-row", role: "group", "aria-label": label },
-        h("div", { className: "scu-native-row-main" },
-          h("b", null, label),
-          h("small", null, description)),
-        h("span", { className: "scu-native-badge", "data-ok": known ? String(granted) : "null" },
-          known ? (granted ? t("native.granted") : t("native.notGranted")) : t("native.unknown")),
+      const text = known ? (granted ? t("native.granted") : t("native.requestPermission")) : t("native.unknown");
+      return h("div", { className: "scu-native-permission", role: "group", "aria-label": label },
+        h("div", { className: "scu-native-permission-main" },
+          h("strong", null, label),
+          h(PermissionDescription, { template: description, helper })),
         h("button", {
           className: "scu-native-btn scu-native-permAction",
+          "data-variant": known && !granted ? "primary" : "outline",
           type: "button",
           title: t("native.openSettings"),
           onClick: () => openPermissionSettings(target, t),
-        }, known && !granted ? t("native.requestPermission") : t("native.openSettings")));
+        }, h("span", null, text), known && granted ? h(GearIcon) : null));
+    }
+
+    // One card row in the built-in layout: strong title, secondary description,
+    // and a right-hand control that keeps the 168px action seat.
+    function PanelRow({ title, description, children }) {
+      return h("div", { className: "scu-native-permission", role: "group", "aria-label": title },
+        h("div", { className: "scu-native-permission-main" },
+          h("strong", null, title),
+          h("p", null, description)),
+        children);
     }
 
     function SettingsPanel(props) {
       const t = useNativeT();
       const snap = useNativeSnapshot();
-      const compact = props?.view === "page" || props?.view === "summary";
       const [draft, setDraft] = useState(null);
       const [saving, setSaving] = useState(false);
       const current = snap.data?.settings ?? null;
@@ -3141,24 +2974,29 @@ window.__ModuleLoader__.load({
       const perms = snap.data?.permissions;
       const helper = t("native.helperName");
 
+      // The description keeps {application} as a literal so PermissionDescription
+      // can render the responsible app as an l1 badge, exactly like the built-in
+      // cua permission panel. Error notices live inside the card, as Builtin does.
       const permissionCard = h("div", { className: "scu-native-card" },
         loading ? h(SkeletonRow) : h(HostPermissionRow, {
           t, label: t("native.accessibility"),
-          description: t("native.permissionsUse", { application: helper }),
-          value: perms?.accessibility, available: perms?.available, target: "accessibility",
+          description: t("native.permissionsUse"),
+          value: perms?.accessibility, available: perms?.available, target: "accessibility", helper,
         }),
         loading ? h(SkeletonRow) : h(HostPermissionRow, {
           t, label: t("native.screenRecording"),
-          description: t("native.screenRecordingUse", { application: helper }),
-          value: perms?.screenRecording, available: perms?.available, target: "screenRecording",
-        }));
+          description: t("native.screenRecordingUse"),
+          value: perms?.screenRecording, available: perms?.available, target: "screenRecording", helper,
+        }),
+        snap.error
+          ? h("div", { className: "scu-native-notice", role: "alert" },
+              h("span", { className: "scu-native-error" }, snap.data ? t("native.staleNotice") : t("native.queryFailed", { error: snap.error })),
+              h("button", { className: "scu-native-btn scu-native-btn-sm", type: "button", onClick: snap.reload }, t("native.retry")))
+          : null);
 
       const preferencesCard = h("div", { className: "scu-native-card" },
         effective
-          ? h("div", { className: "scu-native-row" },
-              h("div", { className: "scu-native-row-main" },
-                h("b", null, t("native.section.enable")),
-                h("small", null, t("native.section.enableHint"))),
+          ? h(PanelRow, { title: t("native.section.enable"), description: t("native.section.enableHint") },
               h("button", {
                 className: "scu-native-switch",
                 type: "button",
@@ -3168,32 +3006,26 @@ window.__ModuleLoader__.load({
               }))
           : h(SkeletonRow),
         effective
-          ? h("div", { className: "scu-native-row" },
-              h("div", { className: "scu-native-row-main" },
-                h("b", null, t("native.section.mode")),
-                h("small", null, t("native.section.modeHint"))),
+          ? h(PanelRow, { title: t("native.section.mode"), description: t("native.section.modeHint") },
               h("div", { className: "scu-native-seg" },
                 h("button", { type: "button", "aria-pressed": String(effective.controlMode !== "full"), onClick: () => patch("controlMode", "background") }, t("native.mode.background")),
                 h("button", { type: "button", "aria-pressed": String(effective.controlMode === "full"), onClick: () => patch("controlMode", "full") }, t("native.mode.full"))))
           : h(SkeletonRow),
         effective
-          ? h("div", { className: "scu-native-row" },
-              h("div", { className: "scu-native-row-main" },
-                h("b", null, t("native.section.denied")),
-                h("small", null, t("native.section.deniedHint")),
+          ? h("div", { className: "scu-native-permission", role: "group", "aria-label": t("native.section.denied") },
+              h("div", { className: "scu-native-permission-main" },
+                h("strong", null, t("native.section.denied")),
+                h("p", null, t("native.section.deniedHint")),
                 h("textarea", {
                   className: "scu-native-textarea",
                   value: deniedText,
                   "aria-label": t("native.section.denied"),
                   onChange: (event) => patch("deniedApps", String(event?.target?.value ?? "").split("\n").map((line) => line.trim()).filter(Boolean)),
                 }),
-                deniedText ? null : h("small", null, t("native.section.deniedEmpty"))))
+                deniedText ? null : h("p", null, t("native.section.deniedEmpty"))))
           : h(SkeletonRow),
         effective
-          ? h("div", { className: "scu-native-row" },
-              h("div", { className: "scu-native-row-main" },
-                h("b", null, t("native.section.unhide")),
-                h("small", null, t("native.section.unhideHint"))),
+          ? h(PanelRow, { title: t("native.section.unhide"), description: t("native.section.unhideHint") },
               h("button", {
                 className: "scu-native-switch",
                 type: "button",
@@ -3201,45 +3033,46 @@ window.__ModuleLoader__.load({
                 "aria-label": t("native.section.unhide"),
                 onClick: () => patch("unhideOnFinish", effective.unhideOnFinish === false),
               }))
-          : h(SkeletonRow));
+          : h(SkeletonRow),
+        // Builtin ConfigurationSetting semantics: a completed state is an
+        // outline button, never a filled primary one. The old version applied
+        // both classes and produced unreadable black-on-black text.
+        h("div", { className: "scu-native-permission", role: "group", "aria-label": t("native.saveTitle") },
+          h("div", { className: "scu-native-permission-main" },
+            h("strong", null, t("native.saveTitle")),
+            h("p", null, t("native.saveBody"))),
+          h("button", {
+            className: "scu-native-btn scu-native-permAction",
+            "data-variant": dirty ? "primary" : "outline",
+            "data-configured": dirty ? undefined : "",
+            disabled: !dirty || saving || !effective,
+            type: "button",
+            onClick: save,
+          }, saving ? t("native.saving") : (dirty ? t("native.save") : t("native.configured")))));
 
       const storageCard = snap.data
         ? h("div", { className: "scu-native-card" },
-            h("div", { className: "scu-native-row" },
-              h("div", { className: "scu-native-row-main" },
-                h("b", null, snap.data.storageBytes == null ? t("native.unknown") : t("native.kb", { kb: Math.round(snap.data.storageBytes / 1024) })),
-                h("small", null, t("native.storageHint")))))
+            h(PanelRow, { title: t("native.storage"), description: t("native.storageHint") },
+              h("span", { className: "scu-native-value" },
+                snap.data.storageBytes == null ? t("native.unknown") : t("native.kb", { kb: Math.round(snap.data.storageBytes / 1024) }))))
         : null;
 
-      return h("div", { className: compact ? "scu-native scu-native-compact" : "scu-native", "aria-busy": String(loading || saving) },
+      // Builtin PermissionPanel shape: panels 32px apart, each with an h3,
+      // one bordered card and a single hint line. No duplicated subtitle and
+      // no oversized action bar competing with the card. The only toolbar
+      // affordance is the shell-owned Close, present on settings.section only.
+      return h("div", { className: "scu-native", "data-cua-settings": "", "aria-busy": String(loading || saving) },
         h("div", { className: "scu-native-wrap" },
-          h("div", { className: "scu-native-head" },
-            h("div", null,
-              h("h2", null, compact ? t("native.authorize") : t("native.nav")),
-              h("p", null, t("native.authorizeHint"))),
-            h("div", { className: "scu-native-actions" },
-              h("button", { className: "scu-native-btn", type: "button", onClick: snap.reload, disabled: saving }, t("native.refresh")),
-              h("button", {
-                className: "scu-native-btn scu-native-btn-primary",
-                type: "button",
-                "data-configured": dirty ? undefined : "",
-                disabled: !dirty || saving || !effective,
-                onClick: save,
-              }, saving ? t("native.saving") : (dirty ? t("native.save") : t("native.configured"))),
-              typeof props?.close === "function"
-                ? h("button", { className: "scu-native-btn", type: "button", onClick: props.close }, t("native.close"))
-                : null)),
-          snap.error
-            ? h("div", { className: "scu-native-card" },
-                h("div", { className: "scu-native-notice" },
-                  h("span", { className: "scu-native-error" }, snap.data ? t("native.staleNotice") : t("native.queryFailed", { error: snap.error })),
-                  h("button", { className: "scu-native-btn", type: "button", onClick: snap.reload }, t("native.retry"))))
+          typeof props?.close === "function"
+            ? h("div", { className: "scu-native-toolbar" },
+                h("button", { className: "scu-native-btn scu-native-btn-sm", type: "button", onClick: snap.reload, disabled: saving }, t("native.refresh")),
+                h("button", { className: "scu-native-btn scu-native-btn-sm", type: "button", onClick: props.close }, t("native.close")))
             : null,
           h("div", { className: "scu-native-panels" },
             h("section", { className: "scu-native-panel", "aria-label": t("native.authorize") },
               h("h3", null, t("native.authorize")),
               permissionCard,
-              h("p", null, t("native.authorizeHint"))),
+              h("p", { className: "scu-native-hint" }, t("native.permissionHint"))),
             h("section", { className: "scu-native-panel", "aria-label": t("native.preferences") },
               h("h3", null, t("native.preferences")),
               preferencesCard),
@@ -3267,7 +3100,7 @@ window.__ModuleLoader__.load({
           h("p", null, snap.error ? t("native.setupQueryFailed") : t("native.setupBody")),
           h("div", { className: "scu-modal-foot" },
             h("button", { className: "scu-native-btn", type: "button", onClick: props.onDismiss }, t("native.later")),
-            h("button", { className: "scu-native-btn scu-native-btn-primary", type: "button", onClick: props.onOpenDetails }, t("native.openSetup")))));
+            h("button", { className: "scu-native-btn", "data-variant": "primary", type: "button", onClick: props.onOpenDetails }, t("native.openSetup")))));
     }
 
     function SettingsIcon({ size }) {
@@ -3286,7 +3119,7 @@ window.__ModuleLoader__.load({
       // cheaper and more honest than a second copy of the lifecycle logic.
       __test: {
         SessionStore, PreviewController, CuCard, Overlay, ControlDeck,
-        SettingsSection, SettingsPanel, BundleActivation, SettingsIcon, ScuToast,
+        SettingsPanel, BundleActivation, SettingsIcon, ScuToast,
         storeFor, expansion, activeDeckSession,
       },
       apply(ctx) {
