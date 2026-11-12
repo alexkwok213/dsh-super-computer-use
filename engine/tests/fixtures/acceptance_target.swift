@@ -7,6 +7,7 @@ import AppKit
 final class CanvasView: NSView {
     var count = 0
     var status: NSTextField?
+    var onMouseDown: ((NSEvent) -> Void)?
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.windowBackgroundColor.setFill()
@@ -22,9 +23,18 @@ final class CanvasView: NSView {
         ])
     }
     override func mouseDown(with event: NSEvent) {
+        logPaintEvent("down")
+        onMouseDown?(event)
         count += 1
         status?.stringValue = "Canvas \(count)"
         needsDisplay = true
+    }
+    override func mouseUp(with event: NSEvent) { logPaintEvent("up") }
+    private func logPaintEvent(_ event: String) {
+        guard let path = ProcessInfo.processInfo.environment["CU_PAINT_EVENT_LOG"], let data = "\(event)\n".data(using: .utf8) else { return }
+        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
+        guard let handle = FileHandle(forWritingAtPath: path) else { return }
+        handle.seekToEndOfFile(); handle.write(data); try? handle.close()
     }
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .group }
@@ -38,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var canvas: CanvasView!
     var status: NSTextField!
     var count = 0
+    var paintObstacle: NSPanel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let label = ProcessInfo.processInfo.environment["CU_ACCEPT_LABEL"] ?? "Target"
@@ -71,8 +82,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.setAccessibilityLabel("Canvas Status")
         content.addSubview(status)
         canvas.status = status
+        if ProcessInfo.processInfo.environment["CU_PAINT_DYNAMIC_OBSTACLE"] == "1" {
+            canvas.onMouseDown = { [weak self] event in
+                guard let self, self.paintObstacle == nil else { return }
+                let point = self.window.convertPoint(toScreen: NSPoint(x: event.locationInWindow.x + 90, y: event.locationInWindow.y - 30))
+                let panel = NSPanel(contentRect: NSRect(x: point.x, y: point.y, width: 80, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+                panel.title = "CU Dynamic Obstacle"
+                panel.level = .floating
+                panel.orderFrontRegardless()
+                self.paintObstacle = panel
+            }
+        }
 
         window.orderFrontRegardless()
+        if ProcessInfo.processInfo.environment["CU_ACCEPT_FOREGROUND"] == "1" {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         NSApp.run()
     }
 
@@ -83,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
+app.setActivationPolicy(ProcessInfo.processInfo.environment["CU_ACCEPT_FOREGROUND"] == "1" ? .regular : .accessory)
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()

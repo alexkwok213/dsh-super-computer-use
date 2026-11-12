@@ -1,4 +1,5 @@
 .DS_Store
+node_modules
 node_modules/
 __pycache__/
 # Scratch space for one-off experiments (reference images, rendered plans,
@@ -38,3 +39,5 @@ docs/demo/zcode-claude-cu-demo.mov
 dsh-super-computer-use-*.tgz
 dist/
 
+
+.cu-compare/

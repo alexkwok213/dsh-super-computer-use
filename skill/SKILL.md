@@ -1,13 +1,13 @@
 ---
 name: dsh-super-computer-use
-description: macOS Computer Use / 桌面操控与自动化（剪映、Final Cut Pro、微信、Finder、备忘录、Freeform、Canva 等通用软件理解与操控），含四阶段认知协议（cu_route 意图路由 → cu_discover 五大分区建图 → 单步试探二级面板 → 批量高速执行）与过程真实性硬约束：必须真实操控目标应用，禁止离屏渲染后上传/粘贴。Control macOS desktop and web canvas applications using spatial UI zoning, deterministic strategy routing, real in-app strokes (never uploaded images), floating status capsule/halo, and inline target window previews.
+description: macOS Computer Use / 桌面操控与自动化（剪映、Final Cut Pro、微信、Finder、备忘录、Freeform、Canva 等通用软件理解与操控），含四阶段认知协议（cu_route 意图路由 → cu_discover 五大分区建图 → 单步试探 → 分段观察与执行）与过程真实性硬约束：必须真实操控目标应用，禁止离屏渲染后上传/粘贴。Control macOS desktop and web canvas applications using spatial UI zoning, deterministic strategy routing, real in-app strokes (never uploaded images), floating status capsule/halo, and inline target window previews.
 ---
 
 # Universal macOS Computer Use (`cu_*` Tools)
 
 Use `cu_*` tools to understand, explore, and operate macOS desktop applications and creative web canvases. For ordinary web browsing inside Chromium, use `browser-skill` (`bsk_*`) instead.
 
-## Universal 4-Stage Cognitive & Execution Loop (Think → Map → Probe 1 Step → Batch)
+## Universal 4-Stage Cognitive & Execution Loop (Think → Map → Probe → Observe and Act)
 
 Never jump straight into clicking coordinates or writing ad-hoc external scripts. Whether you are operating **Canva**, **Freeform**, **剪映专业版 (Jianying)**, **Final Cut Pro**, or an **unseen new application**, you must follow this 4-stage state machine in order:
 
@@ -43,25 +43,22 @@ Most complex software hides parameters inside **secondary popovers or context-se
 
 **Rule**: Always execute **ONE minimal closed-loop probe first**:
 1. Click/select the primary tool or clip → observe the delta (`observation.changed`, `cu_snapshot`, or `cu_discover`) to confirm secondary controls opened.
-2. Perform **1 test action** (e.g. paint the first non-white layer, or make 1 timeline cut / parameter edit) → verify with `cu_expect` or `cu_screenshot` that the colour, thickness, coordinates, or timeline change actually took effect.
+2. Perform **1 test action** (e.g. draw one short test stroke, or make 1 timeline cut / parameter edit) → verify with `cu_expect` or `cu_screenshot` that the colour, thickness, coordinates, or timeline change actually took effect.
 3. Never start a 16-step batch before this 1-step probe passes.
 
-### Stage 4: High-Speed Batch Execution (`cu_batch` / `cu_cdp_paint` / `cu_paint`)
-Once Stage 3 confirms the closed loop works, execute the remaining work at native speed without per-step LLM round-trips:
-- **Web Canvas Drawing (Canva / Figma / tldraw)**:
-  - Use `cu_cdp_paint` with `allLayers: true, autoBrush: true, strokeMode: "regions", seamPass: true, paceMs: 5`.
-  - `cu_cdp_paint` natively integrates DOM brush control (`setZoom(100)`, `armBrush`, `setBrushStyle`, per-layer `setBrushColor` + `closePopovers` + `armBrush`), connected-region serpentine merging (`planLayerToRegionStrokes()`, collapsing 3,321 runs into ~350 elements to stay well below Canva's 2,000-item cap), and `+sy/2` second-pass seam filling in **one tool call**. Do NOT write external Node/Python scripts to drive CDP manually.
-- **Native App Drawing (Freeform)**:
-  - Activate Freeform to frontmost (`osascript -e 'tell application "Freeform" to activate'`), then for each non-near-white layer: set colour → close Colors panel → re-arm `Drawing tool` → call `cu_paint({ pid, windowId, planPath, layerIndex, seamPass: true })`.
-- **General UI & Video Editing Sequences (Final Cut Pro / 剪映 / Finder)**:
-  - Use `cu_batch` with `{ action: "expect", ... }` checkpoints for deterministic multi-step sequences.
+### Stage 4: Observed Execution (`cu_batch` / `cu_paint`)
+For drawing, first study the reference: identify the subject, outline, major color areas, foreground/background order and details. Plan deliberate brush paths that follow those features. Do not default to reproducing a raster by scanning horizontal lines.
+
+- **Native drawing (Freeform)**: choose a brush and color, close the color panel and re-arm the drawing tool. Use `cu_paint` with a raw `strokesFile` and `expectedHex`; it sends one stroke, captures before/after and checks for pixels of the expected color near that stroke. Inspect the canvas and reference after each stroke and continue using `nextOffset` only when appropriate. If the check fails or capture is unavailable, stop and inspect the cause. Pixel changes do not establish semantic accuracy or final image quality.
+- **Web drawing**: prefer small strokes and observation between them. Do not use `allLayers:true` as a substitute for observing the drawing.
+- **Ordinary UI and video editing**: `cu_batch` may be used with explicit checkpoints.
 
 ## Application Architecture Quick-Reference
 
 | Application Type | Examples | Discovery & Control Channel | Key Pitfalls & Craft Rules |
 |---|---|---|---|
 | **Web Canvas** | Canva, Figma, tldraw | `cu_discover({urlMatch})` + `cu_cdp_paint({autoBrush:true, strokeMode:"regions", seamPass:true, allLayers:true})` | Browser render loops drop native `CGEvent` (`cu_paint`); use `cu_cdp_paint`. Keep zoom at 100% (`autoBrush:true` sets this automatically). Merge strokes with `strokeMode:"regions"` to beat the 2,000-element cap. Never `Page.reload`. |
-| **Native AX + Canvas** | Apple Freeform | `cu_discover({appName:"Freeform"})` + `cu_click(ref)` + `cu_paint({seamPass:true})` | Must be frontmost (`activate`) for `cu_paint` hid-events to land. Every colour change resets tool to `选择` — re-arm `Drawing tool` before each layer. Do NOT use region serpentine merging on Freeform (draws diagonal connectors); use `cu_paint(seamPass:true)` with Medium brush (~2× cell). |
+| **Native AX + Canvas** | Apple Freeform | `cu_discover({appName:"Freeform"})` + `cu_click(ref)` + `cu_paint({strokesFile, expectedHex})` | Must be frontmost (`activate`) for `cu_paint` hid-events to land. Every colour change resets tool to `选择` — re-arm `Drawing tool` before each layer. Do NOT use region serpentine merging on Freeform (draws diagonal connectors). Recheck every stroke and compare the artwork with the reference. |
 | **Qt/Metal with full AX** | 剪映专业版 (Jianying / CapCut) 11.x | `cu_discover({pid, windowId})` + `cu_snapshot` + `cu_click(ref)` / `cu_type(mode:"setvalue")`; timeline drags use `cu_drag({foreground:true, authorizeForeground:true})` | AX tree is complete (190+ nodes); automation IDs live in `AXDescription` (`root_素材`, `automationtextArea`). `cu_discover` / `cu_find` now read the full snapshot, so OCR is only a fallback for pure canvas text. Select a timeline clip before reading `rightInspector`. Only timeline drags need foreground authorization. |
 | **Native ProKit/Cocoa** | Final Cut Pro, Finder, Notes | `cu_discover({pid, windowId})` + `cu_snapshot` + `cu_click(ref)` / `cu_type(mode:"setvalue")` + `cu_batch` | Rich AX tree across Browser, Viewer, Inspector, and Magnetic Timeline. If `truncated:true`, pass `maxNodes:2000` to `cu_snapshot`. Use `cu_type(mode:"setvalue")` on `AXSlider` / `AXTextField` and verify with `cu_expect`. |
 

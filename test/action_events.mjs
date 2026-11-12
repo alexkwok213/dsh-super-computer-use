@@ -219,3 +219,15 @@ test('the parser flags malformed lines but still returns a later valid result', 
   assert.equal(final.ok, true);
   assert.equal(final.malformed, true);
 });
+
+test('native paint pointer events move the overlay immediately to dispatched points', () => {
+  const manager = new CuSessionManager();
+  const moves = [];
+  manager.showAgentCursor = (x, y, options) => moves.push({ x, y, ...options });
+  const result = manager.publishActionEvent(baseEvent({
+    sessionId: 'no-session', source: 'native', phase: 'pointer', kind: 'drag', target,
+    point: { x: 120, y: 230 }, clockDomain: 'native-monotonic',
+  }));
+  assert.equal(result.ok, true);
+  assert.deepEqual(moves, [{ x: 120, y: 230, glide: false }]);
+});

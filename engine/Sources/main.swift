@@ -161,7 +161,7 @@ struct WindowInfo {
     let layer: Int
 }
 
-func onScreenWindows(includeSmall: Bool = false) -> [WindowInfo] {
+func onScreenWindows(includeSmall: Bool = false, includeFloating: Bool = false) -> [WindowInfo] {
     let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
         return []
@@ -169,7 +169,7 @@ func onScreenWindows(includeSmall: Bool = false) -> [WindowInfo] {
     var result: [WindowInfo] = []
     for entry in raw {
         let layer = entry[kCGWindowLayer as String] as? Int ?? 0
-        guard layer == 0 else { continue }
+        guard layer == 0 || includeFloating else { continue }
         let alpha = entry[kCGWindowAlpha as String] as? Double ?? 1
         guard alpha > 0.01 else { continue }
         guard let number = entry[kCGWindowNumber as String] as? Int,
@@ -813,7 +813,6 @@ func strokePaths(fromPlan path: String, layerIndex: Int, inset: Double) -> ([[CG
           let sy = (root["sy"] as? NSNumber)?.doubleValue,
           let layers = root["layers"] as? [[String: Any]] else { return nil }
     let layer = layers.first { ($0["index"] as? NSNumber)?.intValue == layerIndex }
-        ?? (layerIndex >= 0 && layerIndex < layers.count ? layers[layerIndex] : nil)
     guard let layer, let runs = layer["runs"] as? [[Any]] else { return nil }
     let hex = layer["hex"] as? String ?? ""
     var strokes: [[CGPoint]] = []
@@ -1134,6 +1133,13 @@ func isOwnPassthroughHalo(_ window: WindowInfo, targetPid: pid_t, windows: [Wind
                          width: width, height: 28)
     return windows.contains { $0.pid == targetPid && matches(frame, $0.bounds.insetBy(dx: -12, dy: -12)) }
         && windows.contains { $0.pid == window.pid && $0.id != window.id && matches($0.bounds, control) }
+}
+
+func isOwnHelperProcess(_ pid: pid_t) -> Bool {
+    var buffer = [CChar](repeating: 0, count: 4096)
+    guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+    return URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path ==
+        URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
 }
 
 func windowAt(_ point: CGPoint, targetPid: pid_t? = nil) -> WindowInfo? {
@@ -3848,14 +3854,16 @@ func serviceUnregisterChild(_ pid: pid_t) {
     serviceStateLock.lock(); serviceRunningChildren.remove(pid); serviceStateLock.unlock()
 }
 
-func writeAllFD(_ fd: Int32, _ data: Data) {
-    data.withUnsafeBytes { raw in
+@discardableResult
+func writeAllFD(_ fd: Int32, _ data: Data) -> Bool {
+    return data.withUnsafeBytes { raw in
         var sent = 0
         while sent < raw.count {
             let n = write(fd, raw.baseAddress!.advanced(by: sent), raw.count - sent)
-            if n <= 0 { break }
+            if n <= 0 { return false }
             sent += n
         }
+        return true
     }
 }
 
@@ -3887,7 +3895,7 @@ func runEngineNDJSON(_ argv: [String], config: ServiceConfig?, noUserPause: Bool
 
     let head = "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
     writeAllFD(fd, Data(head.utf8))
-    func sendChunk(_ line: Data) {
+    func sendChunk(_ line: Data) -> Bool {
         // The NDJSON newline belongs to the payload, not to the HTTP chunk
         // framing (the chunk parser strips CRLF, so omitting it glued objects).
         var content = line
@@ -3895,10 +3903,11 @@ func runEngineNDJSON(_ argv: [String], config: ServiceConfig?, noUserPause: Bool
         var framed = Data("\(String(content.count, radix: 16))\r\n".utf8)
         framed.append(content)
         framed.append(Data("\r\n".utf8))
-        writeAllFD(fd, framed)
+        return writeAllFD(fd, framed)
     }
     var buffer = Data()
     var lastResult: [String: Any]?
+    var clientDisconnected = false
     let handle = out.fileHandleForReading
     while true {
         let chunk = handle.availableData
@@ -3908,7 +3917,10 @@ func runEngineNDJSON(_ argv: [String], config: ServiceConfig?, noUserPause: Bool
             let lineData = buffer.subdata(in: buffer.startIndex..<newline)
             buffer.removeSubrange(buffer.startIndex...newline)
             if lineData.isEmpty { continue }
-            sendChunk(lineData)
+            if !clientDisconnected && !sendChunk(lineData) {
+                clientDisconnected = true
+                if process.isRunning { process.terminate() }
+            }
             if let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] {
                 if obj["kind"] as? String == "result", let r = obj["result"] as? [String: Any] {
                     lastResult = r
@@ -3918,8 +3930,8 @@ func runEngineNDJSON(_ argv: [String], config: ServiceConfig?, noUserPause: Bool
             }
         }
     }
-    if !buffer.isEmpty { sendChunk(buffer) }
-    writeAllFD(fd, Data("0\r\n\r\n".utf8))
+    if !buffer.isEmpty && !clientDisconnected { _ = sendChunk(buffer) }
+    if !clientDisconnected { writeAllFD(fd, Data("0\r\n\r\n".utf8)) }
     process.waitUntilExit()
     return lastResult ?? ["ok": false, "error": "stream_incomplete"]
 }
@@ -4122,6 +4134,8 @@ func serve(_ config: ServiceConfig) -> Never {
             }
         }
         guard clientFD >= 0 else { continue }
+        var noSigPipe: Int32 = 1
+        setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         let peerPort = UInt16(bigEndian: client.sin_port)
         // A client that connects and sends nothing must not stall the queue.
         var timeout = timeval(tv_sec: 2, tv_usec: 0)
@@ -5831,7 +5845,41 @@ case "drawplan":
         "ms": Int(Date().timeIntervalSince(started) * 1000),
     ])
 
+case "paint-swatch":
+    guard let path = args["image"], let image = paintImagePixels(path), let hex = args["hex"],
+          let x = args.double("x"), let y = args.double("y"),
+          let color = UInt32(hex.trimmingCharacters(in: CharacterSet(charactersIn: "#")), radix: 16) else {
+        fail("paint_evidence_unavailable", "cannot read the color swatch")
+    }
+    let matched = inspectSwatch(pixels: image.pixels, width: image.width, height: image.height,
+                                center: CGPoint(x: x, y: y),
+                                expected: (UInt8((color >> 16) & 255), UInt8((color >> 8) & 255), UInt8(color & 255)))
+    emit(["ok": true, "matched": matched])
+
+case "paint-verify":
+    guard let beforePath = args["before"], let afterPath = args["after"],
+          let pathFile = args["file"], let hex = args["hex"],
+          let before = paintImagePixels(beforePath), let after = paintImagePixels(afterPath),
+          before.width == after.width, before.height == after.height,
+          let data = FileManager.default.contents(atPath: pathFile),
+          let object = try? JSONSerialization.jsonObject(with: data),
+          let parsed = parseStrokePayload(object),
+          let ox = args.double("origin-x"), let oy = args.double("origin-y"),
+          let scale = args.double("scale"), scale > 0 else {
+        fail("paint_evidence_unavailable", "cannot read matching images, strokes and capture geometry")
+    }
+    let color = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+    guard color.count == 6, let rgb = UInt32(color, radix: 16) else {
+        fail("invalid_color", "expected six digit RGB hex")
+    }
+    let paths = parsed.0.map { $0.map { CGPoint(x: ($0.x - ox) * scale, y: ($0.y - oy) * scale) } }
+    let inspection = inspectPaint(before: before.pixels, after: after.pixels,
+                                  width: before.width, height: before.height, paths: paths,
+                                  expected: (UInt8((rgb >> 16) & 255), UInt8((rgb >> 8) & 255), UInt8(rgb & 255)))
+    emit(["ok": true, "matched": inspection.matched, "failedStrokes": inspection.failedStrokes])
+
 case "strokes":
+    let cancellation = PaintCancellation()
     if pauseActive(), !args.flag("force") {
         emit(["ok": false, "error": "paused_by_user",
               "message": "the user stopped computer use from the controller; call resume first"])
@@ -5863,6 +5911,9 @@ case "strokes":
         fail("missing_strokes", "pass --file strokes.json or --plan plan.json --layer <n>")
     }
     let pace = max(2, min(args.int("pace") ?? defaultPace, 200))
+    guard paths.allSatisfy({ strokeWithinLimits($0, paceMs: pace) }) else {
+        fail("stroke_limit_exceeded", "each stroke is limited to 256 points, 1200 screen points and 15 seconds; split it into shorter strokes")
+    }
     let totalPoints = paths.reduce(0) { $0 + $1.count }
     guard !paths.isEmpty, totalPoints >= 2 else {
         fail("empty_strokes", "the stroke list is empty")
@@ -5888,11 +5939,51 @@ case "strokes":
     }
     let started = Date()
     let backgroundPid: pid_t? = args.flag("background") ? backgroundTarget(args, "strokes") : nil
+    if backgroundPid == nil { _ = guardedFocus(args, action: "strokes", point: paths[0][0]) }
+    if let pidValue = args.int("pid"), let windowValue = args.int("window") {
+        let windows = onScreenWindows(includeSmall: true, includeFloating: true)
+        guard let targetPosition = windows.firstIndex(where: { $0.id == CGWindowID(windowValue) && $0.pid == pid_t(pidValue) }) else {
+            fail("window_gone", "target window is no longer available")
+        }
+        let cursorOverlayPid = args.int("cursor-overlay-pid").map(pid_t.init).flatMap { isOwnHelperProcess($0) ? $0 : nil }
+        var obstacles = windows[..<targetPosition].filter { $0.pid != cursorOverlayPid && !isOwnPassthroughHalo($0, targetPid: pid_t(pidValue), windows: windows) }.map(\.bounds)
+        for item in axOnlyWindows(scanPids: [pid_t(pidValue)], known: windows) {
+            guard let box = item["bounds"] as? [String: Double], let x = box["x"], let y = box["y"], let width = box["width"], let height = box["height"] else { continue }
+            obstacles.append(CGRect(x: x, y: y, width: width, height: height))
+        }
+        let system = AXUIElementCreateSystemWide()
+        let targetBounds = windows[targetPosition].bounds
+        if let expectedText = args["expected-window"] {
+            guard let expected = parseRegion(expectedText),
+                  abs(expected.minX - targetBounds.minX) < 1, abs(expected.minY - targetBounds.minY) < 1,
+                  abs(expected.width - targetBounds.width) < 1, abs(expected.height - targetBounds.height) < 1 else {
+                fail("window_geometry_changed", "the drawing window moved or resized after capture")
+            }
+        }
+        guard paths.allSatisfy({ $0.allSatisfy({ targetBounds.contains($0) }) }) else {
+            fail("window_geometry_changed", "the drawing path is outside the current target window")
+        }
+        func hitsTarget(_ point: CGPoint) -> Bool {
+            var hit: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &hit) == .success, let hit else { return false }
+            var hitPid: pid_t = 0
+            guard AXUIElementGetPid(hit, &hitPid) == .success, hitPid == pid_t(pidValue) else { return false }
+            let window = stringAttribute(hit, kAXRoleAttribute) == "AXWindow" ? hit : axElement(attribute(hit, kAXWindowAttribute))
+            guard let window, let box = frame(of: window) else { return false }
+            return abs(box.minX - targetBounds.minX) < 4 && abs(box.minY - targetBounds.minY) < 4 &&
+                abs(box.width - targetBounds.width) < 4 && abs(box.height - targetBounds.height) < 4
+        }
+        for path in paths where obstacles.contains(where: { strokeIntersectsRect(path, $0) }) {
+            for point in interpolateStroke(path, spacing: 3) where obstacles.contains(where: { $0.insetBy(dx: -2, dy: -2).contains(point) }) {
+                if !hitsTarget(point) { fail("stroke_obstructed", "the stroke crosses another window or floating panel; move or close it before drawing") }
+            }
+        }
+    }
     var dispatchedPoints = 0
     var dispatchedStrokes = 0
     let progressEvery = max(1, paths.count / 20)
     for (index, path) in paths.enumerated() {
-        if index % 32 == 0 && pauseActive() {
+        if cancellation.isCancelled || (index % 32 == 0 && pauseActive()) {
             fail("paused_by_user", "stopped after \(dispatchedStrokes) of \(paths.count) strokes")
         }
         if index % progressEvery == 0 {
@@ -5908,16 +5999,27 @@ case "strokes":
             } else {
                 event?.post(tap: .cghidEventTap)
             }
+            if event != nil && (type == .mouseMoved || type == .leftMouseDragged) {
+                emitActionEventLine("pointer", kind: "drag", target: target, point: point)
+            }
             usleep(useconds_t(pace) * 1000)
             dispatchedPoints += 1
         }
-        let first = path[0]
+        let points = interpolateStroke(path, spacing: 6)
+        let first = points[0]
         post(.mouseMoved, first)
+        if cancellation.isCancelled || pauseActive() { fail("paint_interrupted", "drawing stopped before mouse down") }
         post(.leftMouseDown, first)
-        for point in path.dropFirst() {
+        var lastDispatched = first
+        for point in points.dropFirst() {
+            if cancellation.isCancelled || pauseActive() || (backgroundPid == nil && args.int("pid").map({ frontmostPID() != pid_t($0) }) == true) {
+                post(.leftMouseUp, lastDispatched)
+                fail("paint_interrupted", "drawing stopped during the stroke; mouse button released")
+            }
             post(.leftMouseDragged, point)
+            lastDispatched = point
         }
-        let last = path[path.count - 1]
+        let last = points[points.count - 1]
         post(.leftMouseUp, last)
         dispatchedStrokes += 1
     }

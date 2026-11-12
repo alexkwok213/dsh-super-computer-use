@@ -128,3 +128,12 @@ test('playbookSummary keeps flows/pitfalls back-compat and adds prohibited', () 
   assert.equal(s.match, undefined);
   assert.ok(s.prohibited.length >= 3);
 });
+
+test('Freeform drawing guidance requires observing reference and each verified stroke', () => {
+  const route = routeFor({ intent: '用画笔在 Freeform 上画出这幅图', appName: 'Freeform' });
+  const guidance = JSON.stringify(route);
+  assert.match(guidance, /参考图/);
+  assert.match(guidance, /每笔/);
+  assert.match(guidance, /颜色/);
+  assert.doesNotMatch(guidance, /cu_paint\(seamPass:true\)/);
+});
