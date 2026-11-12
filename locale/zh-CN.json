@@ -1,6 +1,7 @@
 {
   "meta": {
-    "title": "DSH Super Computer Use",
-    "description": "DeepSeek Harness 的 macOS 桌面操控一体化插件：Cordis 插件 + 原生 Swift 引擎。AX 优先的后台操作、毛玻璃悬浮胶囊、目标窗口渐变光晕、虚拟光标与动作标签，以及对话内嵌实时预览。"
+    "title": "Super Computer Use",
+    "description": "DeepSeek Harness 的 macOS 桌面操控插件：20 个 cu_* 工具、确定性意图路由、五大分区建图、目标应用内真实落笔、逐目标光环与实时预览，以及显式后置条件验证。",
+    "detail": "docs/DETAIL.zh.md"
   }
 }

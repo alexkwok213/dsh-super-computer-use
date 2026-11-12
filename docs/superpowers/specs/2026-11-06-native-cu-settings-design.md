@@ -3,6 +3,18 @@
 日期：2026-11-06。状态：**已批准实施（用户「按你判断的做」）**。范围：M0 首版；M1 明确留待后续。
 
 > **后续变更（2026-11-09）**：用户确认「电脑控制」选项已能在「设置」里看到，插件栏不必再展示该一级入口。M0 的 `sidebar.panellist` + `main` 两个插槽注册及对应组件（SidebarIcon / NativePanel）已移除，`settings.section` 保留为唯一入口；`/api/scu/settings` 路由与工具闸门不变。以下正文记录 M0 首版当时的设计决策，仅作历史参考。
+>
+> **后续变更（2026-11-12）· M1 复核结论**：已实测本机 profile 同时启用 `@deepseek-ai/dsh-cua-bundle`（v0.2.2-rc.2），`cua.getCapabilities` 返回 22 个方法且系统权限已就绪，即 M1 中「核实官方 bundle 是否安装/占用唯一 `computerUse` 名额」的前提已经成立。**结论仍是不注册 provider、不接 `ctx.cuaAccess`**：该 Remote 是 provider-owned，依赖它会把本仓库的发版节奏绑死在 DSH 版本上，且与自有的 `cu_status` 权限位冲突。改为只借鉴官方的界面与交互模式，见下节。
+
+## 0. 后续变更（2026-11-12）· 界面落地 P0 + P1
+
+对照官方 `@deepseek-ai/dsh-cua` 的 `PermissionPanel` / `controller` / `mount` 与宿主插槽契约，本轮完成：
+
+- **P0 详情页载体**：`locale/*.json` 增加 `meta.detail`，新增 `docs/DETAIL.md` / `DETAIL.zh.md` 与 `docs/preview.svg` / `preview.zh.svg`，`icon.svg` 替换 `assets/icon.png` 作为包图标；`package.json` 的 `files` 精确列出这些文件（`docs/` 目录 351MB，不能整目录打包）；README 中过时的「17 个工具」统一修正为 20 个。
+- **P1 宿主设计系统**：`client.js` 的 `scu-native-*` 样式改用 `--dsw-alias-*` tokens（l3 边框、radius、32px 区块间距、min-height 80px 行、168px 等宽按钮、骨架占位）。
+- **P1 入口**：注册 `plugins.bundle.config`（key = 包名）把设置放到插件详情页，与官方「给 Computer Use 授权」同一位置；`plugins.bundle.activation` 提供启用后引导；`settings.section.icon` 补导航图标。已核实宿主 `config-ledger.ts` 按所有注册 key 生成 bundles 集合，第三方 bundle 可用。
+- **P1 状态与交互**：骨架占位、查询失败保留上次观测并标为未确认 + 分区重试、焦点与 `connection/reset` 刷新、全局 Toast、已完成态保存按钮、8 语言字典（en/zh 完整，ja/es/fr/de/ru/pt 覆盖设置区文案并从英文补全键集）。
+- **未做**：`README.zh.md` 与 `README.i18n.yaml`（现有 `README.md` 本身即中文；i18n.yaml 是官方 monorepo `verify-translation-pairing` 的 CI 配对记录，本仓库无该脚本，写假哈希反而误导）；按应用授权闭环、责任应用图标、签名公证 `.app` helper 仍属 P2。
 
 ## 1. 意图与为什么
 

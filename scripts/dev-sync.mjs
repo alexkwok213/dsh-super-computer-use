@@ -270,16 +270,26 @@ function verifyRuntime(runtime) {
   if (!command.includes("dsh-desktop-host") && !command.includes("app.asar/dsh")) {
     throw blocked("the reported pid is not a DSH Host", { hostPid, command: command.slice(0, 200) });
   }
-  if (runtime.hmr?.available !== true) {
-    throw blocked("this DSH build does not expose the Host HMR APIs needed for a live reload", {
-      hmr: runtime.hmr ?? null,
-      hint: "No supported automatic reload is available. Restart DSH to load changes and say so; do not invent a success path.",
-    });
-  }
+  // The HMR requirement is enforced in run(), only when a generation actually
+  // needs replacing. A host without the HMR APIs can still be verified after a
+  // normal DSH restart has already loaded the current checkout.
   if (runtime.phase !== "ready") {
     throw blocked("the running plugin has not finished applying", { phase: runtime.phase ?? null });
   }
   return hostPid;
+}
+
+/**
+ * Whether a live reload is required but the host cannot perform one.
+ *
+ * HMR exists to replace a running generation, not to verify one a normal DSH
+ * restart already loaded. When plan.anyChange is false, run() only checks the
+ * four identity hashes and never writes a reload request, so a missing HMR API
+ * is not a blocker. Every real change still hits the original exit-3 gate.
+ * This must never be used to skip a reload that the plan says is needed.
+ */
+export function reloadRequiresHmr(runtime, plan) {
+  return Boolean(plan?.anyChange) && runtime?.hmr?.available !== true;
 }
 
 function sourceSnapshot() {
@@ -724,6 +734,13 @@ async function run(options) {
       `build ${plan.needsBuild ? plan.buildReason : "skipped"}`,
     ].join(", "),
   );
+
+  if (reloadRequiresHmr(runtime, plan)) {
+    throw blocked("this DSH build does not expose the Host HMR APIs needed for a live reload", {
+      hmr: runtime.hmr ?? null,
+      hint: "No supported automatic reload is available. Restart DSH to load changes and say so; do not invent a success path.",
+    });
+  }
 
   if (options.checkOnly) {
     return {

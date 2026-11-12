@@ -1,7 +1,7 @@
 {
   "name": "dsh-super-computer-use",
   "description": "Pure DeepSeek Harness plugin for macOS Computer Use: 20 cu_* tools including cu_route/cu_discover capability routing, floating capsule, target halo, and inline web preview. Zero external dependencies, prebuilt universal binary, no Xcode or launchd required.",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.mjs",
@@ -25,6 +25,11 @@
     "cordis.patch.yml",
     "assets",
     "README.md",
+    "icon.svg",
+    "docs/DETAIL.md",
+    "docs/DETAIL.zh.md",
+    "docs/preview.svg",
+    "docs/preview.zh.svg",
     "LICENSE",
     "engine"
   ],
@@ -47,7 +52,8 @@
       "immediately": true,
       "inject": [
         "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-layout"
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
       ]
     }
   },
@@ -79,5 +85,5 @@
     "dev:sync:check": "node scripts/dev-sync.mjs --check-only",
     "release": "node scripts/release.mjs"
   },
-  "icon": "assets/icon.png"
+  "icon": "./icon.svg"
 }

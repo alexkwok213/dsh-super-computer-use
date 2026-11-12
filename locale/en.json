@@ -1,6 +1,7 @@
 {
   "meta": {
-    "title": "DSH Super Computer Use",
-    "description": "Computer Use for DeepSeek Harness: one package with the Cordis plugin and the native macOS engine. AX-first background actions, floating glass capsule, target window halo, virtual agent cursor with action labels, and inline window preview."
+    "title": "Super Computer Use",
+    "description": "Computer Use for DeepSeek Harness: 20 cu_* tools, deterministic intent routing, five-zone UI discovery, real in-app strokes, per-target halo and live preview, with explicit post-condition verification.",
+    "detail": "docs/DETAIL.md"
   }
 }

@@ -21,7 +21,7 @@ import {
   sha256File,
   writeJsonAtomic,
 } from '../lib/dev-sync.mjs';
-import { planSync } from '../scripts/dev-sync.mjs';
+import { planSync, reloadRequiresHmr } from '../scripts/dev-sync.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'scu-dev-sync-'));
@@ -198,3 +198,18 @@ test('native replacement depends on the actual helper, not an earlier Host disk 
   assert.equal(nativeReplacementRequired({ok:true,buildId:'old'}, 'current'), true);
   assert.equal(nativeReplacementRequired(null, 'current'), true);
 });
+
+test('HMR is required only when a generation actually needs replacing', () => {
+  const withoutHmr = { hmr: { available: false }, phase: 'ready' };
+  const withHmr = { hmr: { available: true }, phase: 'ready' };
+  // A real change must still hit the original exit-3 gate on a host that
+  // cannot reload; we are not relaxing the reload requirement.
+  assert.equal(reloadRequiresHmr(withoutHmr, { anyChange: true }), true);
+  assert.equal(reloadRequiresHmr(null, { anyChange: true }), true);
+  // After a normal DSH restart the running generations already match disk,
+  // so the command only verifies identities and never requests a reload.
+  assert.equal(reloadRequiresHmr(withoutHmr, { anyChange: false }), false);
+  assert.equal(reloadRequiresHmr(withoutHmr, null), false);
+  assert.equal(reloadRequiresHmr(withHmr, { anyChange: true }), false);
+});
+

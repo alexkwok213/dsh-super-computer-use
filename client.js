@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } = React;
 
     const NS = "dsh-super-computer-use";
-    const CLIENT_VERSION = "0.19.0";
+    const CLIENT_VERSION = "0.20.0";
     const STATE_PATH = "/api/scu/state";
     const CONTROL_PATH = "/api/scu/control";
     const PREVIEW_PATH = "/api/scu/preview";
@@ -174,6 +174,25 @@ window.__ModuleLoader__.load({
         "native.close": "Close",
         "native.kb": "{kb} KB",
         "native.openSettings": "Open System Settings",
+        "native.authorize": "Authorize Super Computer Use",
+        "native.authorizeHint": "Manage Accessibility and Screen Recording in System Settings, then set preferences below.",
+        "native.preferences": "Preferences",
+        "native.helperName": "Super Computer Use",
+        "native.permissionsUse": "In System Settings, allow {application} to read the interface, click and type.",
+        "native.screenRecordingUse": "In System Settings, allow {application} to capture application windows.",
+        "native.requestPermission": "Request permission",
+        "native.retry": "Retry",
+        "native.staleNotice": "Could not refresh. Showing the last observation.",
+        "native.queryFailed": "Could not read settings: {error}",
+        "native.savedToast": "Preferences saved",
+        "native.settingsOpenedToast": "Opened System Settings",
+        "native.loadingHint": "Reading current settings…",
+        "native.setupTitle": "Set up Super Computer Use first",
+        "native.setupBody": "The plugin is enabled. Grant Accessibility and Screen Recording before using it, then review the preferences on the plugin page.",
+        "native.setupQueryFailed": "System permissions could not be checked. Open the plugin details to see the reason and retry.",
+        "native.later": "Later",
+        "native.openSetup": "Open setup",
+        "native.configured": "No pending changes",
       },
       zh: {
         "card.expand": "展开",
@@ -270,15 +289,170 @@ window.__ModuleLoader__.load({
         "native.close": "关闭",
         "native.kb": "{kb} KB",
         "native.openSettings": "打开系统设置",
+        "native.authorize": "给 Super Computer Use 授权",
+        "native.authorizeHint": "在系统设置中管理辅助功能和屏幕录制权限，并在下方设置偏好。",
+        "native.preferences": "偏好",
+        "native.helperName": "Super Computer Use",
+        "native.permissionsUse": "在系统设置中允许 {application} 读取界面、点击和输入。",
+        "native.screenRecordingUse": "在系统设置中允许 {application} 截取应用窗口。",
+        "native.requestPermission": "申请权限",
+        "native.retry": "重试",
+        "native.staleNotice": "刷新失败，当前显示上一次的观测结果。",
+        "native.queryFailed": "无法读取设置：{error}",
+        "native.savedToast": "偏好已保存",
+        "native.settingsOpenedToast": "已打开系统设置",
+        "native.loadingHint": "正在读取当前设置…",
+        "native.setupTitle": "使用 Super Computer Use 前需要设置",
+        "native.setupBody": "插件已开启。使用前请授予辅助功能和屏幕录制权限，并在插件详情页检查偏好设置。",
+        "native.setupQueryFailed": "暂时无法检测系统权限。请打开插件详情页查看原因并重试。",
+        "native.later": "稍后",
+        "native.openSetup": "前往设置",
+        "native.configured": "没有待保存的修改",
       },
     };
 
+    // Additional locales cover the settings surface. Every dictionary is
+    // completed from English so the host locale registry sees identical key
+    // sets; chat-card copy falls back to English until it is translated.
+    const EXTRA_LOCALES = {
+      ja: {
+        "native.authorize": "Super Computer Use に権限を付与",
+        "native.authorizeHint": "システム設定でアクセシビリティと画面収録を管理し、下で設定を変更します。",
+        "native.preferences": "設定",
+        "native.helperName": "Super Computer Use",
+        "native.permissionsUse": "システム設定で {application} による画面の読み取り、クリック、入力を許可します。",
+        "native.screenRecordingUse": "システム設定で {application} によるウィンドウのキャプチャを許可します。",
+        "native.requestPermission": "権限を申請",
+        "native.retry": "再試行",
+        "native.staleNotice": "更新できませんでした。前回の観測結果を表示しています。",
+        "native.queryFailed": "設定を読み込めませんでした：{error}",
+        "native.savedToast": "設定を保存しました",
+        "native.settingsOpenedToast": "システム設定を開きました",
+        "native.loadingHint": "現在の設定を読み込み中…",
+        "native.setupTitle": "使用前に設定が必要です",
+        "native.setupBody": "プラグインは有効です。使用前にアクセシビリティと画面収録を許可し、プラグインの詳細ページで設定を確認してください。",
+        "native.setupQueryFailed": "システム権限を確認できませんでした。詳細ページで理由を確認して再試行してください。",
+        "native.later": "後で",
+        "native.openSetup": "設定を開く",
+        "native.configured": "未保存の変更はありません",
+      },
+      es: {
+        "native.authorize": "Autorizar Super Computer Use",
+        "native.authorizeHint": "Gestiona Accesibilidad y Grabación de pantalla en Ajustes del sistema y configura las preferencias abajo.",
+        "native.preferences": "Preferencias",
+        "native.helperName": "Super Computer Use",
+        "native.permissionsUse": "En Ajustes del sistema, permite que {application} lea la interfaz, haga clic y escriba.",
+        "native.screenRecordingUse": "En Ajustes del sistema, permite que {application} capture ventanas de la aplicación.",
+        "native.requestPermission": "Solicitar permiso",
+        "native.retry": "Reintentar",
+        "native.staleNotice": "No se pudo actualizar. Se muestra la última observación.",
+        "native.queryFailed": "No se pudo leer la configuración: {error}",
+        "native.savedToast": "Preferencias guardadas",
+        "native.settingsOpenedToast": "Ajustes del sistema abiertos",
+        "native.loadingHint": "Leyendo la configuración actual…",
+        "native.setupTitle": "Configura Super Computer Use antes de usarlo",
+        "native.setupBody": "El complemento está activado. Concede Accesibilidad y Grabación de pantalla antes de usarlo y revisa las preferencias en la página del complemento.",
+        "native.setupQueryFailed": "No se pudieron comprobar los permisos del sistema. Abre los detalles del complemento para ver el motivo y reintentar.",
+        "native.later": "Más tarde",
+        "native.openSetup": "Abrir configuración",
+        "native.configured": "Sin cambios pendientes",
+      },
+      fr: {
+        "native.authorize": "Autoriser Super Computer Use",
+        "native.authorizeHint": "Gérez Accessibilité et Enregistrement de l'écran dans les Réglages Système, puis définissez les préférences ci-dessous.",
+        "native.preferences": "Préférences",
+        "native.helperName": "Super Computer Use",
+        "native.permissionsUse": "Dans les Réglages Système, autorisez {application} à lire l'interface, cliquer et saisir du texte.",
+        "native.screenRecordingUse": "Dans les Réglages Système, autorisez {application} à capturer les fenêtres.",
+        "native.requestPermission": "Demander l'autorisation",
+        "native.retry": "Réessayer",
+        "native.staleNotice": "Actualisation impossible. Dernière observation affichée.",
+        "native.queryFailed": "Impossible de lire les paramètres : {error}",
+        "native.savedToast": "Préférences enregistrées",
+        "native.settingsOpenedToast": "Réglages Système ouverts",
+        "native.loadingHint": "Lecture des paramètres…",
+        "native.setupTitle": "Configurer Super Computer Use avant utilisation",
+        "native.setupBody": "Le module est activé. Accordez Accessibilité et Enregistrement de l'écran avant de l'utiliser, puis vérifiez les préférences sur la page du module.",
+        "native.setupQueryFailed": "Impossible de vérifier les autorisations système. Ouvrez les détails du module pour voir la raison et réessayer.",
+        "native.later": "Plus tard",
+        "native.openSetup": "Ouvrir la configuration",
+        "native.configured": "Aucune modification en attente",
+      },
+      de: {
+        "native.authorize": "Super Computer Use autorisieren",
+        "native.authorizeHint": "Verwalte Bedienungshilfen und Bildschirmaufnahme in den Systemeinstellungen und lege unten die Einstellungen fest.",
+        "native.preferences": "Einstellungen",
+        "native.helperName": "Super Computer Use",
+        "native.permissionsUse": "Erlaube {application} in den Systemeinstellungen, die Oberfläche zu lesen, zu klicken und einzugeben.",
+        "native.screenRecordingUse": "Erlaube {application} in den Systemeinstellungen, Anwendungsfenster aufzunehmen.",
+        "native.requestPermission": "Berechtigung anfordern",
+        "native.retry": "Erneut versuchen",
+        "native.staleNotice": "Aktualisierung fehlgeschlagen. Letzte Beobachtung wird angezeigt.",
+        "native.queryFailed": "Einstellungen konnten nicht gelesen werden: {error}",
+        "native.savedToast": "Einstellungen gespeichert",
+        "native.settingsOpenedToast": "Systemeinstellungen geöffnet",
+        "native.loadingHint": "Aktuelle Einstellungen werden gelesen…",
+        "native.setupTitle": "Super Computer Use zuerst einrichten",
+        "native.setupBody": "Das Plugin ist aktiviert. Erteile Bedienungshilfen und Bildschirmaufnahme vor der Nutzung und prüfe die Einstellungen auf der Plugin-Seite.",
+        "native.setupQueryFailed": "Systemberechtigungen konnten nicht geprüft werden. Öffne die Plugin-Details für die Ursache und versuche es erneut.",
+        "native.later": "Später",
+        "native.openSetup": "Einrichtung öffnen",
+        "native.configured": "Keine ausstehenden Änderungen",
+      },
+      ru: {
+        "native.authorize": "Разрешить Super Computer Use",
+        "native.authorizeHint": "Управляйте «Универсальным доступом» и «Записью экрана» в Системных настройках, а затем задайте параметры ниже.",
+        "native.preferences": "Параметры",
+        "native.helperName": "Super Computer Use",
+        "native.permissionsUse": "В Системных настройках разрешите {application} читать интерфейс, нажимать и вводить текст.",
+        "native.screenRecordingUse": "В Системных настройках разрешите {application} захватывать окна приложений.",
+        "native.requestPermission": "Запросить разрешение",
+        "native.retry": "Повторить",
+        "native.staleNotice": "Не удалось обновить. Показано последнее наблюдение.",
+        "native.queryFailed": "Не удалось прочитать настройки: {error}",
+        "native.savedToast": "Настройки сохранены",
+        "native.settingsOpenedToast": "Системные настройки открыты",
+        "native.loadingHint": "Чтение текущих настроек…",
+        "native.setupTitle": "Сначала настройте Super Computer Use",
+        "native.setupBody": "Плагин включён. Перед использованием предоставьте «Универсальный доступ» и «Запись экрана», затем проверьте параметры на странице плагина.",
+        "native.setupQueryFailed": "Не удалось проверить системные разрешения. Откройте подробности плагина, чтобы узнать причину, и повторите попытку.",
+        "native.later": "Позже",
+        "native.openSetup": "Открыть настройку",
+        "native.configured": "Нет несохранённых изменений",
+      },
+      pt: {
+        "native.authorize": "Autorizar o Super Computer Use",
+        "native.authorizeHint": "Gerencie Acessibilidade e Gravação de Tela nos Ajustes do Sistema e defina as preferências abaixo.",
+        "native.preferences": "Preferências",
+        "native.helperName": "Super Computer Use",
+        "native.permissionsUse": "Nos Ajustes do Sistema, permita que {application} leia a interface, clique e digite.",
+        "native.screenRecordingUse": "Nos Ajustes do Sistema, permita que {application} capture janelas.",
+        "native.requestPermission": "Solicitar permissão",
+        "native.retry": "Tentar novamente",
+        "native.staleNotice": "Não foi possível atualizar. Exibindo a última observação.",
+        "native.queryFailed": "Não foi possível ler as configurações: {error}",
+        "native.savedToast": "Preferências salvas",
+        "native.settingsOpenedToast": "Ajustes do Sistema abertos",
+        "native.loadingHint": "Lendo as configurações atuais…",
+        "native.setupTitle": "Configure o Super Computer Use antes de usar",
+        "native.setupBody": "O plugin está ativado. Conceda Acessibilidade e Gravação de Tela antes de usar e revise as preferências na página do plugin.",
+        "native.setupQueryFailed": "Não foi possível verificar as permissões do sistema. Abra os detalhes do plugin para ver o motivo e tente novamente.",
+        "native.later": "Depois",
+        "native.openSetup": "Abrir configuração",
+        "native.configured": "Sem alterações pendentes",
+      },
+    };
+
+    const LOCALES = (() => {
+      const out = { en: STRINGS.en, zh: { ...STRINGS.en, ...STRINGS.zh } };
+      for (const [id, extra] of Object.entries(EXTRA_LOCALES)) out[id] = { ...STRINGS.en, ...extra };
+      return out;
+    })();
+
     function tFor(localeId, key, params) {
-      // Harness ships `zh`, but a shell may report a regional/script tag such
-      // as `zh-CN` or `zh-Hans`; every Chinese variant reads the same copy.
-      const isChinese = typeof localeId === "string" && localeId.toLowerCase().startsWith("zh");
-      const dict = isChinese ? STRINGS.zh : STRINGS.en;
-      let text = dict[key] ?? STRINGS.en[key] ?? key;
+      const id = typeof localeId === "string" ? localeId.toLowerCase() : "";
+      const dict = LOCALES[id] || (id.startsWith("zh") ? LOCALES.zh : LOCALES.en);
+      let text = dict[key] ?? LOCALES.en[key] ?? key;
       if (params) text = text.replace(/\{(\w+)\}/g, (m, name) => (name in params ? String(params[name]) : m));
       return text;
     }
@@ -1666,6 +1840,71 @@ window.__ModuleLoader__.load({
   .scu-card, .scu-backdrop, .scu-panel, .scu-dot { animation: none !important; transition: none !important; }
   .scu-native-switch::after { transition: none !important; }
 }
+/* Host-native settings surface. These rules override the hand-rolled
+   scu-native-* styles above with the same design tokens the built-in
+   Computer Use permission panel uses, so the page reads as part of DSH. */
+.scu-native-wrap { max-width: 760px; margin: 0 auto; padding: 8px 0 32px; }
+.scu-native-panels { display: grid; gap: 32px; }
+.scu-native-panel { display: grid; gap: 12px; min-width: 0; }
+.scu-native-panel > h3 { margin: 0; font-size: 14px; font-weight: 500; }
+.scu-native-panel > p { margin: 0; color: var(--dsw-alias-label-secondary, var(--scu-fg2)); font-size: 13px; line-height: 1.6; }
+.scu-native-card { min-width: 0; padding: 0; margin: 0; background: transparent;
+  border: .5px solid var(--dsw-alias-border-l3, var(--scu-line)); border-radius: var(--dsw-radius-md, 12px); }
+.scu-native-card > * + * { border-top: .5px solid var(--dsw-alias-border-l3, var(--scu-line)); }
+.scu-native-card > h3 { margin: 0; padding: 16px 16px 0; font-size: 13px; font-weight: 500;
+  color: var(--dsw-alias-label-secondary, var(--scu-fg2)); text-transform: none; letter-spacing: 0; }
+.scu-native-row { min-height: 80px; box-sizing: border-box; align-items: center; gap: 12px; padding: 16px;
+  border-bottom: 0; flex-wrap: wrap; }
+.scu-native-row-main { flex: 1 1 auto; min-width: 140px; }
+.scu-native-row-main b { font-size: 13px; font-weight: 500; }
+.scu-native-row-main small { font-size: 13px; color: var(--dsw-alias-label-secondary, var(--scu-fg2)); }
+.scu-native-head { align-items: center; gap: 12px; margin-bottom: 0; flex-wrap: wrap; }
+.scu-native-head h2 { font-size: 14px; font-weight: 500; }
+.scu-native-head p { font-size: 13px; color: var(--dsw-alias-label-secondary, var(--scu-fg2)); }
+.scu-native-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.scu-native-actions .scu-native-btn { width: auto; }
+.scu-native-btn, .scu-native-permAction { width: 168px; flex: 0 0 auto; box-sizing: border-box; appearance: none;
+  border: .5px solid var(--dsw-alias-border-l2, var(--scu-line)); border-radius: var(--dsw-radius-sm, 8px);
+  background: transparent; color: var(--dsw-alias-label-primary, var(--scu-fg));
+  padding: 6px 12px; font-size: 12px; font-weight: 500; cursor: pointer; }
+.scu-native-btn:hover { background: var(--dsw-alias-bg-hover, rgba(127,127,127,.08)); }
+.scu-native-btn:disabled { opacity: .5; cursor: default; }
+.scu-native-btn-primary { background: var(--dsw-alias-brand-primary, #4b70e2); border-color: transparent; color: #fff; }
+.scu-native-btn[data-configured]:disabled { opacity: 1; color: var(--dsw-alias-label-primary, var(--scu-fg)); cursor: default; }
+.scu-native-badge { font-size: 12px; padding: 3px 9px; border-radius: var(--dsw-radius-sm, 6px);
+  border: .5px solid var(--dsw-alias-border-l2, var(--scu-line)); color: var(--dsw-alias-label-secondary, var(--scu-fg2)); background: transparent; }
+.scu-native-badge[data-ok="true"] { color: var(--dsw-alias-state-success-primary, #17803d); border-color: var(--dsw-alias-state-success-primary, #17803d); }
+.scu-native-badge[data-ok="false"] { color: var(--dsw-alias-state-error-primary, #b3472e); border-color: var(--dsw-alias-state-error-primary, #b3472e); }
+.scu-native-switch { width: 40px; height: 23px; border-radius: 99px;
+  border: .5px solid var(--dsw-alias-border-l2, var(--scu-line)); background: var(--dsw-alias-bg-skeleton, rgba(127,127,127,.18)); }
+.scu-native-switch[aria-pressed="true"] { background: var(--dsw-alias-brand-primary, #4b70e2); border-color: transparent; }
+.scu-native-seg { border: .5px solid var(--dsw-alias-border-l2, var(--scu-line)); border-radius: var(--dsw-radius-sm, 8px); }
+.scu-native-seg button[aria-pressed="true"] { background: var(--dsw-alias-brand-primary, #4b70e2); color: #fff; }
+.scu-native-textarea { border: .5px solid var(--dsw-alias-border-l2, var(--scu-line));
+  border-radius: var(--dsw-radius-sm, 8px); background: transparent; color: inherit; }
+.scu-native-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 16px; font-size: 13px; }
+.scu-native-notice .scu-native-btn { width: auto; }
+.scu-native-error { color: var(--dsw-alias-state-error-primary, #b3472e); margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.scu-native-skeleton { display: inline-block; border-radius: var(--dsw-radius-xs, 4px);
+  background: var(--dsw-alias-bg-skeleton, rgba(127,127,127,.16)); height: 13px; }
+.scu-native-skeleton[data-w="wide"] { width: 168px; height: 28px; }
+.scu-native-skeleton[data-w="text"] { width: 60%; }
+.scu-native-hint { font-size: 13px; color: var(--dsw-alias-label-secondary, var(--scu-fg2)); }
+.scu-modal-backdrop { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 24px;
+  background: rgba(8,10,16,.42); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.scu-modal { width: min(420px, 100%); box-sizing: border-box; padding: 24px; border-radius: var(--dsw-radius-lg, 16px);
+  border: .5px solid var(--dsw-alias-border-l3, var(--scu-line)); background: var(--dsw-alias-bg-overlay, #fff);
+  color: var(--dsw-alias-label-primary, var(--scu-fg)); box-shadow: 0 24px 64px rgba(0,0,0,.28); }
+.scu-modal strong { display: block; font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+.scu-modal p { font-size: 13px; line-height: 1.6; color: var(--dsw-alias-label-secondary, var(--scu-fg2)); margin: 0 0 20px; }
+.scu-modal-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.scu-modal-foot .scu-native-btn { width: auto; }
+.scu-toast { position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%); z-index: 130;
+  display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px;
+  background: var(--dsw-alias-bg-overlay, #fff); color: var(--dsw-alias-label-primary, var(--scu-fg));
+  border: .5px solid var(--dsw-alias-border-l3, var(--scu-line)); box-shadow: 0 8px 28px rgba(0,0,0,.22); font-size: 12.5px; }
+.scu-toast-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-state-success-primary, #30b070); }
+.scu-toast-dot[data-tone="error"] { background: var(--dsw-alias-state-error-primary, #d0453a); }
 `;
 
     // ---------------------------------------------------------------- components
@@ -2497,9 +2736,8 @@ window.__ModuleLoader__.load({
 
     function useNativeT() {
       const ctx = NativeUI.ctx ?? { get: () => null };
-      const { id } = useLocale(ctx); // keeps the subscription for live switches
-      const zh = nativeIsChinese(id);
-      return (key, params) => tFor(zh ? "zh" : "en", key, params);
+      const { t } = useLocale(ctx); // keeps the subscription for live switches
+      return t;
     }
 
     function useNativeSnapshot() {
@@ -2524,9 +2762,10 @@ window.__ModuleLoader__.load({
       return { ...state, reload: load };
     }
 
-    async function openPermissionSettings(target) {
+    async function openPermissionSettings(target, t) {
       try {
         await postJson(CONTROL_PATH, { command: "open_settings", target });
+        if (t) showToast(t("native.settingsOpenedToast"));
       } catch {
         // A shortcut to System Settings is not a state machine. The next poll
         // reports the real permission bits; never show a fake "Granted".
@@ -2793,6 +3032,251 @@ window.__ModuleLoader__.load({
       return nativeIsChinese("") ? "电脑控制" : "Computer Use";
     }
 
+    // ------------------------------------------------- host-native settings UI
+    // Mirrors the built-in Computer Use permission panel without requiring host
+    // UI primitives: host design tokens, bordered panels 32px apart, skeleton
+    // rows while the single authenticated query is in flight, a per-notice
+    // retry, a configured-state save button and a global toast.
+
+    const toastState = { current: null, listeners: new Set() };
+    const toastSubscribe = (fn) => {
+      toastState.listeners.add(fn);
+      return () => toastState.listeners.delete(fn);
+    };
+    const toastGet = () => toastState.current;
+    const toastGetServer = () => null;
+    function showToast(text, tone) {
+      toastState.current = { id: Date.now(), text, tone: tone || "success" };
+      for (const fn of Array.from(toastState.listeners)) fn();
+    }
+    function ScuToast() {
+      const item = useSyncExternalStore(toastSubscribe, toastGet, toastGetServer);
+      useEffect(() => {
+        if (!item) return undefined;
+        const timer = setTimeout(() => {
+          toastState.current = null;
+          for (const fn of Array.from(toastState.listeners)) fn();
+        }, 3200);
+        return () => clearTimeout(timer);
+      }, [item]);
+      if (!item) return null;
+      return h("div", { className: "scu-toast", role: "status", key: item.id },
+        h("span", { className: "scu-toast-dot", "data-tone": item.tone }),
+        h("span", null, item.text));
+    }
+
+    function SkeletonRow() {
+      return h("div", { className: "scu-native-row", "aria-hidden": "true" },
+        h("div", { className: "scu-native-row-main" },
+          h("div", { className: "scu-native-skeleton", "data-w": "text" }),
+          h("div", { className: "scu-native-skeleton", "data-w": "text", style: { marginTop: "8px", width: "45%" } })),
+        h("div", { className: "scu-native-skeleton", "data-w": "wide" }));
+    }
+
+    function HostPermissionRow({ t, label, description, value, available, target }) {
+      const known = available === true;
+      const granted = known && value === true;
+      return h("div", { className: "scu-native-row", role: "group", "aria-label": label },
+        h("div", { className: "scu-native-row-main" },
+          h("b", null, label),
+          h("small", null, description)),
+        h("span", { className: "scu-native-badge", "data-ok": known ? String(granted) : "null" },
+          known ? (granted ? t("native.granted") : t("native.notGranted")) : t("native.unknown")),
+        h("button", {
+          className: "scu-native-btn scu-native-permAction",
+          type: "button",
+          title: t("native.openSettings"),
+          onClick: () => openPermissionSettings(target, t),
+        }, known && !granted ? t("native.requestPermission") : t("native.openSettings")));
+    }
+
+    function SettingsPanel(props) {
+      const t = useNativeT();
+      const snap = useNativeSnapshot();
+      const compact = props?.view === "page" || props?.view === "summary";
+      const [draft, setDraft] = useState(null);
+      const [saving, setSaving] = useState(false);
+      const current = snap.data?.settings ?? null;
+      const effective = draft ?? current;
+      const patch = (key, value) => setDraft({ ...(effective ?? {}), [key]: value });
+      const deniedText = (effective?.deniedApps ?? []).join("\n");
+      const dirty = draft !== null;
+      const loading = !snap.data && snap.loading;
+
+      useEffect(() => {
+        const onFocus = () => snap.reload();
+        if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("focus", onFocus);
+        const off = NativeUI.ctx?.on?.("connection/reset", onFocus);
+        return () => {
+          if (typeof window !== "undefined" && window.removeEventListener) window.removeEventListener("focus", onFocus);
+          try { off?.(); } catch { /* teardown continues */ }
+        };
+      }, [snap.reload]);
+
+      const save = async () => {
+        if (!draft || !effective) return;
+        setSaving(true);
+        try {
+          await postJson(SETTINGS_PATH, {
+            action: "set",
+            patch: {
+              enabled: effective.enabled !== false,
+              controlMode: effective.controlMode === "full" ? "full" : "background",
+              deniedApps: Array.isArray(effective.deniedApps) ? effective.deniedApps : [],
+              unhideOnFinish: effective.unhideOnFinish !== false,
+            },
+          });
+          setDraft(null);
+          showToast(t("native.savedToast"));
+          await snap.reload();
+        } catch (error) {
+          showToast(String(error?.message ?? error), "error");
+        } finally {
+          setSaving(false);
+        }
+      };
+
+      if (props?.view === "summary") return h("span", null, t("native.subtitle"));
+
+      const perms = snap.data?.permissions;
+      const helper = t("native.helperName");
+
+      const permissionCard = h("div", { className: "scu-native-card" },
+        loading ? h(SkeletonRow) : h(HostPermissionRow, {
+          t, label: t("native.accessibility"),
+          description: t("native.permissionsUse", { application: helper }),
+          value: perms?.accessibility, available: perms?.available, target: "accessibility",
+        }),
+        loading ? h(SkeletonRow) : h(HostPermissionRow, {
+          t, label: t("native.screenRecording"),
+          description: t("native.screenRecordingUse", { application: helper }),
+          value: perms?.screenRecording, available: perms?.available, target: "screenRecording",
+        }));
+
+      const preferencesCard = h("div", { className: "scu-native-card" },
+        effective
+          ? h("div", { className: "scu-native-row" },
+              h("div", { className: "scu-native-row-main" },
+                h("b", null, t("native.section.enable")),
+                h("small", null, t("native.section.enableHint"))),
+              h("button", {
+                className: "scu-native-switch",
+                type: "button",
+                "aria-pressed": String(effective.enabled !== false),
+                "aria-label": t("native.section.enable"),
+                onClick: () => patch("enabled", effective.enabled === false),
+              }))
+          : h(SkeletonRow),
+        effective
+          ? h("div", { className: "scu-native-row" },
+              h("div", { className: "scu-native-row-main" },
+                h("b", null, t("native.section.mode")),
+                h("small", null, t("native.section.modeHint"))),
+              h("div", { className: "scu-native-seg" },
+                h("button", { type: "button", "aria-pressed": String(effective.controlMode !== "full"), onClick: () => patch("controlMode", "background") }, t("native.mode.background")),
+                h("button", { type: "button", "aria-pressed": String(effective.controlMode === "full"), onClick: () => patch("controlMode", "full") }, t("native.mode.full"))))
+          : h(SkeletonRow),
+        effective
+          ? h("div", { className: "scu-native-row" },
+              h("div", { className: "scu-native-row-main" },
+                h("b", null, t("native.section.denied")),
+                h("small", null, t("native.section.deniedHint")),
+                h("textarea", {
+                  className: "scu-native-textarea",
+                  value: deniedText,
+                  "aria-label": t("native.section.denied"),
+                  onChange: (event) => patch("deniedApps", String(event?.target?.value ?? "").split("\n").map((line) => line.trim()).filter(Boolean)),
+                }),
+                deniedText ? null : h("small", null, t("native.section.deniedEmpty"))))
+          : h(SkeletonRow),
+        effective
+          ? h("div", { className: "scu-native-row" },
+              h("div", { className: "scu-native-row-main" },
+                h("b", null, t("native.section.unhide")),
+                h("small", null, t("native.section.unhideHint"))),
+              h("button", {
+                className: "scu-native-switch",
+                type: "button",
+                "aria-pressed": String(effective.unhideOnFinish !== false),
+                "aria-label": t("native.section.unhide"),
+                onClick: () => patch("unhideOnFinish", effective.unhideOnFinish === false),
+              }))
+          : h(SkeletonRow));
+
+      const storageCard = snap.data
+        ? h("div", { className: "scu-native-card" },
+            h("div", { className: "scu-native-row" },
+              h("div", { className: "scu-native-row-main" },
+                h("b", null, snap.data.storageBytes == null ? t("native.unknown") : t("native.kb", { kb: Math.round(snap.data.storageBytes / 1024) })),
+                h("small", null, t("native.storageHint")))))
+        : null;
+
+      return h("div", { className: compact ? "scu-native scu-native-compact" : "scu-native", "aria-busy": String(loading || saving) },
+        h("div", { className: "scu-native-wrap" },
+          h("div", { className: "scu-native-head" },
+            h("div", null,
+              h("h2", null, compact ? t("native.authorize") : t("native.nav")),
+              h("p", null, t("native.authorizeHint"))),
+            h("div", { className: "scu-native-actions" },
+              h("button", { className: "scu-native-btn", type: "button", onClick: snap.reload, disabled: saving }, t("native.refresh")),
+              h("button", {
+                className: "scu-native-btn scu-native-btn-primary",
+                type: "button",
+                "data-configured": dirty ? undefined : "",
+                disabled: !dirty || saving || !effective,
+                onClick: save,
+              }, saving ? t("native.saving") : (dirty ? t("native.save") : t("native.configured"))),
+              typeof props?.close === "function"
+                ? h("button", { className: "scu-native-btn", type: "button", onClick: props.close }, t("native.close"))
+                : null)),
+          snap.error
+            ? h("div", { className: "scu-native-card" },
+                h("div", { className: "scu-native-notice" },
+                  h("span", { className: "scu-native-error" }, snap.data ? t("native.staleNotice") : t("native.queryFailed", { error: snap.error })),
+                  h("button", { className: "scu-native-btn", type: "button", onClick: snap.reload }, t("native.retry"))))
+            : null,
+          h("div", { className: "scu-native-panels" },
+            h("section", { className: "scu-native-panel", "aria-label": t("native.authorize") },
+              h("h3", null, t("native.authorize")),
+              permissionCard,
+              h("p", null, t("native.authorizeHint"))),
+            h("section", { className: "scu-native-panel", "aria-label": t("native.preferences") },
+              h("h3", null, t("native.preferences")),
+              preferencesCard),
+            storageCard
+              ? h("section", { className: "scu-native-panel", "aria-label": t("native.storage") },
+                  h("h3", null, t("native.storage")), storageCard)
+              : null)));
+    }
+
+    function BundleActivation(props) {
+      const t = useNativeT();
+      const snap = useNativeSnapshot();
+      const ready = snap.data?.permissions?.available === true
+        && snap.data.permissions.accessibility === true
+        && snap.data.permissions.screenRecording === true;
+      useEffect(() => {
+        if (ready && typeof props?.onDismiss === "function") props.onDismiss();
+      }, [ready, props?.onDismiss]);
+      if (!props || props.packageName !== "dsh-super-computer-use") return null;
+      if (ready) return null;
+      if (!snap.data && snap.loading) return null;
+      return h("div", { className: "scu-modal-backdrop" },
+        h("div", { className: "scu-modal", role: "dialog", "aria-modal": "true" },
+          h("strong", null, t("native.setupTitle")),
+          h("p", null, snap.error ? t("native.setupQueryFailed") : t("native.setupBody")),
+          h("div", { className: "scu-modal-foot" },
+            h("button", { className: "scu-native-btn", type: "button", onClick: props.onDismiss }, t("native.later")),
+            h("button", { className: "scu-native-btn scu-native-btn-primary", type: "button", onClick: props.onOpenDetails }, t("native.openSetup")))));
+    }
+
+    function SettingsIcon({ size }) {
+      const s = Number(size) || 16;
+      return h("svg", { width: s, height: s, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
+        h("rect", { x: 1.25, y: 2, width: 13.5, height: 10.5, rx: 2, stroke: "currentColor", "stroke-width": 1.2 }),
+        h("path", { d: "M5 5.5 L5 11.5 L7.1 9.6 L8.6 12.5 L9.8 11.9 L8.4 9.2 L11 9 Z", fill: "currentColor" }));
+    }
+
     // ---------------------------------------------------------------- plugin
 
     return {
@@ -2802,7 +3286,7 @@ window.__ModuleLoader__.load({
       // cheaper and more honest than a second copy of the lifecycle logic.
       __test: {
         SessionStore, PreviewController, CuCard, Overlay, ControlDeck,
-        SettingsSection,
+        SettingsSection, SettingsPanel, BundleActivation, SettingsIcon, ScuToast,
         storeFor, expansion, activeDeckSession,
       },
       apply(ctx) {
@@ -2815,7 +3299,7 @@ window.__ModuleLoader__.load({
         if (locale && typeof locale.register === "function") {
           try {
             ctx.effect(
-              () => locale.register(NS, { en: STRINGS.en, zh: STRINGS.zh }),
+              () => locale.register(NS, LOCALES),
               "scu: locale dictionaries",
             );
           } catch {
@@ -2858,14 +3342,19 @@ window.__ModuleLoader__.load({
             { name: "shell.overlay", id: "super-computer-use", order: 40 },
             Overlay,
           );
+          const disposeToast = ctx.slots.register(
+            { name: "shell.overlay", id: "super-computer-use-toast", order: 41 },
+            ScuToast,
+          );
           return () => {
             try { disposeDeck?.(); } catch { /* teardown continues */ }
             try { disposeOverlay?.(); } catch { /* teardown continues */ }
+            try { disposeToast?.(); } catch { /* teardown continues */ }
           };
         });
 
-        // Settings is the only first-class surface. The host owns the settings
-        // navigation, so no shell UI is replaced and the plugin bar stays clean.
+        // Settings entry plus its navigation icon. The host owns the settings
+        // navigation; the plugin bar stays clean.
         ctx.slots.inject("settings.section", () =>
           ctx.slots.register(
             {
@@ -2874,7 +3363,38 @@ window.__ModuleLoader__.load({
               order: 35,
               label: nativeNavLabel,
             },
-            SettingsSection,
+            SettingsPanel,
+          ),
+        );
+        ctx.slots.inject("settings.section.icon", () =>
+          ctx.slots.register(
+            { name: "settings.section.icon", id: "computer-use" },
+            SettingsIcon,
+          ),
+        );
+
+        // The bundle detail page is the same surface the built-in Computer Use
+        // permission panel uses. Both slots are keyed by the package name, so
+        // our configuration appears between the description and the component
+        // rows, and enabling the bundle offers first-run setup guidance.
+        ctx.slots.inject("plugins.bundle.config", () =>
+          ctx.slots.register(
+            {
+              name: "plugins.bundle.config",
+              key: "dsh-super-computer-use",
+              locale: NS,
+            },
+            SettingsPanel,
+          ),
+        );
+        ctx.slots.inject("plugins.bundle.activation", () =>
+          ctx.slots.register(
+            {
+              name: "plugins.bundle.activation",
+              key: "dsh-super-computer-use",
+              locale: NS,
+            },
+            BundleActivation,
           ),
         );
 
