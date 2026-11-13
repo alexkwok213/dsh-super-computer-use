@@ -2090,6 +2090,8 @@ final class WindowStreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private var latestPixelBuffer: CVPixelBuffer?
     private var latestTimestampNs: UInt64 = 0
     private var streamStopped = false
+    private var startFailedWindowId: CGWindowID = 0
+    private var startFailedUntil: Date = .distantPast
 
     func stop() {
         cond.lock()
@@ -2121,6 +2123,10 @@ final class WindowStreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
            boundsClose(activeBounds, liveBounds) {
             cond.unlock()
             return true
+        }
+        if startFailedWindowId == windowId, Date() < startFailedUntil {
+            cond.unlock()
+            return false
         }
         let old = stream
         stream = nil
@@ -2175,10 +2181,16 @@ final class WindowStreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.latestTimestampNs = 0
                 self.streamStopped = true
             }
+            self.startFailedWindowId = windowId
+            self.startFailedUntil = Date().addingTimeInterval(30.0)
             cond.unlock()
             Task { try? await nextStream.stopCapture() }
             return false
         }
+        cond.lock()
+        self.startFailedWindowId = 0
+        self.startFailedUntil = .distantPast
+        cond.unlock()
         return true
     }
 

@@ -359,3 +359,60 @@ test('aggregate verifyMode allows 64 strokes, forwards spacing/insets, reuses af
     assert.equal(h.calls.filter(x => x[0] === 'paint-canvas-hash').length, 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('stale scstream before frame triggers one fresh stream:false recapture before paint-swatch fails closed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'paint-stale-stream-test-'));
+  try {
+    const file = join(dir, 'strokes.json');
+    writeFileSync(file, JSON.stringify({ strokes: [[[20, 80], [60, 80]]] }));
+    const tools = new Map(), daemonCalls = [];
+    const ctx = {
+      tools: { register(def) { tools.set(def.name, def); return () => {}; } },
+      get: key => key === 'llm' ? { resolveModelInfo: async () => ({ inputModalities: ['image'] }) } : key === 'attachments' ? { saveImage: async () => ({ attachmentId: 'after', mediaType: 'image/png', bytes: 100, width: 20, height: 20 }) } : undefined,
+    };
+    const manager = new CuSessionManager();
+    manager.activeSession = { pid: 42, windowId: 7 };
+    manager.writeActivity = () => {};
+    manager.showActionLabel = () => {};
+    manager._preferDaemonForPaint = true;
+    let swatchCalls = 0;
+    let captureCalls = 0;
+    manager.captureShotToFile = async (opts) => {
+      daemonCalls.push(opts);
+      captureCalls += 1;
+      copyFileSync('assets/icon.png', opts.out);
+      return {
+        ok: true,
+        out: opts.out,
+        source: opts.stream === false ? 'capture' : 'scstream',
+        timestampNs: String(500 + captureCalls),
+        origin: { x: 0, y: 0 },
+        size: { width: 400, height: 400 },
+        scale: 1,
+      };
+    };
+    manager.exec = async argv => {
+      if (argv[0] === 'windows') return { ok: true, windows: [{ pid: 42, windowId: 7, app: 'Freeform', bounds: { x: 0, y: 0, width: 400, height: 400 } }] };
+      if (argv[0] === 'snapshot') return { ok: true, nodes: [{ title: 'Choose a color', x: 10, y: 10, w: 20, h: 20 }, { title: 'Drawing tool', value: 'Fill', x: 40, y: 10, w: 20, h: 20 }] };
+      if (argv[0] === 'paint-swatch') {
+        swatchCalls += 1;
+        return { ok: true, matched: swatchCalls >= 2 };
+      }
+      if (argv[0] === 'paint-canvas-hash') return { ok: true, hash: 'stable-roi' };
+      if (argv[0] === 'strokes') return { ok: true, finishedNs: '123456', strokes: 1 };
+      if (argv[0] === 'paint-verify') return { ok: true, matched: true, widthMatched: true, regionMatched: true, measuredWidth: 2, failedStrokes: [], afterHash: 'after-roi' };
+      return { ok: true };
+    };
+    registerCuTools({ ctx, manager, config: { autoSession: false } });
+    const res = await tools.get('cu_paint').execute({
+      pid: 42, windowId: 7, strokesFile: file, expectedHex: '#f7575d', expectedTool: 'Fill', fill: true,
+      verifyMode: 'aggregate', paintRegion: [[0, 0], [400, 0], [400, 400], [0, 400]], brushWidth: 2, authorizeForeground: true,
+    }, { signal: new AbortController().signal, agent: { options: { provider: 'p', model: 'm' } } });
+    assert.equal(res.ok, true);
+    assert.equal(swatchCalls, 2);
+    assert.equal(daemonCalls.length, 3);
+    assert.equal(daemonCalls[0].stream, true);
+    assert.equal(daemonCalls[1].stream, false);
+    assert.equal(daemonCalls[2].minTimestampNs, '123456');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
