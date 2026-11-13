@@ -252,6 +252,36 @@ test("an in-flight action defers the idle stop instead of being cut off", async 
   assert.equal(registry.snapshot("chat-a").state, "cleanup_unknown");
 });
 
+test("an in-flight action defers session timeout and refreshSessionTimer slides untimed active sessions", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const manager = realManager();
+  const registry = createCuUiRegistry({ manager });
+  registry.claim("chat-a");
+  manager._inflight = new Set([{ inFlight: true }]);
+  manager.armSessionTimer(30);
+  t.mock.timers.tick(30000);
+  await flush();
+  assert.equal(registry.snapshot("chat-a").state, "claimed", "in-flight action must defer session timeout");
+
+  manager.sessionHasTimedIndicators = false;
+  assert.equal(manager.refreshSessionTimer(), true, "untimed session refreshes timer on active desktop work");
+  manager._inflight.clear();
+  t.mock.timers.tick(20000);
+  await flush();
+  assert.equal(registry.snapshot("chat-a").state, "claimed", "refreshed untimed session stays alive before renewed deadline");
+  assert.equal(manager.refreshSessionTimer(), true);
+  t.mock.timers.tick(20000);
+  await flush();
+  assert.equal(registry.snapshot("chat-a").state, "claimed", "continuous activity slides past initial 30s cap");
+
+  // Timed indicator sessions do not slide automatically on refreshSessionTimer.
+  manager.sessionHasTimedIndicators = true;
+  assert.equal(manager.refreshSessionTimer(), false);
+  t.mock.timers.tick(10000);
+  await flush();
+  assert.equal(registry.snapshot("chat-a").state, "cleanup_unknown");
+});
+
 test("watcher presence is not input activity and cannot keep the owner alive", async () => {
   const manager = {
     activeSession: null,
