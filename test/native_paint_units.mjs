@@ -9,6 +9,7 @@ for (const [source, fixture] of [
   ['PaintVerification.swift', 'paint_verification.swift'],
   ['StrokeInterpolation.swift', 'stroke_interpolation.swift'],
   ['PaintCancellation.swift', 'paint_cancellation.swift'],
+  ['VectorPaintPlan.swift', 'vector_paint_plan.swift'],
 ]) {
   test(`native ${source} behavior`, () => {
     const dir = mkdtempSync(join(tmpdir(), 'cu-swift-test-'));

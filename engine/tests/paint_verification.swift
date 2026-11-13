@@ -162,6 +162,22 @@ struct PaintVerificationTest {
         let hashC = canvasInteriorHash(imagePath: urlC.path, insetLeft: 0, insetTop: 4, insetRight: 4, insetBottom: 4)!
         precondition(hashA == hashB, "chrome-only border changes outside ROI must produce identical hash")
         precondition(hashA != hashC, "interior canvas change must produce a different hash")
+
+        // Aggregate batch verification: overlapping multi-stroke lines pass while wrong color or missing strokes fail
+        var multiAfter = widthBefore
+        for y in 20...22 { for x in 10...60 { let i = (y * 80 + x) * 4; multiAfter[i] = 220; multiAfter[i + 1] = 20; multiAfter[i + 2] = 30 } }
+        for y in 22...24 { for x in 12...62 { let i = (y * 80 + x) * 4; multiAfter[i] = 220; multiAfter[i + 1] = 20; multiAfter[i + 2] = 30 } }
+        let touchPaths = [
+            [CGPoint(x: 10, y: 21), CGPoint(x: 60, y: 21)],
+            [CGPoint(x: 12, y: 23), CGPoint(x: 62, y: 23)],
+        ]
+        precondition(!inspectBrushWidth(before: widthBefore, after: multiAfter, width: 80, height: 80, paths: touchPaths, expectedWidth: 3).matched, "strict per-stroke width can fail on touching batch strokes")
+        let aggPass = inspectAggregatePaint(before: widthBefore, after: multiAfter, width: 80, height: 80, paths: touchPaths, expected: (220, 20, 30), brushRadius: 2)
+        precondition(aggPass.matched, "aggregate paint verification must accept touching strokes of matching color")
+        let aggWrongColor = inspectAggregatePaint(before: widthBefore, after: multiAfter, width: 80, height: 80, paths: touchPaths, expected: (20, 40, 220), brushRadius: 2)
+        precondition(!aggWrongColor.matched, "aggregate paint verification must reject wrong color")
+        let aggNoPaint = inspectAggregatePaint(before: widthBefore, after: widthBefore, width: 80, height: 80, paths: touchPaths, expected: (220, 20, 30), brushRadius: 2)
+        precondition(!aggNoPaint.matched, "aggregate paint verification must reject blank canvas")
         print("paint verification tests passed")
     }
 }

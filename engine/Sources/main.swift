@@ -22,9 +22,11 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import CoreImage
 import CoreMedia
 import CryptoKit
 import Foundation
+import ImageIO
 import ObjectiveC
 import ScreenCaptureKit
 import QuartzCore
@@ -806,6 +808,13 @@ func parseStrokePayload(_ object: Any) -> ([[CGPoint]], Int?)? {
         strokes.append(points)
     }
     return (strokes, pace)
+}
+
+/// Optional point interpolation spacing (screen points) bundled with stroke payloads.
+func parseStrokeSpacing(_ object: Any) -> Double? {
+    guard let root = object as? [String: Any],
+          let spacing = (root["spacing"] as? NSNumber)?.doubleValue else { return nil }
+    return max(3.0, min(18.0, spacing))
 }
 
 /// Expand one layer of a `drawplan` file into absolute screen strokes.
@@ -2046,8 +2055,182 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
 /// `screencapture`, which measured 111–118 ms warm here versus 146–177 ms for a
 /// per-shot spawn plus refine. Protocol: one JSON object per stdin line, one
 /// JSON reply per stdout line.
+private func encodeFastPNG(_ cgImage: CGImage) -> Data? {
+    let data = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else {
+        return nil
+    }
+    CGImageDestinationAddImage(dest, cgImage, nil)
+    guard CGImageDestinationFinalize(dest) else { return nil }
+    return data as Data
+}
+
+private func encodeFastJPEG(_ cgImage: CGImage, quality: Double) -> Data? {
+    let data = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else {
+        return nil
+    }
+    let props = [kCGImageDestinationLossyCompressionQuality: max(0.1, min(1.0, quality))] as CFDictionary
+    CGImageDestinationAddImage(dest, cgImage, props)
+    guard CGImageDestinationFinalize(dest) else { return nil }
+    return data as Data
+}
+
+/// Maintains a live full-resolution `SCStream` buffer for one active window so
+/// repeated before/after captures during painting read directly from the stream
+/// without paying cold capture latency, while strictly enforcing monotonic
+/// `minTimestampNs` freshness before accepting a cached frame.
+final class WindowStreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
+    private let cond = NSCondition()
+    private let sampleQueue = DispatchQueue(label: "cu.window-stream.samples", qos: .userInteractive)
+    private let ciContext = CIContext(options: nil)
+    private var stream: SCStream?
+    private var activeWindowId: CGWindowID = 0
+    private var activeBounds: CGRect = .zero
+    private var latestPixelBuffer: CVPixelBuffer?
+    private var latestTimestampNs: UInt64 = 0
+    private var streamStopped = false
+
+    func stop() {
+        cond.lock()
+        let old = stream
+        stream = nil
+        activeWindowId = 0
+        activeBounds = .zero
+        latestPixelBuffer = nil
+        latestTimestampNs = 0
+        streamStopped = false
+        cond.broadcast()
+        cond.unlock()
+        if let old {
+            Task { try? await old.stopCapture() }
+        }
+    }
+
+    private func boundsClose(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.origin.x - b.origin.x) < 1 &&
+        abs(a.origin.y - b.origin.y) < 1 &&
+        abs(a.size.width - b.size.width) < 1 &&
+        abs(a.size.height - b.size.height) < 1
+    }
+
+    private func ensureActive(windowId: CGWindowID, liveBounds: CGRect,
+                              scWindow: SCWindow) -> Bool {
+        cond.lock()
+        if stream != nil, !streamStopped, activeWindowId == windowId,
+           boundsClose(activeBounds, liveBounds) {
+            cond.unlock()
+            return true
+        }
+        let old = stream
+        stream = nil
+        activeWindowId = 0
+        latestPixelBuffer = nil
+        latestTimestampNs = 0
+        streamStopped = false
+        cond.unlock()
+        if let old {
+            Task { try? await old.stopCapture() }
+        }
+        let filter = SCContentFilter(desktopIndependentWindow: scWindow)
+        let cfg = SCStreamConfiguration()
+        cfg.width = max(2, Int((liveBounds.width * 2).rounded()))
+        cfg.height = max(2, Int((liveBounds.height * 2).rounded()))
+        cfg.pixelFormat = kCVPixelFormatType_32BGRA
+        cfg.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        cfg.queueDepth = 3
+        cfg.showsCursor = false
+        if #available(macOS 14.0, *) {
+            cfg.captureResolution = .best
+        }
+        let nextStream = SCStream(filter: filter, configuration: cfg, delegate: self)
+        do {
+            try nextStream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
+        } catch {
+            return false
+        }
+        let sem = DispatchSemaphore(value: 0)
+        var startFailed = false
+        Task {
+            do { try await nextStream.startCapture() } catch { startFailed = true }
+            sem.signal()
+        }
+        if sem.wait(timeout: .now() + 2.0) == .timedOut || startFailed {
+            Task { try? await nextStream.stopCapture() }
+            return false
+        }
+        cond.lock()
+        self.stream = nextStream
+        self.activeWindowId = windowId
+        self.activeBounds = liveBounds
+        self.latestPixelBuffer = nil
+        self.latestTimestampNs = 0
+        self.streamStopped = false
+        cond.unlock()
+        return true
+    }
+
+    func captureFrame(windowId: CGWindowID, liveBounds: CGRect, scWindow: SCWindow,
+                      minTimestampNs: UInt64, waitMs: Int) -> (cgImage: CGImage, bounds: CGRect, scale: Double, timestampNs: UInt64)? {
+        guard ensureActive(windowId: windowId, liveBounds: liveBounds, scWindow: scWindow) else {
+            return nil
+        }
+        let deadline = Date().addingTimeInterval(Double(max(15, waitMs)) / 1000.0)
+        cond.lock()
+        while !streamStopped {
+            let ready = latestPixelBuffer != nil && (minTimestampNs == 0 || latestTimestampNs >= minTimestampNs)
+            if ready { break }
+            if !cond.wait(until: deadline) { break }
+        }
+        let ok = !streamStopped && latestPixelBuffer != nil && (minTimestampNs == 0 || latestTimestampNs >= minTimestampNs)
+        let buf = ok ? latestPixelBuffer : nil
+        let ts = latestTimestampNs
+        let bounds = activeBounds
+        cond.unlock()
+        guard let pixelBuffer = buf else { return nil }
+        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        let extent = image.extent
+        guard extent.width.isFinite, extent.height.isFinite, extent.width >= 2, extent.height >= 2,
+              let cg = ciContext.createCGImage(image, from: extent),
+              cg.width >= 2, cg.height >= 2 else { return nil }
+        let scale = bounds.width > 0 ? Double(cg.width) / Double(bounds.width) : 2.0
+        return (cg, bounds, scale, ts)
+    }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+                of outputType: SCStreamOutputType) {
+        guard outputType == .screen, CMSampleBufferDataIsReady(sampleBuffer),
+              let pool = CMSampleBufferGetImageBuffer(sampleBuffer),
+              CVPixelBufferGetWidth(pool) >= 2, CVPixelBufferGetHeight(pool) >= 2 else { return }
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+           let statusRaw = attachments.first?[.status] as? Int,
+           let status = SCFrameStatus(rawValue: statusRaw),
+           status != .complete {
+            return
+        }
+        let ts = DispatchTime.now().uptimeNanoseconds
+        cond.lock()
+        if stream === self.stream && !streamStopped {
+            latestPixelBuffer = pool
+            latestTimestampNs = ts
+            cond.broadcast()
+        }
+        cond.unlock()
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        cond.lock()
+        if stream === self.stream {
+            streamStopped = true
+            cond.broadcast()
+        }
+        cond.unlock()
+    }
+}
+
 final class CaptureDaemon {
     private var cached: SCShareableContent?
+    let streamRecorder = WindowStreamRecorder()
 
     /// ScreenCaptureKit's async capture either works in this process or it does
     /// not; it is a property of the OS build and the process context, not of the
@@ -2099,6 +2282,33 @@ final class CaptureDaemon {
         if let cached { return cached }
         refresh()
         return cached
+    }
+
+    func captureStream(windowId: CGWindowID, format: String, quality: Double,
+                       minTimestampNs: UInt64, waitMs: Int) -> (data: Data, origin: CGPoint, size: CGSize, scale: Double, timestampNs: UInt64, encoding: String, source: String)? {
+        if sckStalled { return nil }
+        guard let liveBounds = onScreenWindows().first(where: { $0.id == windowId })?.bounds else {
+            return nil
+        }
+        var list = content()
+        var scWindow = list?.windows.first(where: { $0.windowID == windowId })
+        if scWindow == nil {
+            refresh()
+            list = content()
+            scWindow = list?.windows.first(where: { $0.windowID == windowId })
+        }
+        guard let scWindow,
+              let frame = streamRecorder.captureFrame(
+                windowId: windowId, liveBounds: liveBounds, scWindow: scWindow,
+                minTimestampNs: minTimestampNs, waitMs: waitMs) else {
+            return nil
+        }
+        let wantPNG = format == "png"
+        guard let encoded = wantPNG ? encodeFastPNG(frame.cgImage) : encodeFastJPEG(frame.cgImage, quality: quality) else {
+            return nil
+        }
+        return (encoded, frame.bounds.origin, frame.bounds.size, frame.scale, frame.timestampNs,
+                wantPNG ? "png" : "jpeg", "scstream")
     }
 
     /// Runs one capture synchronously (SCK is async-only). Returns nil on failure.
@@ -2257,6 +2467,7 @@ func captureDaemonHandle(_ line: String, _ daemon: CaptureDaemon) -> Bool {
           let cmd = request["cmd"] as? String else { return true }
     switch cmd {
     case "quit":
+        daemon.streamRecorder.stop()
         return false
     case "refresh":
         daemon.refresh()
@@ -2266,40 +2477,92 @@ func captureDaemonHandle(_ line: String, _ daemon: CaptureDaemon) -> Bool {
         let screen = request["screen"] as? Bool ?? false
         let display = request["display"] as? Int ?? 0
         let maxDim = (request["maxDim"] as? NSNumber)?.intValue ?? 0
-        guard let raw = daemon.capture(windowId: wid.flatMap { CGWindowID($0) },
-                                       screen: screen, displayIndex: display,
-                                       maxDimension: maxDim) else {
-            captureDaemonReply(["ok": false, "error": "capture_failed"])
-            return true
-        }
         let format = ((request["format"] as? String) ?? "jpeg").lowercased()
         let quality = (request["quality"] as? NSNumber)?.doubleValue ?? 0.76
-        do {
-            let shot = try refine(raw, region: nil,
-                                  format: format == "png" ? "png" : "jpeg",
-                                  quality: quality, maxDimension: maxDim)
-            var payload: [String: Any] = [:]
-            payload["ok"] = true
-            payload["base64"] = shot.png.base64EncodedString()
-            payload["mimeType"] = shot.encoding == "jpeg" ? "image/jpeg" : "image/png"
-            payload["width"] = Int(shot.size.width * shot.scale)
-            payload["height"] = Int(shot.size.height * shot.scale)
-            payload["origin"] = ["x": shot.origin.x, "y": shot.origin.y] as [String: Any]
-            payload["size"] = ["width": shot.size.width,
-                               "height": shot.size.height] as [String: Any]
-            payload["scale"] = shot.scale
-            // Freshness matters more than any single field: a caller must be able
-            // to tell an image of the window as it is now from one taken before it
-            // moved.
-            payload["capturedAt"] = Int(Date().timeIntervalSince1970 * 1000)
-            if let display = displayId(containing: CGPoint(x: shot.origin.x + shot.size.width / 2,
-                                                           y: shot.origin.y + shot.size.height / 2)) {
-                payload["displayId"] = display
+        let wantFormat = format == "png" ? "png" : "jpeg"
+        let outPath = request["out"] as? String
+        let useStream = (request["stream"] as? Bool ?? false) && !screen && wid != nil && maxDim == 0
+        let minTsStr = request["minTimestampNs"] as? String
+        let minTsNum = (request["minTimestampNs"] as? NSNumber)?.uint64Value
+        let minTimestampNs = minTsStr.flatMap(UInt64.init) ?? minTsNum ?? 0
+        let waitMs = (request["waitMs"] as? NSNumber)?.intValue ?? (minTimestampNs > 0 ? 95 : 450)
+
+        let bytes: Data
+        let encoding: String
+        let origin: CGPoint
+        let size: CGSize
+        let scale: Double
+        let timestampNs: UInt64
+        let sourceTag: String
+
+        if useStream, let wid,
+           let streamFrame = daemon.captureStream(windowId: CGWindowID(wid), format: wantFormat,
+                                                  quality: quality, minTimestampNs: minTimestampNs,
+                                                  waitMs: waitMs) {
+            bytes = streamFrame.data
+            encoding = streamFrame.encoding
+            origin = streamFrame.origin
+            size = streamFrame.size
+            scale = streamFrame.scale
+            timestampNs = streamFrame.timestampNs
+            sourceTag = streamFrame.source
+        } else {
+            guard let raw = daemon.capture(windowId: wid.flatMap { CGWindowID($0) },
+                                           screen: screen, displayIndex: display,
+                                           maxDimension: maxDim) else {
+                captureDaemonReply(["ok": false, "error": "capture_failed"])
+                return true
             }
-            captureDaemonReply(payload)
-        } catch {
-            captureDaemonReply(["ok": false, "error": "encode_failed"])
+            do {
+                let shot = try refine(raw, region: nil, format: wantFormat,
+                                      quality: quality, maxDimension: maxDim)
+                bytes = shot.png
+                encoding = shot.encoding
+                origin = shot.origin
+                size = shot.size
+                scale = shot.scale
+                timestampNs = DispatchTime.now().uptimeNanoseconds
+                sourceTag = "capture"
+            } catch {
+                captureDaemonReply(["ok": false, "error": "encode_failed"])
+                return true
+            }
         }
+
+        var payload: [String: Any] = [:]
+        if let outPath {
+            let outURL = URL(fileURLWithPath: outPath)
+            do {
+                try FileManager.default.createDirectory(at: outURL.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try bytes.write(to: outURL, options: .atomic)
+                payload["out"] = outPath
+            } catch {
+                captureDaemonReply(["ok": false, "error": "write_failed"])
+                return true
+            }
+        } else {
+            payload["base64"] = bytes.base64EncodedString()
+        }
+        payload["ok"] = true
+        payload["source"] = sourceTag
+        payload["timestampNs"] = String(timestampNs)
+        payload["mimeType"] = encoding == "jpeg" ? "image/jpeg" : "image/png"
+        payload["width"] = Int((size.width * scale).rounded())
+        payload["height"] = Int((size.height * scale).rounded())
+        payload["origin"] = ["x": origin.x, "y": origin.y] as [String: Any]
+        payload["size"] = ["width": size.width,
+                           "height": size.height] as [String: Any]
+        payload["scale"] = scale
+        // Freshness matters more than any single field: a caller must be able
+        // to tell an image of the window as it is now from one taken before it
+        // moved.
+        payload["capturedAt"] = Int(Date().timeIntervalSince1970 * 1000)
+        if let display = displayId(containing: CGPoint(x: origin.x + size.width / 2,
+                                                       y: origin.y + size.height / 2)) {
+            payload["displayId"] = display
+        }
+        captureDaemonReply(payload)
     default:
         captureDaemonReply(["ok": false, "error": "unknown_command"])
     }
@@ -5808,85 +6071,180 @@ case "drawplan":
     guard rectParts.count == 4, rectParts[2] > 4, rectParts[3] > 4 else {
         fail("bad_rect", "rect looks like 100,200,520,520")
     }
-    let grid = args.int("grid") ?? 150
-    let colors = args.int("colors") ?? 10
-    let seed = args.int("seed") ?? 12345
-    let imageURL = URL(fileURLWithPath: imagePath).standardizedFileURL
-    guard FileManager.default.fileExists(atPath: imageURL.path) else {
-        fail("image_missing", "no file at \(imageURL.path)")
+    let mode = (args["mode"] ?? "runs").lowercased()
+    guard mode == "runs" || mode == "vector" else {
+        fail("bad_mode", "mode must be runs or vector")
     }
-    let started = Date()
-    let built: (layers: [DrawPlanLayer], preview: [UInt8])
-    do {
-        built = try buildDrawPlan(imagePath: imageURL.path, grid: grid, colors: colors, seed: seed)
-    } catch {
-        fail("drawplan_failed", String(describing: error))
-    }
+    let bgMode = (args["bg"] ?? "auto").lowercased()
     let x0 = rectParts[0]
     let y0 = rectParts[1]
     let width = rectParts[2]
     let height = rectParts[3]
-    let sx = width / Double(grid)
-    let sy = height / Double(grid)
+    let imageURL = URL(fileURLWithPath: imagePath).standardizedFileURL
+    guard FileManager.default.fileExists(atPath: imageURL.path) else {
+        fail("image_missing", "no file at \(imageURL.path)")
+    }
+    let seed = args.int("seed") ?? 12345
+    let outPath = args["out"] ?? imageURL.deletingPathExtension().path + ".plan.json"
+    let started = Date()
 
-    // Paint light first so dark line work survives later passes.
-    let ordered = built.layers.sorted { $0.luminance > $1.luminance }
-    var orderedPayload: [[String: Any]] = []
-    var totalRuns = 0
-    for layer in ordered {
-        totalRuns += layer.runs.count
-        orderedPayload.append([
-            "index": layer.label,
-            "hex": layer.hex,
-            "rgb": [layer.rgb.0, layer.rgb.1, layer.rgb.2],
-            "count": layer.runs.count,
-            "runs": layer.runs,
+    if mode == "vector" {
+        let grid = args.int("grid") ?? 340
+        let colors = args.int("colors") ?? 18
+        let rect = CGRect(x: x0, y: y0, width: width, height: height)
+        let vecPlan: VectorPaintPlanResult
+        do {
+            vecPlan = try buildVectorPaintPlan(imagePath: imageURL.path, rect: rect,
+                                               grid: grid, colors: colors, seed: seed, bgMode: bgMode)
+        } catch {
+            fail("drawplan_failed", String(describing: error))
+        }
+        let batchPayload: [[String: Any]] = vecPlan.batches.map { b in
+            [
+                "index": b.index,
+                "role": b.role,
+                "tool": b.tool,
+                "brushWidthName": b.brushWidthName,
+                "brushWidth": b.brushWidth,
+                "hex": b.hex,
+                "rgb": [b.rgb.0, b.rgb.1, b.rgb.2],
+                "count": b.strokes.count,
+                "strokes": b.strokes,
+            ]
+        }
+        let palettePayload: [[String: Any]] = vecPlan.palette.map { item in
+            [
+                "hex": item.hex,
+                "rgb": [item.rgb.0, item.rgb.1, item.rgb.2],
+                "pixels": item.pixels,
+            ]
+        }
+        let plan: [String: Any] = [
+            "version": 2,
+            "mode": "vector",
+            "bgMode": bgMode,
+            "image": imageURL.path,
+            "grid": grid,
+            "colors": colors,
+            "rect": ["x": x0, "y": y0, "w": width, "h": height],
+            "palette": palettePayload,
+            "batches": batchPayload,
+            "totalStrokes": vecPlan.totalStrokes,
+        ]
+        guard let planData = try? JSONSerialization.data(withJSONObject: plan, options: [.sortedKeys]) else {
+            fail("drawplan_failed", "could not serialize the plan")
+        }
+        do {
+            try planData.write(to: URL(fileURLWithPath: outPath))
+        } catch {
+            fail("plan_write_failed", "cannot write \(outPath): \(error.localizedDescription)")
+        }
+        var previewPath: String?
+        if let requested = args["preview"] {
+            do {
+                try writeVectorPreviewPNG(vecPlan.previewRGBA, grid: vecPlan.grid, to: requested)
+                previewPath = requested
+            } catch {
+                fail("preview_write_failed", "cannot write \(requested): \(error.localizedDescription)")
+            }
+        }
+        emit([
+            "ok": true,
+            "action": "drawplan",
+            "mode": "vector",
+            "bgMode": bgMode,
+            "image": imageURL.path,
+            "grid": grid,
+            "colors": colors,
+            "rect": ["x": x0, "y": y0, "w": width, "h": height],
+            "palette": palettePayload,
+            "batches": batchPayload.map { b in
+                [
+                    "index": b["index"]!,
+                    "role": b["role"]!,
+                    "tool": b["tool"]!,
+                    "brushWidthName": b["brushWidthName"]!,
+                    "brushWidth": b["brushWidth"]!,
+                    "hex": b["hex"]!,
+                    "count": b["count"]!,
+                ]
+            },
+            "totalStrokes": vecPlan.totalStrokes,
+            "out": outPath,
+            "preview": previewPath ?? "",
+            "ms": Int(Date().timeIntervalSince(started) * 1000),
+        ])
+    } else {
+        let grid = args.int("grid") ?? 150
+        let colors = args.int("colors") ?? 10
+        let built: (layers: [DrawPlanLayer], preview: [UInt8])
+        do {
+            built = try buildDrawPlan(imagePath: imageURL.path, grid: grid, colors: colors, seed: seed)
+        } catch {
+            fail("drawplan_failed", String(describing: error))
+        }
+        let sx = width / Double(grid)
+        let sy = height / Double(grid)
+
+        // Paint light first so dark line work survives later passes.
+        let ordered = built.layers.sorted { $0.luminance > $1.luminance }
+        var orderedPayload: [[String: Any]] = []
+        var totalRuns = 0
+        for layer in ordered {
+            totalRuns += layer.runs.count
+            orderedPayload.append([
+                "index": layer.label,
+                "hex": layer.hex,
+                "rgb": [layer.rgb.0, layer.rgb.1, layer.rgb.2],
+                "count": layer.runs.count,
+                "runs": layer.runs,
+            ])
+        }
+        let plan: [String: Any] = [
+            "version": 1,
+            "image": imageURL.path,
+            "grid": grid,
+            "colors": colors,
+            "x0": x0,
+            "y0": y0,
+            "sx": sx,
+            "sy": sy,
+            "layers": orderedPayload,
+        ]
+        guard let planData = try? JSONSerialization.data(withJSONObject: plan, options: [.sortedKeys]) else {
+            fail("drawplan_failed", "could not serialize the plan")
+        }
+        do {
+            try planData.write(to: URL(fileURLWithPath: outPath))
+        } catch {
+            fail("plan_write_failed", "cannot write \(outPath): \(error.localizedDescription)")
+        }
+        var previewPath: String?
+        if let requested = args["preview"] {
+            do {
+                try writePreviewPNG(built.preview, grid: grid, to: requested)
+                previewPath = requested
+            } catch {
+                fail("preview_write_failed", "cannot write \(requested): \(error.localizedDescription)")
+            }
+        }
+        emit([
+            "ok": true,
+            "action": "drawplan",
+            "mode": "runs",
+            "image": imageURL.path,
+            "grid": grid,
+            "colors": colors,
+            "rect": ["x": x0, "y": y0, "w": width, "h": height],
+            "layers": orderedPayload.map { layer in
+                ["index": layer["index"]!, "hex": layer["hex"]!, "count": layer["count"]!]
+            },
+            "totalRuns": totalRuns,
+            "out": outPath,
+            "preview": previewPath ?? "",
+            "ms": Int(Date().timeIntervalSince(started) * 1000),
         ])
     }
-    let plan: [String: Any] = [
-        "version": 1,
-        "image": imageURL.path,
-        "grid": grid,
-        "colors": colors,
-        "x0": x0,
-        "y0": y0,
-        "sx": sx,
-        "sy": sy,
-        "layers": orderedPayload,
-    ]
-    let outPath = args["out"] ?? imageURL.deletingPathExtension().path + ".plan.json"
-    guard let planData = try? JSONSerialization.data(withJSONObject: plan, options: [.sortedKeys]) else {
-        fail("drawplan_failed", "could not serialize the plan")
-    }
-    do {
-        try planData.write(to: URL(fileURLWithPath: outPath))
-    } catch {
-        fail("plan_write_failed", "cannot write \(outPath): \(error.localizedDescription)")
-    }
-    var previewPath: String?
-    if let requested = args["preview"] {
-        do {
-            try writePreviewPNG(built.preview, grid: grid, to: requested)
-            previewPath = requested
-        } catch {
-            fail("preview_write_failed", "cannot write \(requested): \(error.localizedDescription)")
-        }
-    }
-    emit([
-        "ok": true,
-        "action": "drawplan",
-        "image": imageURL.path,
-        "grid": grid,
-        "colors": colors,
-        "rect": ["x": x0, "y": y0, "w": width, "h": height],
-        "layers": orderedPayload.map { layer in
-            ["index": layer["index"]!, "hex": layer["hex"]!, "count": layer["count"]!]
-        },
-        "totalRuns": totalRuns,
-        "out": outPath,
-        "preview": previewPath ?? "",
-        "ms": Int(Date().timeIntervalSince(started) * 1000),
-    ])
 
 case "paint-swatch":
     guard let path = args["image"], let image = paintImagePixels(path), let hex = args["hex"],
@@ -5928,10 +6286,7 @@ case "paint-verify":
     }
     let expectedRGB: (UInt8, UInt8, UInt8) = (UInt8((rgb >> 16) & 255), UInt8((rgb >> 8) & 255), UInt8(rgb & 255))
     let paths = parsed.0.map { $0.map { CGPoint(x: ($0.x - ox) * scale, y: ($0.y - oy) * scale) } }
-    let inspection = inspectPaint(before: before.pixels, after: after.pixels,
-                                  width: before.width, height: before.height, paths: paths,
-                                  expected: expectedRGB)
-    var result: [String: Any] = ["ok": true, "matched": inspection.matched, "failedStrokes": inspection.failedStrokes]
+    var result: [String: Any] = ["ok": true]
     func checkRegion(paddingWidth: Double) -> Bool {
         guard let root = object as? [String: Any], let rawRegion = root["paintRegion"] as? [[Double]],
               rawRegion.allSatisfy({ $0.count == 2 }) else { return false }
@@ -5940,25 +6295,67 @@ case "paint-verify":
                                   width: before.width, height: before.height, paths: paths,
                                   region: region, expectedWidth: paddingWidth)
     }
-    if args.flag("fill") {
-        let fillOk = inspectFillInterior(before: before.pixels, after: after.pixels,
-                                         width: before.width, height: before.height, paths: paths,
-                                         expected: expectedRGB)
+    if args.flag("aggregate") {
+        let brushR = max(3.5, (args.double("expected-width") ?? 4) * scale * 0.9)
+        let agg = inspectAggregatePaint(before: before.pixels, after: after.pixels,
+                                        width: before.width, height: before.height,
+                                        paths: paths, expected: expectedRGB, brushRadius: brushR)
         let regionMatched = checkRegion(paddingWidth: max((args.double("expected-width") ?? 4) * scale, 12))
-        result["fillMode"] = true
-        result["widthMatched"] = fillOk
-        result["measuredWidth"] = args.double("expected-width") ?? 0
+        result["aggregate"] = true
+        result["changedPixels"] = agg.changedPixels
+        result["matchedPixels"] = agg.matchedPixels
+        result["totalSamples"] = agg.totalSamples
+        result["coveredSamples"] = agg.coveredSamples
         result["regionMatched"] = regionMatched
-        result["matched"] = inspection.matched && fillOk && regionMatched
-    } else if let expectedWidth = args.double("expected-width") {
-        let brush = inspectBrushWidth(before: before.pixels, after: after.pixels,
+        if args.flag("fill") {
+            let fillOk = inspectFillInterior(before: before.pixels, after: after.pixels,
+                                             width: before.width, height: before.height, paths: paths,
+                                             expected: expectedRGB)
+            result["fillMode"] = true
+            result["widthMatched"] = fillOk
+            result["measuredWidth"] = args.double("expected-width") ?? 0
+            result["matched"] = agg.matched && fillOk && regionMatched
+        } else {
+            result["widthMatched"] = agg.matched
+            result["measuredWidth"] = args.double("expected-width") ?? 0
+            result["matched"] = agg.matched && regionMatched
+        }
+    } else {
+        let inspection = inspectPaint(before: before.pixels, after: after.pixels,
                                       width: before.width, height: before.height, paths: paths,
-                                      expectedWidth: expectedWidth * scale)
-        result["widthMatched"] = brush.matched
-        result["measuredWidth"] = brush.measuredWidth / scale
-        let regionMatched = checkRegion(paddingWidth: expectedWidth * scale)
-        result["regionMatched"] = regionMatched
-        result["matched"] = inspection.matched && brush.matched && regionMatched
+                                      expected: expectedRGB)
+        result["matched"] = inspection.matched
+        result["failedStrokes"] = inspection.failedStrokes
+        if args.flag("fill") {
+            let fillOk = inspectFillInterior(before: before.pixels, after: after.pixels,
+                                             width: before.width, height: before.height, paths: paths,
+                                             expected: expectedRGB)
+            let regionMatched = checkRegion(paddingWidth: max((args.double("expected-width") ?? 4) * scale, 12))
+            result["fillMode"] = true
+            result["widthMatched"] = fillOk
+            result["measuredWidth"] = args.double("expected-width") ?? 0
+            result["regionMatched"] = regionMatched
+            result["matched"] = inspection.matched && fillOk && regionMatched
+        } else if let expectedWidth = args.double("expected-width") {
+            let brush = inspectBrushWidth(before: before.pixels, after: after.pixels,
+                                          width: before.width, height: before.height, paths: paths,
+                                          expectedWidth: expectedWidth * scale)
+            result["widthMatched"] = brush.matched
+            result["measuredWidth"] = brush.measuredWidth / scale
+            let regionMatched = checkRegion(paddingWidth: expectedWidth * scale)
+            result["regionMatched"] = regionMatched
+            result["matched"] = inspection.matched && brush.matched && regionMatched
+        }
+    }
+    if args.int("inset-left") != nil || args.int("inset-top") != nil ||
+       args.int("inset-right") != nil || args.int("inset-bottom") != nil {
+        if let hash = canvasInteriorHashPixels(pixels: after.pixels, width: after.width, height: after.height,
+                                               insetLeft: args.int("inset-left") ?? 0,
+                                               insetTop: args.int("inset-top") ?? 0,
+                                               insetRight: args.int("inset-right") ?? 0,
+                                               insetBottom: args.int("inset-bottom") ?? 0) {
+            result["afterHash"] = hash
+        }
     }
     emit(result)
 
@@ -5973,6 +6370,7 @@ case "strokes":
     var paths: [[CGPoint]] = []
     var layerHex = ""
     var defaultPace = 12
+    var defaultSpacing = 6.0
     if let planPath = args["plan"] {
         guard let layerIndex = args.int("layer") else {
             fail("missing_layer", "pass --layer <index> with --plan")
@@ -5991,10 +6389,12 @@ case "strokes":
         }
         paths = parsed.0
         if let pace = parsed.1 { defaultPace = pace }
+        if let spacingVal = parseStrokeSpacing(object) { defaultSpacing = spacingVal }
     } else {
         fail("missing_strokes", "pass --file strokes.json or --plan plan.json --layer <n>")
     }
     let pace = max(2, min(args.int("pace") ?? defaultPace, 200))
+    let strokeSpacing = max(3.0, min(18.0, args.double("spacing") ?? defaultSpacing))
     guard paths.allSatisfy({ strokeWithinLimits($0, paceMs: pace) }) else {
         fail("stroke_limit_exceeded", "each stroke is limited to 256 points, 1200 screen points and 15 seconds; split it into shorter strokes")
     }
@@ -6089,7 +6489,7 @@ case "strokes":
             usleep(useconds_t(pace) * 1000)
             dispatchedPoints += 1
         }
-        let points = interpolateStroke(path, spacing: 6)
+        let points = interpolateStroke(path, spacing: strokeSpacing)
         let first = points[0]
         post(.mouseMoved, first)
         if cancellation.isCancelled || pauseActive() { fail("paint_interrupted", "drawing stopped before mouse down") }
@@ -6107,11 +6507,13 @@ case "strokes":
         post(.leftMouseUp, last)
         dispatchedStrokes += 1
     }
+    let finishedNs = DispatchTime.now().uptimeNanoseconds
     markAction()
     emitActionEventLine("dispatched", kind: "drag", target: target,
                         label: "绘制 \(paths.count) 笔")
     emit(["ok": true, "action": "strokes", "strokes": dispatchedStrokes,
-          "points": dispatchedPoints, "paceMs": pace, "hex": layerHex,
+          "points": dispatchedPoints, "paceMs": pace, "spacing": strokeSpacing, "hex": layerHex,
+          "finishedNs": String(finishedNs),
           "via": backgroundPid == nil ? "hid-events" : "pid-events",
           "ms": Int(Date().timeIntervalSince(started) * 1000)])
 

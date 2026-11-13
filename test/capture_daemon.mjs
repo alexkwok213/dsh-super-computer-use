@@ -38,3 +38,41 @@ test('captureShotViaDaemon degrades when the daemon cannot start', async () => {
   assert.equal(shot.ok, false);
   assert.equal(shot.error, 'capture_daemon_unavailable');
 });
+
+test('captureShotToFile forwards stream, minTimestampNs and out path', async () => {
+  const m = new CuSessionManager();
+  let seen = null;
+  m._captureRequest = async (req) => {
+    seen = req;
+    return {
+      ok: true,
+      out: req.out,
+      source: 'scstream',
+      timestampNs: '999999999',
+      mimeType: 'image/png',
+      width: 800,
+      height: 600,
+      origin: { x: 0, y: 0 },
+      size: { width: 400, height: 300 },
+      scale: 2,
+    };
+  };
+  const missingOut = await m.captureShotToFile({ windowId: 7 });
+  assert.equal(missingOut.ok, false);
+  assert.equal(missingOut.error, 'missing_out');
+
+  const shot = await m.captureShotToFile({
+    windowId: 7,
+    out: '/tmp/daemon-out.png',
+    minTimestampNs: '123456',
+    waitMs: 95,
+  });
+  assert.equal(shot.ok, true);
+  assert.equal(shot.source, 'scstream');
+  assert.equal(shot.out, '/tmp/daemon-out.png');
+  assert.equal(seen.cmd, 'shot');
+  assert.equal(seen.stream, true);
+  assert.equal(seen.out, '/tmp/daemon-out.png');
+  assert.equal(seen.minTimestampNs, '123456');
+  assert.equal(seen.waitMs, 95);
+});

@@ -301,27 +301,159 @@ func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: In
     return true
 }
 
+/// Aggregate verification for multi-stroke batches where adjacent or layered
+/// strokes intentionally touch, blend or overlap inside paintRegion.
+struct AggregatePaintInspection {
+    let matched: Bool
+    let changedPixels: Int
+    let matchedPixels: Int
+    let totalSamples: Int
+    let coveredSamples: Int
+}
+
+func inspectAggregatePaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
+                           paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8),
+                           brushRadius: Double = 4) -> AggregatePaintInspection {
+    let failed = AggregatePaintInspection(matched: false, changedPixels: 0, matchedPixels: 0, totalSamples: 0, coveredSamples: 0)
+    guard width > 0, height > 0, before.count == width * height * 4,
+          after.count == before.count, !paths.isEmpty else { return failed }
+    guard paths.allSatisfy({ $0.count >= 2 && $0.allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 10_000_000 && abs($0.y) < 10_000_000 }) }) else {
+        return failed
+    }
+    let radius = max(4.0, min(32.0, brushRadius + 2.5))
+    let radiusSq = radius * radius
+    let pad = Int(ceil(radius)) + 1
+    let allPts = paths.flatMap { $0 }
+    let boxMinX = max(0, Int(floor(allPts.map(\.x).min()!)) - pad)
+    let boxMaxX = min(width - 1, Int(ceil(allPts.map(\.x).max()!)) + pad)
+    let boxMinY = max(0, Int(floor(allPts.map(\.y).min()!)) - pad)
+    let boxMaxY = min(height - 1, Int(ceil(allPts.map(\.y).max()!)) + pad)
+    guard boxMinX <= boxMaxX, boxMinY <= boxMaxY else { return failed }
+
+    let boxW = boxMaxX - boxMinX + 1
+    let boxH = boxMaxY - boxMinY + 1
+    // State: 0 = ignored, 1 = stroke neighborhood candidate, 2 = changed & matched expected color
+    var mask = [UInt8](repeating: 0, count: boxW * boxH)
+
+    for path in paths {
+        for (a, b) in zip(path, path.dropFirst()) {
+            let sMinX = max(boxMinX, Int(floor(min(a.x, b.x) - radius)))
+            let sMaxX = min(boxMaxX, Int(ceil(max(a.x, b.x) + radius)))
+            let sMinY = max(boxMinY, Int(floor(min(a.y, b.y) - radius)))
+            let sMaxY = min(boxMaxY, Int(ceil(max(a.y, b.y) + radius)))
+            guard sMinX <= sMaxX, sMinY <= sMaxY else { continue }
+            let dx = b.x - a.x, dy = b.y - a.y
+            let segLenSq = dx * dx + dy * dy
+            for y in sMinY...sMaxY {
+                let rowOff = (y - boxMinY) * boxW - boxMinX
+                let py = Double(y)
+                for x in sMinX...sMaxX {
+                    let px = Double(x)
+                    let t = segLenSq > 0 ? max(0, min(1, ((px - a.x) * dx + (py - a.y) * dy) / segLenSq)) : 0
+                    let rx = px - (a.x + t * dx), ry = py - (a.y + t * dy)
+                    if rx * rx + ry * ry <= radiusSq { mask[rowOff + x] = 1 }
+                }
+            }
+        }
+    }
+
+    var changed = 0, matches = 0
+    for ly in 0..<boxH {
+        let wy = boxMinY + ly
+        for lx in 0..<boxW {
+            let mIdx = ly * boxW + lx
+            if mask[mIdx] == 0 { continue }
+            let i = (wy * width + (boxMinX + lx)) * 4
+            let diff = abs(Int(before[i]) - Int(after[i])) + abs(Int(before[i + 1]) - Int(after[i + 1])) + abs(Int(before[i + 2]) - Int(after[i + 2]))
+            if diff < 36 { continue }
+            changed += 1
+            if matchesExpectedColor(Int(after[i]), Int(after[i + 1]), Int(after[i + 2]), expected) {
+                matches += 1
+                mask[mIdx] = 2
+            }
+        }
+    }
+
+    let expectedNearWhite = expected.0 >= 245 && expected.1 >= 245 && expected.2 >= 245
+    let searchR = Int(ceil(radius))
+    let spacing = max(6.0, min(12.0, radius * 1.5))
+    var samples = 0, covered = 0, overlapCovered = 0
+    for path in paths {
+        for (a, b) in zip(path, path.dropFirst()) {
+            let dist = hypot(b.x - a.x, b.y - a.y)
+            let steps = max(1, min(1024, Int(ceil(dist / spacing))))
+            for step in 0...steps {
+                let t = CGFloat(step) / CGFloat(steps)
+                let sx = Int((a.x + (b.x - a.x) * t).rounded())
+                let sy = Int((a.y + (b.y - a.y) * t).rounded())
+                samples += 1
+                var foundNew = false
+                var preMatched = false
+                let y0 = max(boxMinY, sy - searchR), y1 = min(boxMaxY, sy + searchR)
+                let x0 = max(boxMinX, sx - searchR), x1 = min(boxMaxX, sx + searchR)
+                if x0 <= x1 && y0 <= y1 {
+                    for py in y0...y1 where !foundNew {
+                        let dy = py - sy
+                        for px in x0...x1 {
+                            let dx = px - sx
+                            if Double(dx * dx + dy * dy) > radiusSq { continue }
+                            if mask[(py - boxMinY) * boxW + (px - boxMinX)] == 2 {
+                                foundNew = true; break
+                            }
+                            if !preMatched && !expectedNearWhite {
+                                let i = (py * width + px) * 4
+                                if matchesExpectedColor(Int(after[i]), Int(after[i + 1]), Int(after[i + 2]), expected) &&
+                                   matchesExpectedColor(Int(before[i]), Int(before[i + 1]), Int(before[i + 2]), expected) {
+                                    preMatched = true
+                                }
+                            }
+                        }
+                    }
+                }
+                if foundNew { covered += 1 }
+                else if preMatched { overlapCovered += 1 }
+            }
+        }
+    }
+
+    let minChanges = max(3, min(paths.count, 8))
+    let ok = samples >= 1 && changed >= minChanges && matches >= minChanges && covered >= 1 &&
+        matches * 10 >= changed * 3 && (covered + overlapCovered) * 10 >= samples * 7
+    return AggregatePaintInspection(matched: ok, changedPixels: changed, matchedPixels: matches,
+                                    totalSamples: samples, coveredSamples: covered + overlapCovered)
+}
+
+/// Hash already-decoded RGBA pixels of the interior canvas region.
+func canvasInteriorHashPixels(pixels: [UInt8], width: Int, height: Int,
+                              insetLeft: Int, insetTop: Int,
+                              insetRight: Int, insetBottom: Int) -> String? {
+    guard width > 0, height > 0, pixels.count == width * height * 4 else { return nil }
+    let x0 = max(0, min(width, insetLeft))
+    let x1 = max(x0, width - max(0, insetRight))
+    let y0 = max(0, min(height, insetTop))
+    let y1 = max(y0, height - max(0, insetBottom))
+    guard x1 > x0, y1 > y0 else { return nil }
+    var hasher = SHA256()
+    let dims = [UInt32(x1 - x0).littleEndian, UInt32(y1 - y0).littleEndian]
+    dims.withUnsafeBytes { hasher.update(data: Data($0)) }
+    pixels.withUnsafeBytes { raw in
+        guard let base = raw.baseAddress else { return }
+        let rowBytes = (x1 - x0) * 4
+        for y in y0..<y1 {
+            let offset = (y * width + x0) * 4
+            hasher.update(bufferPointer: UnsafeRawBufferPointer(start: base.advanced(by: offset), count: rowBytes))
+        }
+    }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+}
+
 /// Hash decoded RGBA pixels of the interior canvas region, excluding outer
 /// toolbars and auto-hiding scrollbars so UI chrome fades don't look like
 /// canvas changes.
 func canvasInteriorHash(imagePath: String, insetLeft: Int, insetTop: Int,
                         insetRight: Int, insetBottom: Int) -> String? {
     guard let image = paintImagePixels(imagePath) else { return nil }
-    let x0 = max(0, min(image.width, insetLeft))
-    let x1 = max(x0, image.width - max(0, insetRight))
-    let y0 = max(0, min(image.height, insetTop))
-    let y1 = max(y0, image.height - max(0, insetBottom))
-    guard x1 > x0, y1 > y0 else { return nil }
-    var hasher = SHA256()
-    let dims = [UInt32(x1 - x0).littleEndian, UInt32(y1 - y0).littleEndian]
-    dims.withUnsafeBytes { hasher.update(data: Data($0)) }
-    image.pixels.withUnsafeBytes { raw in
-        guard let base = raw.baseAddress else { return }
-        let rowBytes = (x1 - x0) * 4
-        for y in y0..<y1 {
-            let offset = (y * image.width + x0) * 4
-            hasher.update(bufferPointer: UnsafeRawBufferPointer(start: base.advanced(by: offset), count: rowBytes))
-        }
-    }
-    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    return canvasInteriorHashPixels(pixels: image.pixels, width: image.width, height: image.height,
+                                    insetLeft: insetLeft, insetTop: insetTop,
+                                    insetRight: insetRight, insetBottom: insetBottom)
 }

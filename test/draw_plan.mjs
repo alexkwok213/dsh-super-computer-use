@@ -167,3 +167,38 @@ test('cu_paint refuses to dispatch without a target or source', async () => {
   const bgStrokes = calls.filter((argv) => argv[0] === 'strokes').at(-1);
   assert.ok(bgStrokes.includes('--background'));
 });
+
+test('cu drawplan --mode vector builds real vector batches and cu_paint_plan forwards mode', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vector-plan-cli-'));
+  try {
+    const planPath = join(dir, 'vec.plan.json');
+    const prevPath = join(dir, 'vec.preview.png');
+    const summary = run([
+      'drawplan', '--image', IMAGE, '--rect', '100,120,400,400',
+      '--mode', 'vector', '--bg', 'auto', '--grid', '96', '--colors', '8',
+      '--out', planPath, '--preview', prevPath,
+    ]);
+    assert.equal(summary.ok, true);
+    assert.equal(summary.mode, 'vector');
+    assert.ok(Array.isArray(summary.batches) && summary.batches.length >= 1);
+    assert.ok(summary.totalStrokes >= 1);
+    const plan = JSON.parse(readFileSync(planPath, 'utf8'));
+    assert.equal(plan.version, 2);
+    assert.equal(plan.mode, 'vector');
+    assert.equal(plan.batches.length, summary.batches.length);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  const { call, calls } = harness();
+  const wrapped = await call('cu_paint_plan', {
+    imagePath: IMAGE, x: 100, y: 120, width: 400, height: 400,
+    mode: 'vector', bgMode: 'auto', grid: 360, colors: 20, pid: 42, windowId: 7,
+  });
+  assert.equal(wrapped.ok, true);
+  const forwarded = calls.find((argv) => argv[0] === 'drawplan' && argv.includes('vector'));
+  assert.ok(forwarded);
+  assert.equal(forwarded[forwarded.indexOf('--grid') + 1], '360');
+  assert.equal(forwarded[forwarded.indexOf('--colors') + 1], '20');
+  assert.equal(forwarded[forwarded.indexOf('--bg') + 1], 'auto');
+});

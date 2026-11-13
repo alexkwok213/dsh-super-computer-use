@@ -6,13 +6,21 @@ import { join } from 'node:path';
 import { CuSessionManager } from '../lib/core.mjs';
 import { registerCuTools } from '../lib/index.mjs';
 
-function harness({ capture = true, matched = true, swatch = true, vision = true, attachment = true, region = true, widthMatched = true, externalImages = null, drawingTool = 'Monoline', shotWidth = 200, shotHeight = 200, roiHash = null, varyAfterFile = false } = {}) {
-  const tools = new Map(), calls = [], feedback = [];
+function harness({ capture = true, matched = true, swatch = true, vision = true, attachment = true, region = true, widthMatched = true, externalImages = null, drawingTool = 'Monoline', shotWidth = 200, shotHeight = 200, roiHash = null, varyAfterFile = false, verifyAfterHash = null, preferDaemon = false } = {}) {
+  const tools = new Map(), calls = [], feedback = [], daemonCalls = [];
   const ctx = { tools: { register(def) { tools.set(def.name, def); return () => {}; } }, get: key => key === 'llm' ? { resolveModelInfo: async () => ({ inputModalities: vision ? ['image'] : ['text'] }) } : key === 'attachments' ? { saveImage: async () => attachment ? ({ attachmentId: 'after', mediaType: 'image/png', bytes: 100, width: 20, height: 20 }) : null } : undefined };
   const manager = new CuSessionManager();
   manager.activeSession = { pid: 42, windowId: 7 };
   manager.writeActivity = () => {};
   manager.showActionLabel = (...args) => feedback.push(args);
+  if (preferDaemon) {
+    manager._preferDaemonForPaint = true;
+    manager.captureShotToFile = async (opts) => {
+      daemonCalls.push(opts);
+      copyFileSync('assets/icon.png', opts.out);
+      return { ok: true, out: opts.out, source: 'scstream', timestampNs: '500', origin: { x: 0, y: 0 }, size: { width: shotWidth, height: shotHeight }, scale: 1 };
+    };
+  }
   let shotCount = 0;
   manager.exec = async argv => {
     calls.push(argv);
@@ -27,12 +35,12 @@ function harness({ capture = true, matched = true, swatch = true, vision = true,
     if (argv[0] === 'snapshot') return { ok: true, nodes: [{ title: 'Choose a color', x: 10, y: 10, w: 20, h: 20 }, ...(drawingTool ? [{ title: 'Drawing tool', value: drawingTool, x: 40, y: 10, w: 20, h: 20 }] : [])] };
     if (argv[0] === 'paint-swatch') return { ok: true, matched: swatch };
     if (argv[0] === 'paint-canvas-hash' && roiHash) return { ok: true, hash: typeof roiHash === 'function' ? roiHash(argv) : roiHash };
-    if (argv[0] === 'paint-verify') return { ok: true, matched, widthMatched, regionMatched: true, measuredWidth: widthMatched ? 2 : 12, failedStrokes: matched ? [] : [0] };
-    if (argv[0] === 'strokes') return { ok: true, strokes: JSON.parse(readFileSync(argv[argv.indexOf('--file') + 1], 'utf8')).strokes.length };
+    if (argv[0] === 'paint-verify') return { ok: true, matched, widthMatched, regionMatched: true, measuredWidth: widthMatched ? 2 : 12, failedStrokes: matched ? [] : [0], ...(verifyAfterHash ? { afterHash: verifyAfterHash } : {}) };
+    if (argv[0] === 'strokes') return { ok: true, finishedNs: '123456', strokes: JSON.parse(readFileSync(argv[argv.indexOf('--file') + 1], 'utf8')).strokes.length };
     return { ok: true };
   };
   registerCuTools({ ctx, manager, config: { autoSession: false } });
-  return { calls, feedback, call: args => tools.get('cu_paint').execute({ ...(region ? { paintRegion: [[0, 0], [shotWidth, 0], [shotWidth, shotHeight], [0, shotHeight]], brushWidth: 2 } : {}), ...args }, { signal: new AbortController().signal, agent: { options: { provider: 'p', model: 'm' } }, ...(externalImages ? { externalImages } : {}) }) };
+  return { calls, daemonCalls, feedback, call: args => tools.get('cu_paint').execute({ ...(region ? { paintRegion: [[0, 0], [shotWidth, 0], [shotWidth, shotHeight], [0, shotHeight]], brushWidth: 2 } : {}), ...args }, { signal: new AbortController().signal, agent: { options: { provider: 'p', model: 'm' } }, ...(externalImages ? { externalImages } : {}) }) };
 }
 
 test('painting stops before input if before-capture fails', async () => {
@@ -315,5 +323,39 @@ test('canvas interior ROI hash prevents chrome-only PNG diffs from triggering pa
     const second = await h.call({ ...args, offset: 1, reviewToken: first.reviewToken, review: 'The first stroke inside the interior canvas is crisp and matches expected thickness.' });
     assert.equal(second.ok, true);
     assert.ok(h.calls.some(x => x[0] === 'paint-canvas-hash'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('aggregate verifyMode allows 64 strokes, forwards spacing/insets, reuses afterHash and prefers SCStream daemon capture', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'paint-agg-test-'));
+  try {
+    const strokes = Array.from({ length: 25 }, (_, i) => [[20, 20 + i * 2], [60, 20 + i * 2]]);
+    const planFile = join(dir, 'vec.plan.json');
+    writeFileSync(planFile, JSON.stringify({
+      version: 2,
+      mode: 'vector',
+      batches: [{ index: 0, role: 'ink', tool: 'Monoline', brushWidthName: 'Medium', brushWidth: 5, hex: '#212939', count: 25, strokes }],
+    }));
+    const h = harness({ shotWidth: 800, shotHeight: 600, roiHash: 'inline-after-hash', verifyAfterHash: 'inline-after-hash', preferDaemon: true });
+    assert.equal((await h.call({ pid: 42, windowId: 7, planPath: planFile, layerIndex: 0, count: 65, verifyMode: 'aggregate', authorizeForeground: true })).error, 'invalid_stroke_count');
+    assert.equal((await h.call({ pid: 42, windowId: 7, planPath: planFile, layerIndex: 0, count: 25, verifyMode: 'bogus', authorizeForeground: true })).error, 'invalid_verify_mode');
+
+    const res = await h.call({
+      pid: 42, windowId: 7, planPath: planFile, layerIndex: 0, count: 25,
+      verifyMode: 'aggregate', spacing: 10, paceMs: 2, authorizeForeground: true,
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.strokes, 25);
+    assert.equal(res.verification.verifyMode, 'aggregate');
+    assert.equal(res.captureSource.before, 'scstream');
+    assert.equal(res.captureSource.after, 'scstream');
+    assert.equal(h.daemonCalls.length, 2);
+    assert.equal(h.daemonCalls[1].minTimestampNs, '123456');
+    const strokesCall = h.calls.find(x => x[0] === 'strokes');
+    assert.equal(strokesCall[strokesCall.indexOf('--spacing') + 1], '10');
+    const verifyCall = h.calls.find(x => x[0] === 'paint-verify');
+    assert.ok(verifyCall?.includes('--aggregate'));
+    assert.ok(verifyCall?.includes('--inset-top'));
+    assert.equal(h.calls.filter(x => x[0] === 'paint-canvas-hash').length, 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
