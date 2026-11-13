@@ -322,6 +322,20 @@ func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: In
     return true
 }
 
+/// Combined aggregate Fill verification: validates solid interior fill on every
+/// polygon via `inspectFillInterior(..., aggregate: true)` and confirms any
+/// changed perimeter pixels predominantly match `expected`, without requiring
+/// >=70% outer-edge proximity when PencilKit Fill rounds corners inward.
+func verifyAggregateFill(before: [UInt8], after: [UInt8], width: Int, height: Int,
+                         paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8),
+                         agg: AggregatePaintInspection) -> Bool {
+    guard inspectFillInterior(before: before, after: after, width: width, height: height,
+                              paths: paths, expected: expected, aggregate: true) else {
+        return false
+    }
+    return agg.changedPixels == 0 || agg.matchedPixels * 10 >= agg.changedPixels * 3
+}
+
 /// Aggregate verification for multi-stroke batches where adjacent or layered
 /// strokes intentionally touch, blend or overlap inside paintRegion.
 struct AggregatePaintInspection {

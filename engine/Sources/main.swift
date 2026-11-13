@@ -6333,13 +6333,13 @@ case "paint-verify":
         result["coveredSamples"] = agg.coveredSamples
         result["regionMatched"] = regionMatched
         if args.flag("fill") {
-            let fillOk = inspectFillInterior(before: before.pixels, after: after.pixels,
+            let fillOk = verifyAggregateFill(before: before.pixels, after: after.pixels,
                                              width: before.width, height: before.height, paths: paths,
-                                             expected: expectedRGB, aggregate: true)
+                                             expected: expectedRGB, agg: agg)
             result["fillMode"] = true
             result["widthMatched"] = fillOk
             result["measuredWidth"] = args.double("expected-width") ?? 0
-            result["matched"] = agg.matched && fillOk && regionMatched
+            result["matched"] = fillOk && regionMatched
         } else {
             result["widthMatched"] = agg.matched
             result["measuredWidth"] = args.double("expected-width") ?? 0

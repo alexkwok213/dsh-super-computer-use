@@ -180,6 +180,11 @@ struct PaintVerificationTest {
         let highlightPath = [[CGPoint(x: 10, y: 22), CGPoint(x: 50, y: 22)]]
         precondition(inspectAggregatePaint(before: whiteHighlightBefore, after: whiteHighlightAfter, width: 80, height: 80, paths: highlightPath, expected: (251, 251, 252), brushRadius: 2).matched, "near-white highlight crossing into white must pass when >=20% changed")
         precondition(!inspectAggregatePaint(before: widthBefore, after: widthBefore, width: 80, height: 80, paths: highlightPath, expected: (251, 251, 252), brushRadius: 2).matched, "near-white stroke on blank white must fail")
+        // Inset corner-rounded fill (like small cheek/shadow polygons) passes verifyAggregateFill even when outer edge agg coverage < 70%
+        let insetEdgeAggMissed = AggregatePaintInspection(matched: false, changedPixels: 200, matchedPixels: 170, totalSamples: 50, coveredSamples: 31)
+        precondition(verifyAggregateFill(before: widthBefore, after: smallOnlyAfter, width: 80, height: 80, paths: [smallA, smallB], expected: (173, 170, 174), agg: insetEdgeAggMissed), "verifyAggregateFill accepts solid inset fill when boundary color match >=30%")
+        let wrongEdgeSpillAgg = AggregatePaintInspection(matched: false, changedPixels: 200, matchedPixels: 20, totalSamples: 50, coveredSamples: 31)
+        precondition(!verifyAggregateFill(before: widthBefore, after: smallOnlyAfter, width: 80, height: 80, paths: [smallA, smallB], expected: (173, 170, 174), agg: wrongEdgeSpillAgg), "verifyAggregateFill rejects severe wrong-color perimeter spill")
         // canvasInteriorHash ignores outer inset chrome and detects interior paint
         func writeRGBA(_ bytes: [UInt8], width w: Int, height h: Int) -> URL {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
