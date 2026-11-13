@@ -19,15 +19,23 @@ function harness() {
  return {previews,events,children};
 }
 const wait = ms => new Promise(resolve=>setTimeout(resolve,ms));
+async function waitUntil(pred,timeoutMs=2000) {
+ const deadline=Date.now()+timeoutMs;
+ while(!pred()) {
+  if(Date.now()>=deadline) break;
+  await wait(20);
+ }
+}
 test('closing one native preview leaves the sibling alive and responsive',async()=>{
  const {previews,events,children}=harness();
  try {
   previews.open({targetId:'a',generation:1,windowId:11});
   previews.open({targetId:'b',generation:2,windowId:22});
-  await wait(150);
+  await waitUntil(()=>events.some(([id,e])=>id.targetId==='a'&&e.event==='ready')&&events.some(([id,e])=>id.targetId==='b'&&e.event==='ready'));
   const exited=once(children[0],'exit');
   previews.close('a'); await exited;
-  previews.send('b',{cmd:'ping'}); await wait(80);
+  previews.send('b',{cmd:'ping'});
+  await waitUntil(()=>events.some(([id,e])=>id.targetId==='b'&&e.event==='ping'));
   assert.ok(events.some(([id,e])=>id.targetId==='b'&&e.event==='ping'));
   assert.equal(children[1].exitCode,null);
  } finally {previews.close();}
@@ -36,12 +44,12 @@ test('a replaced preview cannot deliver events to its new incarnation',async()=>
  const {previews,events,children}=harness();
  try {
   previews.open({targetId:'a',generation:1,windowId:11});
-  await wait(100);
+  await waitUntil(()=>events.some(([id,e])=>id.generation===1&&e.event==='ready'));
   previews.open({targetId:'a',generation:2,windowId:12});
   const before=events.length;
   children[0].stdout.emit('data',Buffer.from('{"event":"stop-target"}\n'));
   assert.equal(events.length,before);
-  await wait(100);
+  await waitUntil(()=>events.some(([id,e])=>id.generation===2&&e.event==='ready'));
   assert.ok(events.some(([id,e])=>id.generation===2&&e.event==='ready'));
  } finally {previews.close();}
 });
