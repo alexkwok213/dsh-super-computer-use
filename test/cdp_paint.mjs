@@ -105,7 +105,7 @@ test('owned debug Chrome: launch, attach, and paint a canvas (skipped without Ch
   try {
     let info;
     try {
-      info = await launchDebugChrome({ profileDir: dir, port, startUrl, timeoutMs: 20000 });
+      info = await launchDebugChrome({ profileDir: dir, port, startUrl, syncLogin: false, timeoutMs: 20000 });
     } catch (err) {
       if (err && (err.code === 'EPERM' || /EPERM|cdp_launch_timeout/.test(String(err.message ?? err)))) {
         t.skip(`sandbox blocks launching Chrome (${err.code || err.message})`);

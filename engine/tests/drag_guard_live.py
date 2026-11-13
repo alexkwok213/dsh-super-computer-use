@@ -32,7 +32,7 @@ let window = NSWindow(contentRect: NSRect(x: 300, y: 300, width: 480, height: 32
 window.title = "CU drag guard fixture"
 window.contentView = DragView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
 if CommandLine.arguments.contains("edge"), let screen = NSScreen.main {
-    window.setFrameTopLeftPoint(NSPoint(x: 14, y: screen.frame.maxY - 43))
+    window.setFrameTopLeftPoint(NSPoint(x: 14, y: screen.visibleFrame.maxY - 1))
 }
 window.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
@@ -86,6 +86,8 @@ with tempfile.TemporaryDirectory(prefix="cu-drag-guard-") as tmp:
         assert select.select([halo.stdout], [], [], 10)[0], "halo did not start"
         assert json.loads(halo.stdout.readline()).get("halo") == "shown"
         time.sleep(0.4)
+        fm = run("frontmost")
+        assert fm.get("pid") == pid, ("halo stole frontmost from active target", fm)
         halo_windows = [w for w in run("windows").get("windows", []) if w["pid"] == halo.pid]
         assert halo_windows, halo_windows
         frame = max(halo_windows, key=lambda w: w["bounds"]["width"] * w["bounds"]["height"])["bounds"]
@@ -108,6 +110,23 @@ with tempfile.TemporaryDirectory(prefix="cu-drag-guard-") as tmp:
                 if "UP\n" in events:
                     break
         assert "DOWN\n" in events and "DRAG\n" in events and "UP\n" in events, events
+        stroke_file = tmp / "strokes.json"
+        stroke_file.write_text(json.dumps({
+            "strokes": [
+                {"points": [[round(b["x"] + b["width"] / 2 - 20), round(b["y"] + b["height"] / 2)],
+                            [round(b["x"] + b["width"] / 2 + 30), round(b["y"] + b["height"] / 2)]]}
+            ]
+        }))
+        stroke_res = run("strokes", "--window", str(window), "--pid", str(pid), "--file", str(stroke_file))
+        assert stroke_res.get("ok") is True, ("valid strokes refused through halo", stroke_res)
+        stroke_events = ""
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if select.select([app.stdout], [], [], 0.1)[0]:
+                stroke_events += os.read(app.stdout.fileno(), 4096).decode()
+                if "UP\n" in stroke_events:
+                    break
+        assert "DOWN\n" in stroke_events and "DRAG\n" in stroke_events and "UP\n" in stroke_events, stroke_events
         if os.environ.get("CU_DRAG_EDGE") != "1":
             blocker = subprocess.Popen([str(fixture), "blocker"], stdout=subprocess.PIPE, text=True)
             assert select.select([blocker.stdout], [], [], 10)[0], "blocker did not open"

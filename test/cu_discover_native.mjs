@@ -23,8 +23,8 @@ const AX = {
   ok: true,
   count: 2,
   nodes: [
-    { role: 'AXButton', title: 'Choose a color', value: 'black', x: 629, y: 978, w: 25, h: 25 },
-    { role: 'AXButton', title: 'Choose a drawing tool', value: '', x: 605, y: 982, w: 16, h: 16 },
+    { ref: 'k0.1.7.0', role: 'AXButton', title: 'Choose a color', value: 'black', x: 629, y: 978, w: 25, h: 25 },
+    { ref: 'k0.0.5.1', role: 'AXButton', title: 'Choose a drawing tool', value: '', x: 605, y: 982, w: 16, h: 16 },
     { role: 'AXGroup', title: '', value: '', x: 0, y: 33, w: 1204, h: 993 },
   ],
 };
@@ -94,6 +94,7 @@ test('native discovery by pid/windowId enumerates AX controls and builds 5 spati
   assert.equal(r.playbook.id, 'apple-freeform');
   assert.equal(r.counts.controls, 2, 'only named controls are listed');
   assert.deepEqual(r.controls.buttons.map((c) => c.title), ['Choose a color', 'Choose a drawing tool']);
+  assert.deepEqual(r.controls.buttons.map((c) => c.ref), ['k0.1.7.0', 'k0.0.5.1']);
   assert.ok(r.zones && Array.isArray(r.zones.bottomBarOrTimeline), '5 spatial UI zones are returned');
   assert.equal(r.zones.bottomBarOrTimeline.length, 2, 'Freeform bottom drawing tools land in bottomBarOrTimeline');
   assert.ok(r.onboarding && Array.isArray(r.onboarding.steps), 'onboarding plan is returned');

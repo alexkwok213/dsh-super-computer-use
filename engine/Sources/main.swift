@@ -293,9 +293,14 @@ func frontmost() -> (pid: pid_t, app: String) {
     // A background service's NSWorkspace.frontmostApplication can be stale: it
     // reported DeepSeek Harness while the actual frontmost app was TextEdit.
     // The topmost normal window is the same signal a person sees, and it stays
-    // live in this process. Fall back to NSWorkspace when no normal window is
-    // on screen (menu-bar-only apps).
-    if let top = onScreenWindows().first {
+    // live in this process. Ignore our own passthrough halo border panels so
+    // an active halo never reports "cu" as the frontmost app. Fall back to
+    // NSWorkspace when no normal window is on screen (menu-bar-only apps).
+    let visible = onScreenWindows()
+    let allWindows = visible.contains(where: { isOwnHelperProcess($0.pid) })
+        ? onScreenWindows(includeSmall: true)
+        : visible
+    if let top = visible.first(where: { !isOwnPassthroughHalo($0, targetPid: nil, windows: allWindows) }) {
         return (top.pid, top.app)
     }
     guard let app = NSWorkspace.shared.frontmostApplication else { return (0, "") }
@@ -1113,28 +1118,6 @@ func hostAppName() -> String? {
     return nil
 }
 
-func isOwnPassthroughHalo(_ window: WindowInfo, targetPid: pid_t, windows: [WindowInfo]) -> Bool {
-    var buffer = [CChar](repeating: 0, count: 4096)
-    guard proc_pidpath(window.pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
-    let ownerPath = URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
-    let ownPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
-    guard ownerPath == ownPath else { return false }
-    func matches(_ a: CGRect, _ b: CGRect) -> Bool {
-        // AppKit can nudge a panel a couple of points away from the menu bar.
-        abs(a.minX - b.minX) <= 3 && abs(a.minY - b.minY) <= 3 &&
-        abs(a.width - b.width) <= 3 && abs(a.height - b.height) <= 3
-    }
-    // A halo process owns exactly this full-size click-through panel plus a
-    // separate, smaller input-receiving stop panel. Match both and the target
-    // frame; never ignore the stop panel or another process's window.
-    let frame = window.bounds
-    let width = min(300, max(80, frame.width - 32))
-    let control = CGRect(x: (frame.midX - width / 2).rounded(), y: frame.minY + 18,
-                         width: width, height: 28)
-    return windows.contains { $0.pid == targetPid && matches(frame, $0.bounds.insetBy(dx: -12, dy: -12)) }
-        && windows.contains { $0.pid == window.pid && $0.id != window.id && matches($0.bounds, control) }
-}
-
 func isOwnHelperProcess(_ pid: pid_t) -> Bool {
     var buffer = [CChar](repeating: 0, count: 4096)
     guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
@@ -1142,10 +1125,60 @@ func isOwnHelperProcess(_ pid: pid_t) -> Bool {
         URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
 }
 
+func isOwnPassthroughHalo(_ window: WindowInfo, targetPid: pid_t?, windows: [WindowInfo]) -> Bool {
+    guard window.layer == 0, window.bounds.height > 32 else { return false }
+    guard isOwnHelperProcess(window.pid) else { return false }
+    // A halo process owns this full-size click-through panel plus a separate,
+    // smaller input-receiving stop panel. Match both against a target window,
+    // tolerating AppKit clamping the border panel at the menu bar or screen
+    // edges; never ignore the stop panel or another process's window.
+    let frame = window.bounds
+    let width = min(300, max(80, frame.width - 32))
+    let expectedControl = CGRect(
+        x: (frame.midX - width / 2).rounded(),
+        y: frame.minY + 18,
+        width: width,
+        height: 28
+    )
+    let hasControl = windows.contains {
+        $0.pid == window.pid &&
+        $0.id != window.id &&
+        $0.layer == 0 &&
+        abs($0.bounds.minX - expectedControl.minX) <= 3 &&
+        abs($0.bounds.width - expectedControl.width) <= 3 &&
+        abs($0.bounds.height - expectedControl.height) <= 3 &&
+        $0.bounds.minY >= frame.minY &&
+        $0.bounds.maxY <= frame.maxY &&
+        abs($0.bounds.minY - expectedControl.minY) <= 16
+    }
+    guard hasControl else { return false }
+    return windows.contains { candidate in
+        guard candidate.id != window.id,
+              candidate.layer == 0,
+              candidate.bounds.width >= 40,
+              candidate.bounds.height >= 40 else { return false }
+        if let targetPid = targetPid {
+            guard candidate.pid == targetPid else { return false }
+        } else {
+            guard !isOwnHelperProcess(candidate.pid) else { return false }
+        }
+        let target = candidate.bounds
+        let inter = frame.intersection(target)
+        let targetArea = target.width * target.height
+        guard !inter.isNull, targetArea > 0 else { return false }
+        let overlapRatio = (inter.width * inter.height) / targetArea
+        return overlapRatio >= 0.75 &&
+            frame.width >= target.width * 0.75 - 4 && frame.width <= target.width + 28 &&
+            frame.height >= target.height * 0.75 - 4 && frame.height <= target.height + 28 &&
+            abs(frame.midX - target.midX) <= 32 &&
+            abs(frame.midY - target.midY) <= 64
+    }
+}
+
 func windowAt(_ point: CGPoint, targetPid: pid_t? = nil) -> WindowInfo? {
     let windows = onScreenWindows(includeSmall: true)
     return windows.first { window in
-        window.bounds.contains(point) && !(targetPid.map { isOwnPassthroughHalo(window, targetPid: $0, windows: windows) } ?? false)
+        window.bounds.contains(point) && !isOwnPassthroughHalo(window, targetPid: targetPid, windows: windows)
     }
 }
 
@@ -1886,7 +1919,7 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
     panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications,
                                 .fullScreenAuxiliary, .stationary]
     panel.ignoresMouseEvents = true
-    panel.contentView = HaloView(frame: NSRect(origin: .zero, size: frame.size))
+    panel.contentView = HaloView(frame: NSRect(origin: .zero, size: panel.frame.size))
 
     // Only this small panel receives input. NSView.hitTest cannot make the
     // window-sized panel pass clicks through to a different application.
@@ -1894,7 +1927,7 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
         let width = min(CGFloat(300), max(CGFloat(80), target.width - 32))
         return NSRect(x: (target.midX - width / 2).rounded(), y: target.maxY - 46, width: width, height: 28)
     }
-    let control = HaloPanel(contentRect: controlFrame(frame),
+    let control = HaloPanel(contentRect: controlFrame(panel.frame),
         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     control.isOpaque = false
     control.backgroundColor = .clear
@@ -1929,6 +1962,8 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
     // Query only the target: no window titles, app lookups or full desktop sweep.
     // Geometry follows at 30 Hz; breathing remains render-server driven.
     var targetVisible = true
+    var lastTargetBounds = window.bounds
+    var wasHidden = false
     let follow = Timer(timeInterval: 1.0 / 30.0, repeats: true) { _ in
         guard let rows = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowId)
                 as? [[String: Any]],
@@ -1938,6 +1973,7 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
               let bounds = CGRect(dictionaryRepresentation: rawBounds),
               bounds.width >= 40, bounds.height >= 40 else {
             targetVisible = false
+            wasHidden = true
             panel.orderOut(nil)
             control.orderOut(nil)
             // Ordered-out/minimized windows can disappear from the CG list.
@@ -1952,16 +1988,23 @@ func runHalo(windowId: CGWindowID, seconds: Double, label: String) -> Never {
         targetVisible = row[kCGWindowIsOnscreen as String] as? Bool == true
             && (row[kCGWindowAlpha as String] as? Double ?? 1) > 0.01
         if !targetVisible {
+            wasHidden = true
             panel.orderOut(nil)
             control.orderOut(nil)
             return
         }
-        let next = cocoaFrame(for: bounds).insetBy(dx: -12, dy: -12)
-        if next != panel.frame {
+        if wasHidden || bounds != lastTargetBounds {
+            lastTargetBounds = bounds
+            let next = cocoaFrame(for: bounds).insetBy(dx: -12, dy: -12)
             panel.setFrame(next, display: true)
-            panel.contentView?.frame = NSRect(origin: .zero, size: next.size)
-            control.setFrame(controlFrame(next), display: true)
+            panel.contentView?.frame = NSRect(origin: .zero, size: panel.frame.size)
+            control.setFrame(controlFrame(panel.frame), display: true)
             view.frame = NSRect(origin: .zero, size: control.frame.size)
+            if wasHidden {
+                wasHidden = false
+                panel.order(.above, relativeTo: Int(windowId))
+                control.order(.above, relativeTo: panel.windowNumber)
+            }
         }
     }
     RunLoop.main.add(follow, forMode: .common)

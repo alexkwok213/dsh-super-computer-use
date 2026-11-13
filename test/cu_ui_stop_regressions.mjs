@@ -357,6 +357,94 @@ test("S1: an explicit cu_session start clears the user stop and input works agai
   assert.ok(h.nativeInputs.some((argv) => argv[0] === "click"), "the explicit restart must restore input");
 });
 
+test("non-paused turn_end or stop(pause:false) lets subsequent turn actions run without cu_session(start)", async () => {
+  const h = createToolHarness();
+  await h.call("cu_session", {
+    action: "start",
+    windowId: 7,
+    pid: 42,
+    preview: false,
+    halo: false,
+    capsule: false,
+    cursor: false,
+    dockDsh: false,
+    splitScreen: false,
+  });
+  const cuSessionId = h.registry.cuSessionId();
+  await h.manager.stopVisualSession({ reason: "turn_end" });
+  h.registry.markStopped("chat-a", { cleanupState: "unknown", cuSessionId });
+  assert.equal(h.manager.pauseLatched, false);
+
+  const before = h.nativeInputs.length;
+  const nextTurnClick = await h.call("cu_click", {
+    x: 20,
+    y: 30,
+    windowId: 7,
+    pid: 42,
+    observe: false,
+    preview: false,
+  });
+  assert.notEqual(nextTurnClick.ok, false, JSON.stringify(nextTurnClick));
+  assert.equal(nextTurnClick.error, undefined);
+  assert.equal(h.nativeInputs.length, before + 1);
+  assert.equal(h.nativeInputs.at(-1)[0], "click");
+
+  await h.call("cu_session", { action: "stop", pause: false });
+  assert.equal(h.manager.pauseLatched, false);
+
+  const nextKey = await h.call("cu_key", {
+    windowId: 7,
+    pid: 42,
+    name: "return",
+    observe: false,
+    preview: false,
+  });
+  assert.notEqual(nextKey.ok, false, JSON.stringify(nextKey));
+  assert.equal(h.nativeInputs.at(-1)[0], "key");
+
+  await h.call("cu_session", { action: "stop", pause: true });
+  assert.equal(h.manager.pauseLatched, true);
+  await assert.rejects(
+    h.call("cu_click", { x: 20, y: 30, windowId: 7, pid: 42, observe: false, preview: false }),
+    (error) => error?.code === "PAUSED_BY_USER",
+  );
+});
+
+test("an action arriving while an unpaused turn_end stop is still cleaning up waits and succeeds", async () => {
+  const h = createToolHarness();
+  let finishStop;
+  h.manager.stopScreenIndicator = () =>
+    new Promise((resolve) => {
+      finishStop = resolve;
+    });
+  await h.call("cu_session", {
+    action: "start",
+    windowId: 7,
+    pid: 42,
+    preview: false,
+    halo: false,
+    capsule: false,
+    cursor: false,
+    dockDsh: false,
+    splitScreen: false,
+  });
+  const pendingTurnEnd = h.manager.stopVisualSession({ reason: "turn_end" });
+  const clickPromise = h.call("cu_click", {
+    x: 15,
+    y: 25,
+    windowId: 7,
+    pid: 42,
+    observe: false,
+    preview: false,
+  });
+  await new Promise((r) => setTimeout(r, 15));
+  finishStop?.();
+  await pendingTurnEnd;
+  const clickResult = await clickPromise;
+  assert.notEqual(clickResult.ok, false, JSON.stringify(clickResult));
+  assert.equal(clickResult.error, undefined);
+});
+
 test("a stop click after a natural end still latches the user pause", async () => {
   const h = createToolHarness();
   await h.call("cu_session", {
