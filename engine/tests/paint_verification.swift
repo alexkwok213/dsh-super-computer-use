@@ -75,6 +75,26 @@ struct PaintVerificationTest {
         let complex = inspectPaint(before: largeBefore, after: largeAfter, width: side, height: side, paths: [manyPoints], expected: (0, 0, 0))
         precondition(complex.matched, "a complete complex stroke should match")
         precondition(Date().timeIntervalSince(started) < 8, "complex stroke verification must finish promptly")
+        let widthBefore = [UInt8](repeating: 255, count: 80 * 80 * 4)
+        func band(_ thickness: Int) -> [UInt8] {
+            var bytes = widthBefore
+            for y in (40 - thickness / 2)..<(40 - thickness / 2 + thickness) { for x in 10...70 {
+                let i = (y * 80 + x) * 4
+                bytes[i] = 220; bytes[i + 1] = 20; bytes[i + 2] = 30
+            } }
+            return bytes
+        }
+        let widthPath = [[CGPoint(x: 10, y: 40), CGPoint(x: 70, y: 40)]]
+        let densePath = [Array(10...70).map { CGPoint(x: $0, y: 40) }]
+        precondition(inspectBrushWidth(before: widthBefore, after: band(6), width: 80, height: 80, paths: densePath, expectedWidth: 6).matched, "dense short segments must not falsely reject a valid stroke")
+        let correctWidth = inspectBrushWidth(before: widthBefore, after: band(6), width: 80, height: 80, paths: widthPath, expectedWidth: 6)
+        precondition(correctWidth.matched && correctWidth.measuredWidth == 6, "actual six pixel mark should pass")
+        precondition(!inspectBrushWidth(before: widthBefore, after: band(1), width: 80, height: 80, paths: widthPath, expectedWidth: 6).matched, "thin arcs are not a wide fill brush")
+        precondition(!inspectBrushWidth(before: widthBefore, after: band(18), width: 80, height: 80, paths: widthPath, expectedWidth: 6).matched, "too-wide mark must stop before continuation")
+        precondition(!inspectBrushWidth(before: widthBefore, after: widthBefore, width: 80, height: 80, paths: widthPath, expectedWidth: 6).matched, "no changed pixels cannot establish brush width")
+        let allowed = [CGPoint(x: 5, y: 37), CGPoint(x: 75, y: 37), CGPoint(x: 75, y: 44), CGPoint(x: 5, y: 44)]
+        precondition(inspectPaintRegion(before: widthBefore, after: band(6), width: 80, height: 80, paths: widthPath, region: allowed, expectedWidth: 6), "in-region marks pass")
+        precondition(!inspectPaintRegion(before: widthBefore, after: band(18), width: 80, height: 80, paths: widthPath, region: allowed, expectedWidth: 6), "actual paint spilling outside its region must fail")
         print("paint verification tests passed")
     }
 }

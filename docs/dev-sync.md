@@ -91,3 +91,35 @@ npm run dev:sync -- --json             # 输出机器可读结果
 - 不修改 `app.asar`，不新开控制端口，不依赖私有缓存清理。
 - 不启动脱离插件管理的临时常驻服务。
 - `dev:sync` 本身不提交、不推送、不发布；每轮强制发布由 `npm run release -- patch|minor|major` 完成，见 [`release.md`](release.md)。
+
+## Codex / external MCP clients
+
+`bin/dsh-mcp.mjs` is a stdio client for the live plugin's authenticated Unix socket.
+It never creates a Host or native service. DSH owns the socket and removes it on
+plugin unload. Discovery credentials are local to `~/.cu/dsh-tools.json` (mode 0600);
+never copy that file or print its token. Missing DSH returns `bridge_unavailable`
+without dispatching input or falling back to raw CLI commands.
+
+Configure Codex with a separate `dsh-super-computer-use` MCP entry pointing to
+`node /absolute/path/to/dsh-super-computer-use/bin/dsh-mcp.mjs`. Keep other Computer
+Use products separate. New MCP configuration must be loaded by the client before
+claiming those tools are available in a chat. `tools/list` and a real `cu_status`
+call should report the managed Host identity. Image results use MCP image blocks;
+the transport can deliver pixels but DSH cannot identify an external model or
+prove it understood those pixels.
+
+Native `cu_paint` requires an intended `paintRegion` polygon and an observed
+`brushWidth`, in current logical screen points. Its result checks actual changed
+pixels for color, measured width and region containment. The next call must carry
+the returned `reviewToken` and a concrete `review` comparing the canvas to the
+reference. A changed frame returns a new image/token without drawing. Offset
+continuation is bound to the same source, color, region and width; tokens expire
+in five minutes and are consumed before input. `artworkComplete:false` remains
+literal even when all pixel checks pass. Shape, region selection and final
+likeness still require visual judgment.
+
+For development diagnostics, `CU_DSH_CLIENT_ID` can keep one explicitly named
+client identity across one-shot `--call cu_status` invocations; the normal MCP
+client uses one random identity for its stdio lifetime. One-shot calls take a
+JSON body on stdin and may return image data, so save/filter output rather than
+printing full responses. Never automatically replay an uncertain mutation.

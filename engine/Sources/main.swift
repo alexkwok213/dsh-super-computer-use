@@ -5876,7 +5876,25 @@ case "paint-verify":
     let inspection = inspectPaint(before: before.pixels, after: after.pixels,
                                   width: before.width, height: before.height, paths: paths,
                                   expected: (UInt8((rgb >> 16) & 255), UInt8((rgb >> 8) & 255), UInt8(rgb & 255)))
-    emit(["ok": true, "matched": inspection.matched, "failedStrokes": inspection.failedStrokes])
+    var result: [String: Any] = ["ok": true, "matched": inspection.matched, "failedStrokes": inspection.failedStrokes]
+    if let expectedWidth = args.double("expected-width") {
+        let brush = inspectBrushWidth(before: before.pixels, after: after.pixels,
+                                      width: before.width, height: before.height, paths: paths,
+                                      expectedWidth: expectedWidth * scale)
+        result["widthMatched"] = brush.matched
+        result["measuredWidth"] = brush.measuredWidth / scale
+        var regionMatched = false
+        if let root = object as? [String: Any], let rawRegion = root["paintRegion"] as? [[Double]],
+           rawRegion.allSatisfy({ $0.count == 2 }) {
+            let region = rawRegion.map { CGPoint(x: ($0[0] - ox) * scale, y: ($0[1] - oy) * scale) }
+            regionMatched = inspectPaintRegion(before: before.pixels, after: after.pixels,
+                                              width: before.width, height: before.height, paths: paths,
+                                              region: region, expectedWidth: expectedWidth * scale)
+        }
+        result["regionMatched"] = regionMatched
+        result["matched"] = inspection.matched && brush.matched && regionMatched
+    }
+    emit(result)
 
 case "strokes":
     let cancellation = PaintCancellation()

@@ -128,3 +128,97 @@ func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
     }
     return PaintInspection(matched: failed.isEmpty, failedStrokes: failed)
 }
+
+struct BrushWidthInspection {
+    let matched: Bool
+    let measuredWidth: Double
+}
+
+/// Measure contiguous changed pixels across the middle of dispatched segments.
+/// Existing marks or overlap can make width unobservable: fail closed rather
+/// than infer the selected tool's width from the requested width.
+func inspectBrushWidth(before: [UInt8], after: [UInt8], width: Int, height: Int,
+                       paths: [[CGPoint]], expectedWidth: Double) -> BrushWidthInspection {
+    let failed = BrushWidthInspection(matched: false, measuredWidth: 0)
+    guard width > 0, height > 0, before.count == width * height * 4,
+          after.count == before.count, expectedWidth.isFinite,
+          expectedWidth > 0, expectedWidth <= 256 else { return failed }
+    func changed(_ x: Int, _ y: Int) -> Bool {
+        guard x >= 0, y >= 0, x < width, y < height else { return false }
+        let i = (y * width + x) * 4
+        return (0..<3).map { abs(Int(after[i + $0]) - Int(before[i + $0])) }.max()! >= 24
+    }
+    var measurements: [Double] = []
+    let reach = min(384, max(8, Int(ceil(expectedWidth * 2 + 4))))
+    for path in paths {
+        // Measurement tangents need a few pixels of support even when the
+        // dispatched path is densely sampled. Keep the original input intact.
+        guard let first = path.first, let last = path.last else { continue }
+        var measuringPath = [first]
+        for p in path.dropFirst() {
+            if hypot(p.x - measuringPath.last!.x, p.y - measuringPath.last!.y) >= 4 { measuringPath.append(p) }
+        }
+        if measuringPath.last! != last { measuringPath.append(last) }
+        for (a, b) in zip(measuringPath, measuringPath.dropFirst()) {
+            let dx = b.x - a.x, dy = b.y - a.y, length = hypot(dx, dy)
+            guard length.isFinite, length >= 4 else { continue }
+            for t in [0.3, 0.5, 0.7] {
+                let center = CGPoint(x: a.x + dx * t, y: a.y + dy * t)
+                var samples: [(Int, Bool)] = [], seen = Set<Int>()
+                for step in -reach...reach {
+                    let x = Int((center.x - dy / length * Double(step)).rounded())
+                    let y = Int((center.y + dx / length * Double(step)).rounded())
+                    guard x >= 0, x < width, y >= 0, y < height else { continue }
+                    let key = y * width + x
+                    if seen.insert(key).inserted { samples.append((step, changed(x, y))) }
+                }
+                guard let middle = samples.indices.min(by: { abs(samples[$0].0) < abs(samples[$1].0) }), samples[middle].1 else { continue }
+                var low = middle, high = middle
+                while low > 0 && samples[low - 1].1 { low -= 1 }
+                while high + 1 < samples.count && samples[high + 1].1 { high += 1 }
+                // A mark extending to our search boundary cannot establish width.
+                if low == 0 || high == samples.count - 1 { return failed }
+                measurements.append(Double(samples[high].0 - samples[low].0 + 1))
+            }
+        }
+    }
+    guard !measurements.isEmpty else { return failed }
+    measurements.sort()
+    let measured = measurements[measurements.count / 2]
+    let tolerance = max(1.5, expectedWidth * 0.35)
+    return BrushWidthInspection(matched: abs(measured - expectedWidth) <= tolerance, measuredWidth: measured)
+}
+
+/// Inspect changed pixels around this stroke, not just its centerline. Other
+/// unchanged artwork is irrelevant. The region is supplied from visual review.
+func inspectPaintRegion(before: [UInt8], after: [UInt8], width: Int, height: Int,
+                        paths: [[CGPoint]], region: [CGPoint], expectedWidth: Double) -> Bool {
+    guard width > 0, height > 0, before.count == width * height * 4,
+          after.count == before.count, region.count >= 3, !paths.isEmpty,
+          expectedWidth.isFinite, expectedWidth > 0, expectedWidth <= 256,
+          (region + paths.flatMap { $0 }).allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 10_000_000 && abs($0.y) < 10_000_000 }) else { return false }
+    func inside(_ p: CGPoint) -> Bool {
+        var result = false
+        var j = region.count - 1
+        for i in region.indices {
+            let a = region[i], b = region[j]
+            if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x { result.toggle() }
+            j = i
+        }
+        return result
+    }
+    let points = paths.flatMap { $0 }
+    guard let first = points.first else { return false }
+    let padding = expectedWidth * 2 + 4
+    let minX = max(0, Int(floor(points.map(\.x).min()! - padding)))
+    let maxX = min(width - 1, Int(ceil(points.map(\.x).max()! + padding)))
+    let minY = max(0, Int(floor(points.map(\.y).min()! - padding)))
+    let maxY = min(height - 1, Int(ceil(points.map(\.y).max()! + padding)))
+    guard inside(first), minX <= maxX, minY <= maxY else { return false }
+    for y in minY...maxY { for x in minX...maxX {
+        let i = (y * width + x) * 4
+        if (0..<3).contains(where: { abs(Int(after[i + $0]) - Int(before[i + $0])) >= 24 }) &&
+            !inside(CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5)) { return false }
+    } }
+    return true
+}
