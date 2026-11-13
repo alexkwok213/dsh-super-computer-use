@@ -2149,16 +2149,8 @@ final class WindowStreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         } catch {
             return false
         }
-        let sem = DispatchSemaphore(value: 0)
-        var startFailed = false
-        Task {
-            do { try await nextStream.startCapture() } catch { startFailed = true }
-            sem.signal()
-        }
-        if sem.wait(timeout: .now() + 2.0) == .timedOut || startFailed {
-            Task { try? await nextStream.stopCapture() }
-            return false
-        }
+        // Register nextStream before startCapture() so the synchronous initial
+        // sample callback is retained instead of discarded as from an unknown stream.
         cond.lock()
         self.stream = nextStream
         self.activeWindowId = windowId
@@ -2167,6 +2159,26 @@ final class WindowStreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         self.latestTimestampNs = 0
         self.streamStopped = false
         cond.unlock()
+
+        let sem = DispatchSemaphore(value: 0)
+        var startFailed = false
+        Task {
+            do { try await nextStream.startCapture() } catch { startFailed = true }
+            sem.signal()
+        }
+        if sem.wait(timeout: .now() + 2.0) == .timedOut || startFailed {
+            cond.lock()
+            if self.stream === nextStream {
+                self.stream = nil
+                self.activeWindowId = 0
+                self.latestPixelBuffer = nil
+                self.latestTimestampNs = 0
+                self.streamStopped = true
+            }
+            cond.unlock()
+            Task { try? await nextStream.stopCapture() }
+            return false
+        }
         return true
     }
 
@@ -2286,7 +2298,8 @@ final class CaptureDaemon {
 
     func captureStream(windowId: CGWindowID, format: String, quality: Double,
                        minTimestampNs: UInt64, waitMs: Int) -> (data: Data, origin: CGPoint, size: CGSize, scale: Double, timestampNs: UInt64, encoding: String, source: String)? {
-        if sckStalled { return nil }
+        // SCStream stays independent from single-shot SCScreenshotManager stall markers
+        // (`sckStalled`): SCStream + RunLoop pumps reliably even if a prior CLI one-shot stalled.
         guard let liveBounds = onScreenWindows().first(where: { $0.id == windowId })?.bounds else {
             return nil
         }
@@ -6491,9 +6504,14 @@ case "strokes":
         }
         let points = interpolateStroke(path, spacing: strokeSpacing)
         let first = points[0]
+        func boundarySettle(_ minMs: Int) {
+            if pace < minMs { usleep(useconds_t(minMs - pace) * 1000) }
+        }
         post(.mouseMoved, first)
+        if index > 0 { boundarySettle(14) }
         if cancellation.isCancelled || pauseActive() { fail("paint_interrupted", "drawing stopped before mouse down") }
         post(.leftMouseDown, first)
+        boundarySettle(22)
         var lastDispatched = first
         for point in points.dropFirst() {
             if cancellation.isCancelled || pauseActive() || (backgroundPid == nil && args.int("pid").map({ frontmostPID() != pid_t($0) }) == true) {
@@ -6505,6 +6523,7 @@ case "strokes":
         }
         let last = points[points.count - 1]
         post(.leftMouseUp, last)
+        boundarySettle(20)
         dispatchedStrokes += 1
     }
     let finishedNs = DispatchTime.now().uptimeNanoseconds
