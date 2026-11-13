@@ -248,10 +248,15 @@ func inspectPaintRegion(before: [UInt8], after: [UInt8], width: Int, height: Int
 /// Verify that closed paths painted with Freeform's Fill tool actually filled
 /// their interior with the expected color rather than leaving only an outline.
 func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: Int,
-                         paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8)) -> Bool {
+                         paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8),
+                         aggregate: Bool = false) -> Bool {
     guard width > 0, height > 0, before.count == width * height * 4,
           after.count == before.count, !paths.isEmpty else { return false }
     let expectedNearWhite = expected.0 >= 245 && expected.1 >= 245 && expected.2 >= 245
+    var totalInterior = 0
+    var totalMatchedAfter = 0
+    var totalChangedMatched = 0
+    var totalPreMatched = 0
     for path in paths {
         guard path.count >= 3,
               path.allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 10_000_000 && abs($0.y) < 10_000_000 }) else { return false }
@@ -274,7 +279,7 @@ func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: In
             guard matchesExpectedColor(Int(after[i]), Int(after[i + 1]), Int(after[i + 2]), expected) else { return }
             matchedAfter += 1
             let diff = (0..<3).reduce(0) { $0 + abs(Int(before[i + $1]) - Int(after[i + $1])) }
-            if diff >= 45 {
+            if diff >= 36 {
                 changedMatched += 1
             } else if !expectedNearWhite && matchesExpectedColor(Int(before[i]), Int(before[i + 1]), Int(before[i + 2]), expected) {
                 preMatched += 1
@@ -292,9 +297,23 @@ func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: In
             }
             y += strideY
         }
+        let minSpan = min(maxX - minX + 1, maxY - minY + 1)
+        let minNumerator = aggregate ? (minSpan < 56 ? 4 : 6) : 7
+        let minPreNumerator = aggregate ? 5 : 7
         guard interiorCount >= 3,
-              matchedAfter * 10 >= interiorCount * 7,
-              changedMatched >= 1 || (!expectedNearWhite && preMatched * 10 >= interiorCount * 7) else {
+              matchedAfter * 10 >= interiorCount * minNumerator,
+              changedMatched >= 1 || (!expectedNearWhite && preMatched * 10 >= interiorCount * minPreNumerator) else {
+            return false
+        }
+        totalInterior += interiorCount
+        totalMatchedAfter += matchedAfter
+        totalChangedMatched += changedMatched
+        totalPreMatched += preMatched
+    }
+    if aggregate {
+        guard totalInterior > 0,
+              totalMatchedAfter * 10 >= totalInterior * 7,
+              totalChangedMatched >= 1 || (!expectedNearWhite && totalPreMatched * 10 >= totalInterior * 7) else {
             return false
         }
     }

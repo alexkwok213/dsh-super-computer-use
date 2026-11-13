@@ -131,6 +131,40 @@ struct PaintVerificationTest {
             }
         } }
         precondition(!inspectFillInterior(before: widthBefore, after: hollowOutline, width: 80, height: 80, paths: fillPoly, expected: (220, 20, 30)), "hollow outline without fill must fail inspectFillInterior")
+        // Subtle layered fill contrast (L1 diff 43 < 45, e.g. #4065bf over #3057b2) must pass when matchesExpectedColor holds
+        var subtleBefore = [UInt8](repeating: 255, count: 80 * 80 * 4)
+        var subtleAfter = subtleBefore
+        for y in 0..<80 { for x in 0..<80 {
+            let i = (y * 80 + x) * 4
+            subtleBefore[i] = 48; subtleBefore[i + 1] = 87; subtleBefore[i + 2] = 178
+            subtleAfter[i] = 48; subtleAfter[i + 1] = 87; subtleAfter[i + 2] = 178
+        } }
+        for y in 15...65 { for x in 15...65 {
+            let i = (y * 80 + x) * 4
+            subtleAfter[i] = 64; subtleAfter[i + 1] = 101; subtleAfter[i + 2] = 191
+        } }
+        precondition(inspectFillInterior(before: subtleBefore, after: subtleAfter, width: 80, height: 80, paths: fillPoly, expected: (64, 101, 191)), "subtle layered fill contrast L1=43 must pass")
+        // Aggregate fill mode allows a small rounded polygon (~58% interior) inside a >=70% batch while still rejecting hollow or dropped shapes
+        let smallPoly = [CGPoint(x: 4, y: 4), CGPoint(x: 16, y: 4), CGPoint(x: 16, y: 16), CGPoint(x: 4, y: 16)]
+        let largePoly = [CGPoint(x: 25, y: 10), CGPoint(x: 75, y: 10), CGPoint(x: 75, y: 70), CGPoint(x: 25, y: 70)]
+        var aggFillAfter = widthBefore
+        for y in 6...14 { for x in 6...14 {
+            let i = (y * 80 + x) * 4
+            aggFillAfter[i] = 96; aggFillAfter[i + 1] = 148; aggFillAfter[i + 2] = 235
+        } }
+        for y in 10...70 { for x in 25...75 {
+            let i = (y * 80 + x) * 4
+            aggFillAfter[i] = 96; aggFillAfter[i + 1] = 148; aggFillAfter[i + 2] = 235
+        } }
+        precondition(!inspectFillInterior(before: widthBefore, after: aggFillAfter, width: 80, height: 80, paths: [smallPoly, largePoly], expected: (96, 148, 235), aggregate: false), "strict mode rejects <70% corner-rounded small fill")
+        precondition(inspectFillInterior(before: widthBefore, after: aggFillAfter, width: 80, height: 80, paths: [smallPoly, largePoly], expected: (96, 148, 235), aggregate: true), "aggregate fill mode accepts corner-rounded small fill when batch pooled >=70%")
+        precondition(!inspectFillInterior(before: widthBefore, after: hollowOutline, width: 80, height: 80, paths: fillPoly, expected: (220, 20, 30), aggregate: true), "aggregate fill mode still rejects hollow outline")
+        var partialDropAfter = widthBefore
+        for y in 10...70 { for x in 25...75 {
+            let i = (y * 80 + x) * 4
+            partialDropAfter[i] = 96; partialDropAfter[i + 1] = 148; partialDropAfter[i + 2] = 235
+        } }
+        precondition(!inspectFillInterior(before: widthBefore, after: partialDropAfter, width: 80, height: 80, paths: [smallPoly, largePoly], expected: (96, 148, 235), aggregate: true), "aggregate fill mode still fails closed if any polygon was dropped")
         // canvasInteriorHash ignores outer inset chrome and detects interior paint
         func writeRGBA(_ bytes: [UInt8], width w: Int, height h: Int) -> URL {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")

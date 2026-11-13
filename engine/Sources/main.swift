@@ -6335,7 +6335,7 @@ case "paint-verify":
         if args.flag("fill") {
             let fillOk = inspectFillInterior(before: before.pixels, after: after.pixels,
                                              width: before.width, height: before.height, paths: paths,
-                                             expected: expectedRGB)
+                                             expected: expectedRGB, aggregate: true)
             result["fillMode"] = true
             result["widthMatched"] = fillOk
             result["measuredWidth"] = args.double("expected-width") ?? 0
