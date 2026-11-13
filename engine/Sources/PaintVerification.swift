@@ -257,6 +257,7 @@ func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: In
     var totalMatchedAfter = 0
     var totalChangedMatched = 0
     var totalPreMatched = 0
+    var totalExpectedWeighted = 0
     for path in paths {
         guard path.count >= 3,
               path.allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 10_000_000 && abs($0.y) < 10_000_000 }) else { return false }
@@ -298,7 +299,7 @@ func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: In
             y += strideY
         }
         let minSpan = min(maxX - minX + 1, maxY - minY + 1)
-        let minNumerator = aggregate ? (minSpan < 56 ? 4 : 6) : 7
+        let minNumerator = aggregate ? (minSpan < 24 ? 3 : (minSpan < 56 ? 4 : 6)) : 7
         let minPreNumerator = aggregate ? 5 : 7
         guard interiorCount >= 3,
               matchedAfter * 10 >= interiorCount * minNumerator,
@@ -309,10 +310,11 @@ func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: In
         totalMatchedAfter += matchedAfter
         totalChangedMatched += changedMatched
         totalPreMatched += preMatched
+        totalExpectedWeighted += interiorCount * (minSpan < 56 ? 5 : 7)
     }
     if aggregate {
         guard totalInterior > 0,
-              totalMatchedAfter * 10 >= totalInterior * 7,
+              totalMatchedAfter * 10 >= totalExpectedWeighted,
               totalChangedMatched >= 1 || (!expectedNearWhite && totalPreMatched * 10 >= totalInterior * 7) else {
             return false
         }
@@ -419,7 +421,7 @@ func inspectAggregatePaint(before: [UInt8], after: [UInt8], width: Int, height: 
                             if mask[(py - boxMinY) * boxW + (px - boxMinX)] == 2 {
                                 foundNew = true; break
                             }
-                            if !preMatched && !expectedNearWhite {
+                            if !preMatched {
                                 let i = (py * width + px) * 4
                                 if matchesExpectedColor(Int(after[i]), Int(after[i + 1]), Int(after[i + 2]), expected) &&
                                    matchesExpectedColor(Int(before[i]), Int(before[i + 1]), Int(before[i + 2]), expected) {
@@ -436,8 +438,9 @@ func inspectAggregatePaint(before: [UInt8], after: [UInt8], width: Int, height: 
     }
 
     let minChanges = max(3, min(paths.count, 8))
+    let whiteOverlapGuard = !expectedNearWhite || covered * 10 >= samples * 2
     let ok = samples >= 1 && changed >= minChanges && matches >= minChanges && covered >= 1 &&
-        matches * 10 >= changed * 3 && (covered + overlapCovered) * 10 >= samples * 7
+        whiteOverlapGuard && matches * 10 >= changed * 3 && (covered + overlapCovered) * 10 >= samples * 7
     return AggregatePaintInspection(matched: ok, changedPixels: changed, matchedPixels: matches,
                                     totalSamples: samples, coveredSamples: covered + overlapCovered)
 }

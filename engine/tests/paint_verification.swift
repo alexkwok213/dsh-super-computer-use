@@ -165,6 +165,21 @@ struct PaintVerificationTest {
             partialDropAfter[i] = 96; partialDropAfter[i + 1] = 148; partialDropAfter[i + 2] = 235
         } }
         precondition(!inspectFillInterior(before: widthBefore, after: partialDropAfter, width: 80, height: 80, paths: [smallPoly, largePoly], expected: (96, 148, 235), aggregate: true), "aggregate fill mode still fails closed if any polygon was dropped")
+        // Batch of small-only corner-rounded polygons (~62% pooled, like hair highlights) must pass aggregate fill mode
+        let smallA = [CGPoint(x: 4, y: 4), CGPoint(x: 20, y: 4), CGPoint(x: 20, y: 20), CGPoint(x: 4, y: 20)]
+        let smallB = [CGPoint(x: 30, y: 30), CGPoint(x: 46, y: 30), CGPoint(x: 46, y: 46), CGPoint(x: 30, y: 46)]
+        var smallOnlyAfter = widthBefore
+        for y in 6...17 { for x in 6...17 { let i = (y * 80 + x) * 4; smallOnlyAfter[i] = 173; smallOnlyAfter[i + 1] = 170; smallOnlyAfter[i + 2] = 174 } }
+        for y in 32...43 { for x in 32...43 { let i = (y * 80 + x) * 4; smallOnlyAfter[i] = 173; smallOnlyAfter[i + 1] = 170; smallOnlyAfter[i + 2] = 174 } }
+        precondition(inspectFillInterior(before: widthBefore, after: smallOnlyAfter, width: 80, height: 80, paths: [smallA, smallB], expected: (173, 170, 174), aggregate: true), "all-small aggregate fill batch (~60%) must pass")
+        // Near-white highlight crossing from dark area onto white region passes with >=20% newly changed samples, while near-white on blank fails
+        var whiteHighlightBefore = widthBefore
+        for y in 20...26 { for x in 10...35 { let i = (y * 80 + x) * 4; whiteHighlightBefore[i] = 48; whiteHighlightBefore[i + 1] = 87; whiteHighlightBefore[i + 2] = 178 } }
+        var whiteHighlightAfter = whiteHighlightBefore
+        for y in 21...23 { for x in 10...35 { let i = (y * 80 + x) * 4; whiteHighlightAfter[i] = 251; whiteHighlightAfter[i + 1] = 251; whiteHighlightAfter[i + 2] = 252 } }
+        let highlightPath = [[CGPoint(x: 10, y: 22), CGPoint(x: 50, y: 22)]]
+        precondition(inspectAggregatePaint(before: whiteHighlightBefore, after: whiteHighlightAfter, width: 80, height: 80, paths: highlightPath, expected: (251, 251, 252), brushRadius: 2).matched, "near-white highlight crossing into white must pass when >=20% changed")
+        precondition(!inspectAggregatePaint(before: widthBefore, after: widthBefore, width: 80, height: 80, paths: highlightPath, expected: (251, 251, 252), brushRadius: 2).matched, "near-white stroke on blank white must fail")
         // canvasInteriorHash ignores outer inset chrome and detects interior paint
         func writeRGBA(_ bytes: [UInt8], width w: Int, height h: Int) -> URL {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
