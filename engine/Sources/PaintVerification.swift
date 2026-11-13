@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import CryptoKit
 import ImageIO
 
 func paintImagePixels(_ path: String) -> (pixels: [UInt8], width: Int, height: Int)? {
@@ -51,6 +52,22 @@ func inspectSwatch(pixels: [UInt8], width: Int, height: Int, center: CGPoint,
     return matches >= 20
 }
 
+private func matchesExpectedColor(_ r: Int, _ g: Int, _ b: Int, _ expected: (UInt8, UInt8, UInt8)) -> Bool {
+    let differences = [abs(r - Int(expected.0)), abs(g - Int(expected.1)), abs(b - Int(expected.2))]
+    var hueMatches = true
+    if let expectedHue = paintHue(Int(expected.0), Int(expected.1), Int(expected.2)) {
+        if let actualHue = paintHue(r, g, b) {
+            let difference = abs(actualHue - expectedHue)
+            hueMatches = min(difference, 360 - difference) <= 12
+        } else { hueMatches = false }
+    } else {
+        let actual = [r, g, b]
+        let expectedRange = Int(max(expected.0, max(expected.1, expected.2))) - Int(min(expected.0, min(expected.1, expected.2)))
+        hueMatches = actual.max()! - actual.min()! <= expectedRange + 20
+    }
+    return differences.reduce(0, +) <= 150 && differences.max()! <= 70 && hueMatches
+}
+
 /// Compare pixels near each dispatched path. This is evidence of changed pixels,
 /// not proof that a particular tool or a semantically correct image was used.
 func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
@@ -66,6 +83,7 @@ func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
         let x = point.x - (a.x + t * dx), y = point.y - (a.y + t * dy)
         return x * x + y * y <= 16
     }
+    let expectedNearWhite = expected.0 >= 245 && expected.1 >= 245 && expected.2 >= 245
     var failed: [Int] = []
     for (index, path) in paths.enumerated() {
         guard path.count >= 2, path.allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 10_000_000 && abs($0.y) < 10_000_000 }) else { failed.append(index); continue }
@@ -83,25 +101,15 @@ func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
             } }
         }
         for pixel in candidates {
-                let i = pixel * 4
-                let difference = (0..<3).reduce(0) { $0 + abs(Int(before[i + $1]) - Int(after[i + $1])) }
-                if difference < 45 { continue }
-                changed += 1
-                let differences = [abs(Int(after[i]) - Int(expected.0)), abs(Int(after[i + 1]) - Int(expected.1)), abs(Int(after[i + 2]) - Int(expected.2))]
-                var hueMatches = true
-                if let expectedHue = paintHue(Int(expected.0), Int(expected.1), Int(expected.2)) {
-                    if let actualHue = paintHue(Int(after[i]), Int(after[i + 1]), Int(after[i + 2])) {
-                        let difference = abs(actualHue - expectedHue)
-                        hueMatches = min(difference, 360 - difference) <= 12
-                    } else { hueMatches = false }
-                } else {
-                    let actual = [Int(after[i]), Int(after[i + 1]), Int(after[i + 2])]
-                    let expectedRange = Int(max(expected.0, max(expected.1, expected.2))) - Int(min(expected.0, min(expected.1, expected.2)))
-                    hueMatches = actual.max()! - actual.min()! <= expectedRange + 20
-                }
-                if differences.reduce(0, +) <= 150 && differences.max()! <= 70 && hueMatches { matches += 1; matchingPixels.insert(pixel) }
+            let i = pixel * 4
+            let difference = (0..<3).reduce(0) { $0 + abs(Int(before[i + $1]) - Int(after[i + $1])) }
+            if difference < 45 { continue }
+            changed += 1
+            if matchesExpectedColor(Int(after[i]), Int(after[i + 1]), Int(after[i + 2]), expected) {
+                matches += 1; matchingPixels.insert(pixel)
+            }
         }
-        var samples = 0, covered = 0, endpointsCovered = true
+        var samples = 0, covered = 0, overlapCovered = 0, endpointsCovered = true
         for (segmentIndex, segment) in zip(path, path.dropFirst()).enumerated() {
             let (a, b) = segment
             let distance = hypot(b.x - a.x, b.y - a.y)
@@ -112,19 +120,31 @@ func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
                 let y = Int((a.y + (b.y - a.y) * t).rounded())
                 samples += 1
                 var found = false
+                var preMatched = false
                 for dy in -4...4 where !found {
                     for dx in -4...4 where dx * dx + dy * dy <= 16 {
                         let px = x + dx, py = y + dy
-                        if px >= 0 && px < width && py >= 0 && py < height && matchingPixels.contains(py * width + px) { found = true; break }
+                        guard px >= 0 && px < width && py >= 0 && py < height else { continue }
+                        let key = py * width + px
+                        if matchingPixels.contains(key) { found = true; break }
+                        if !preMatched && !expectedNearWhite {
+                            let i = key * 4
+                            if matchesExpectedColor(Int(after[i]), Int(after[i + 1]), Int(after[i + 2]), expected) &&
+                               matchesExpectedColor(Int(before[i]), Int(before[i + 1]), Int(before[i + 2]), expected) {
+                                preMatched = true
+                            }
+                        }
                     }
                 }
                 if found { covered += 1 }
+                else if preMatched { overlapCovered += 1 }
                 if (segmentIndex == 0 && step == 0) || (segmentIndex == path.count - 2 && step == steps) {
-                    endpointsCovered = endpointsCovered && found
+                    endpointsCovered = endpointsCovered && (found || preMatched)
                 }
             }
         }
-        if changed < 3 || matches < 3 || matches * 10 < changed * 3 || covered * 10 < samples * 9 || !endpointsCovered { failed.append(index) }
+        if changed < 3 || matches < 3 || covered < 1 || matches * 10 < changed * 3 ||
+           (covered + overlapCovered) * 10 < samples * 9 || !endpointsCovered { failed.append(index) }
     }
     return PaintInspection(matched: failed.isEmpty, failedStrokes: failed)
 }
@@ -189,6 +209,18 @@ func inspectBrushWidth(before: [UInt8], after: [UInt8], width: Int, height: Int,
     return BrushWidthInspection(matched: abs(measured - expectedWidth) <= tolerance, measuredWidth: measured)
 }
 
+private func pointInPolygon(_ p: CGPoint, _ polygon: [CGPoint]) -> Bool {
+    guard polygon.count >= 3 else { return false }
+    var result = false
+    var j = polygon.count - 1
+    for i in polygon.indices {
+        let a = polygon[i], b = polygon[j]
+        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x { result.toggle() }
+        j = i
+    }
+    return result
+}
+
 /// Inspect changed pixels around this stroke, not just its centerline. Other
 /// unchanged artwork is irrelevant. The region is supplied from visual review.
 func inspectPaintRegion(before: [UInt8], after: [UInt8], width: Int, height: Int,
@@ -197,16 +229,6 @@ func inspectPaintRegion(before: [UInt8], after: [UInt8], width: Int, height: Int
           after.count == before.count, region.count >= 3, !paths.isEmpty,
           expectedWidth.isFinite, expectedWidth > 0, expectedWidth <= 256,
           (region + paths.flatMap { $0 }).allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 10_000_000 && abs($0.y) < 10_000_000 }) else { return false }
-    func inside(_ p: CGPoint) -> Bool {
-        var result = false
-        var j = region.count - 1
-        for i in region.indices {
-            let a = region[i], b = region[j]
-            if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x { result.toggle() }
-            j = i
-        }
-        return result
-    }
     let points = paths.flatMap { $0 }
     guard let first = points.first else { return false }
     let padding = expectedWidth * 2 + 4
@@ -214,11 +236,92 @@ func inspectPaintRegion(before: [UInt8], after: [UInt8], width: Int, height: Int
     let maxX = min(width - 1, Int(ceil(points.map(\.x).max()! + padding)))
     let minY = max(0, Int(floor(points.map(\.y).min()! - padding)))
     let maxY = min(height - 1, Int(ceil(points.map(\.y).max()! + padding)))
-    guard inside(first), minX <= maxX, minY <= maxY else { return false }
+    guard pointInPolygon(first, region), minX <= maxX, minY <= maxY else { return false }
     for y in minY...maxY { for x in minX...maxX {
         let i = (y * width + x) * 4
         if (0..<3).contains(where: { abs(Int(after[i + $0]) - Int(before[i + $0])) >= 24 }) &&
-            !inside(CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5)) { return false }
+            !pointInPolygon(CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5), region) { return false }
     } }
     return true
+}
+
+/// Verify that closed paths painted with Freeform's Fill tool actually filled
+/// their interior with the expected color rather than leaving only an outline.
+func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: Int,
+                         paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8)) -> Bool {
+    guard width > 0, height > 0, before.count == width * height * 4,
+          after.count == before.count, !paths.isEmpty else { return false }
+    let expectedNearWhite = expected.0 >= 245 && expected.1 >= 245 && expected.2 >= 245
+    for path in paths {
+        guard path.count >= 3,
+              path.allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 10_000_000 && abs($0.y) < 10_000_000 }) else { return false }
+        let minX = max(0, Int(floor(path.map(\.x).min()!)))
+        let maxX = min(width - 1, Int(ceil(path.map(\.x).max()!)))
+        let minY = max(0, Int(floor(path.map(\.y).min()!)))
+        let maxY = min(height - 1, Int(ceil(path.map(\.y).max()!)))
+        guard minX <= maxX, minY <= maxY else { return false }
+        let strideX = max(1, (maxX - minX + 1) / 14)
+        let strideY = max(1, (maxY - minY + 1) / 14)
+        var interiorCount = 0, matchedAfter = 0, changedMatched = 0, preMatched = 0
+        var seen = Set<Int>()
+        func sample(_ x: Int, _ y: Int) {
+            guard x >= 0, x < width, y >= 0, y < height else { return }
+            let key = y * width + x
+            guard seen.insert(key).inserted else { return }
+            guard pointInPolygon(CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5), path) else { return }
+            interiorCount += 1
+            let i = key * 4
+            guard matchesExpectedColor(Int(after[i]), Int(after[i + 1]), Int(after[i + 2]), expected) else { return }
+            matchedAfter += 1
+            let diff = (0..<3).reduce(0) { $0 + abs(Int(before[i + $1]) - Int(after[i + $1])) }
+            if diff >= 45 {
+                changedMatched += 1
+            } else if !expectedNearWhite && matchesExpectedColor(Int(before[i]), Int(before[i + 1]), Int(before[i + 2]), expected) {
+                preMatched += 1
+            }
+        }
+        let cx = Int((path.map(\.x).reduce(0, +) / Double(path.count)).rounded())
+        let cy = Int((path.map(\.y).reduce(0, +) / Double(path.count)).rounded())
+        sample(cx, cy)
+        var y = minY
+        while y <= maxY {
+            var x = minX
+            while x <= maxX {
+                sample(x, y)
+                x += strideX
+            }
+            y += strideY
+        }
+        guard interiorCount >= 3,
+              matchedAfter * 10 >= interiorCount * 7,
+              changedMatched >= 1 || (!expectedNearWhite && preMatched * 10 >= interiorCount * 7) else {
+            return false
+        }
+    }
+    return true
+}
+
+/// Hash decoded RGBA pixels of the interior canvas region, excluding outer
+/// toolbars and auto-hiding scrollbars so UI chrome fades don't look like
+/// canvas changes.
+func canvasInteriorHash(imagePath: String, insetLeft: Int, insetTop: Int,
+                        insetRight: Int, insetBottom: Int) -> String? {
+    guard let image = paintImagePixels(imagePath) else { return nil }
+    let x0 = max(0, min(image.width, insetLeft))
+    let x1 = max(x0, image.width - max(0, insetRight))
+    let y0 = max(0, min(image.height, insetTop))
+    let y1 = max(y0, image.height - max(0, insetBottom))
+    guard x1 > x0, y1 > y0 else { return nil }
+    var hasher = SHA256()
+    let dims = [UInt32(x1 - x0).littleEndian, UInt32(y1 - y0).littleEndian]
+    dims.withUnsafeBytes { hasher.update(data: Data($0)) }
+    image.pixels.withUnsafeBytes { raw in
+        guard let base = raw.baseAddress else { return }
+        let rowBytes = (x1 - x0) * 4
+        for y in y0..<y1 {
+            let offset = (y * image.width + x0) * 4
+            hasher.update(bufferPointer: UnsafeRawBufferPointer(start: base.advanced(by: offset), count: rowBytes))
+        }
+    }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
 }

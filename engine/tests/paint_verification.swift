@@ -95,6 +95,73 @@ struct PaintVerificationTest {
         let allowed = [CGPoint(x: 5, y: 37), CGPoint(x: 75, y: 37), CGPoint(x: 75, y: 44), CGPoint(x: 5, y: 44)]
         precondition(inspectPaintRegion(before: widthBefore, after: band(6), width: 80, height: 80, paths: widthPath, region: allowed, expectedWidth: 6), "in-region marks pass")
         precondition(!inspectPaintRegion(before: widthBefore, after: band(18), width: 80, height: 80, paths: widthPath, region: allowed, expectedWidth: 6), "actual paint spilling outside its region must fail")
+        // Same-color overlap at endpoints should pass when before & after both hold the expected non-white color
+        var overlapBefore = widthBefore
+        for y in 37...43 { for x in 8...22 {
+            let i = (y * 80 + x) * 4
+            overlapBefore[i] = 220; overlapBefore[i + 1] = 20; overlapBefore[i + 2] = 30
+        } }
+        var overlapAfter = overlapBefore
+        for y in 38...42 { for x in 20...70 {
+            let i = (y * 80 + x) * 4
+            overlapAfter[i] = 220; overlapAfter[i + 1] = 20; overlapAfter[i + 2] = 30
+        } }
+        let overlapPass = inspectPaint(before: overlapBefore, after: overlapAfter, width: 80, height: 80, paths: widthPath, expected: (220, 20, 30))
+        precondition(overlapPass.matched, "overlapping same-color paint at start endpoint must pass")
+        var truncatedOnWhite = overlapBefore
+        for y in 38...42 { for x in 20...50 {
+            let i = (y * 80 + x) * 4
+            truncatedOnWhite[i] = 220; truncatedOnWhite[i + 1] = 20; truncatedOnWhite[i + 2] = 30
+        } }
+        let overlapTruncated = inspectPaint(before: overlapBefore, after: truncatedOnWhite, width: 80, height: 80, paths: widthPath, expected: (220, 20, 30))
+        precondition(!overlapTruncated.matched, "truncated stroke ending on empty canvas must still fail")
+        // Fill interior check: solid box passes, thin hollow outline fails
+        let fillPoly = [[CGPoint(x: 15, y: 15), CGPoint(x: 65, y: 15), CGPoint(x: 65, y: 65), CGPoint(x: 15, y: 65)]]
+        var solidFill = widthBefore
+        for y in 15...65 { for x in 15...65 {
+            let i = (y * 80 + x) * 4
+            solidFill[i] = 220; solidFill[i + 1] = 20; solidFill[i + 2] = 30
+        } }
+        precondition(inspectFillInterior(before: widthBefore, after: solidFill, width: 80, height: 80, paths: fillPoly, expected: (220, 20, 30)), "solid fill interior must pass")
+        var hollowOutline = widthBefore
+        for y in 15...65 { for x in 15...65 {
+            if x <= 16 || x >= 64 || y <= 16 || y >= 64 {
+                let i = (y * 80 + x) * 4
+                hollowOutline[i] = 220; hollowOutline[i + 1] = 20; hollowOutline[i + 2] = 30
+            }
+        } }
+        precondition(!inspectFillInterior(before: widthBefore, after: hollowOutline, width: 80, height: 80, paths: fillPoly, expected: (220, 20, 30)), "hollow outline without fill must fail inspectFillInterior")
+        // canvasInteriorHash ignores outer inset chrome and detects interior paint
+        func writeRGBA(_ bytes: [UInt8], width w: Int, height h: Int) -> URL {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+            let prov = CGDataProvider(data: Data(bytes) as CFData)!
+            let cg = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+                             space: CGColorSpaceCreateDeviceRGB(),
+                             bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue),
+                             provider: prov, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+            let dst = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil)!
+            CGImageDestinationAddImage(dst, cg, nil)
+            precondition(CGImageDestinationFinalize(dst))
+            return url
+        }
+        let roiA = [UInt8](repeating: 255, count: 40 * 40 * 4)
+        var roiChromeChanged = roiA
+        for x in 0..<40 {
+            let topIdx = x * 4
+            roiChromeChanged[topIdx] = 10; roiChromeChanged[topIdx + 1] = 20; roiChromeChanged[topIdx + 2] = 30
+        }
+        var roiInteriorChanged = roiA
+        let midIdx = (20 * 40 + 20) * 4
+        roiInteriorChanged[midIdx] = 10; roiInteriorChanged[midIdx + 1] = 20; roiInteriorChanged[midIdx + 2] = 30
+        let urlA = writeRGBA(roiA, width: 40, height: 40)
+        let urlB = writeRGBA(roiChromeChanged, width: 40, height: 40)
+        let urlC = writeRGBA(roiInteriorChanged, width: 40, height: 40)
+        defer { try? FileManager.default.removeItem(at: urlA); try? FileManager.default.removeItem(at: urlB); try? FileManager.default.removeItem(at: urlC) }
+        let hashA = canvasInteriorHash(imagePath: urlA.path, insetLeft: 0, insetTop: 4, insetRight: 4, insetBottom: 4)!
+        let hashB = canvasInteriorHash(imagePath: urlB.path, insetLeft: 0, insetTop: 4, insetRight: 4, insetBottom: 4)!
+        let hashC = canvasInteriorHash(imagePath: urlC.path, insetLeft: 0, insetTop: 4, insetRight: 4, insetBottom: 4)!
+        precondition(hashA == hashB, "chrome-only border changes outside ROI must produce identical hash")
+        precondition(hashA != hashC, "interior canvas change must produce a different hash")
         print("paint verification tests passed")
     }
 }

@@ -6,26 +6,33 @@ import { join } from 'node:path';
 import { CuSessionManager } from '../lib/core.mjs';
 import { registerCuTools } from '../lib/index.mjs';
 
-function harness({ capture = true, matched = true, swatch = true, vision = true, attachment = true, region = true, widthMatched = true, externalImages = null } = {}) {
+function harness({ capture = true, matched = true, swatch = true, vision = true, attachment = true, region = true, widthMatched = true, externalImages = null, drawingTool = 'Monoline', shotWidth = 200, shotHeight = 200, roiHash = null, varyAfterFile = false } = {}) {
   const tools = new Map(), calls = [], feedback = [];
   const ctx = { tools: { register(def) { tools.set(def.name, def); return () => {}; } }, get: key => key === 'llm' ? { resolveModelInfo: async () => ({ inputModalities: vision ? ['image'] : ['text'] }) } : key === 'attachments' ? { saveImage: async () => attachment ? ({ attachmentId: 'after', mediaType: 'image/png', bytes: 100, width: 20, height: 20 }) : null } : undefined };
   const manager = new CuSessionManager();
   manager.activeSession = { pid: 42, windowId: 7 };
   manager.writeActivity = () => {};
   manager.showActionLabel = (...args) => feedback.push(args);
+  let shotCount = 0;
   manager.exec = async argv => {
     calls.push(argv);
-    if (argv[0] === 'windows') return { ok: true, windows: [{ pid: 42, windowId: 7, app: 'Freeform', bounds: { x: 0, y: 0, width: 200, height: 200 } }] };
-    if (argv[0] === 'shot' && capture) copyFileSync('assets/icon.png', argv[argv.indexOf('--out') + 1]);
-    if (argv[0] === 'shot') return capture ? { ok: true, origin: { x: 0, y: 0 }, size: { width: 200, height: 200 }, scale: 1 } : { ok: false, error: 'capture_failed' };
-    if (argv[0] === 'snapshot') return { ok: true, nodes: [{ title: 'Choose a color', x: 10, y: 10, w: 20, h: 20 }] };
+    if (argv[0] === 'windows') return { ok: true, windows: [{ pid: 42, windowId: 7, app: 'Freeform', bounds: { x: 0, y: 0, width: shotWidth, height: shotHeight } }] };
+    if (argv[0] === 'shot' && capture) {
+      shotCount += 1;
+      const out = argv[argv.indexOf('--out') + 1];
+      copyFileSync('assets/icon.png', out);
+      if (varyAfterFile && shotCount >= 2) writeFileSync(out, Buffer.concat([readFileSync(out), Buffer.from(`-${shotCount}`)]));
+    }
+    if (argv[0] === 'shot') return capture ? { ok: true, origin: { x: 0, y: 0 }, size: { width: shotWidth, height: shotHeight }, scale: 1 } : { ok: false, error: 'capture_failed' };
+    if (argv[0] === 'snapshot') return { ok: true, nodes: [{ title: 'Choose a color', x: 10, y: 10, w: 20, h: 20 }, ...(drawingTool ? [{ title: 'Drawing tool', value: drawingTool, x: 40, y: 10, w: 20, h: 20 }] : [])] };
     if (argv[0] === 'paint-swatch') return { ok: true, matched: swatch };
+    if (argv[0] === 'paint-canvas-hash' && roiHash) return { ok: true, hash: typeof roiHash === 'function' ? roiHash(argv) : roiHash };
     if (argv[0] === 'paint-verify') return { ok: true, matched, widthMatched, regionMatched: true, measuredWidth: widthMatched ? 2 : 12, failedStrokes: matched ? [] : [0] };
     if (argv[0] === 'strokes') return { ok: true, strokes: JSON.parse(readFileSync(argv[argv.indexOf('--file') + 1], 'utf8')).strokes.length };
     return { ok: true };
   };
   registerCuTools({ ctx, manager, config: { autoSession: false } });
-  return { calls, feedback, call: args => tools.get('cu_paint').execute({ ...(region ? { paintRegion: [[0, 0], [200, 0], [200, 200], [0, 200]], brushWidth: 2 } : {}), ...args }, { signal: new AbortController().signal, agent: { options: { provider: 'p', model: 'm' } }, ...(externalImages ? { externalImages } : {}) }) };
+  return { calls, feedback, call: args => tools.get('cu_paint').execute({ ...(region ? { paintRegion: [[0, 0], [shotWidth, 0], [shotWidth, shotHeight], [0, shotHeight]], brushWidth: 2 } : {}), ...args }, { signal: new AbortController().signal, agent: { options: { provider: 'p', model: 'm' } }, ...(externalImages ? { externalImages } : {}) }) };
 }
 
 test('painting stops before input if before-capture fails', async () => {
@@ -246,4 +253,67 @@ test('expired review is refreshed with an image without dispatching more input',
     const next = await h.call({ ...args, offset: 1, reviewToken: expired.reviewToken, review: 'The fresh frame still shows the intended mark inside the region.' });
     assert.equal(next.ok, true);
   } finally { Date.now = now; rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('count batches bounded stroke chunks and validates bounds', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'paint-test-'));
+  try {
+    const file = join(dir, 'strokes.json');
+    writeFileSync(file, JSON.stringify({ strokes: [[[10, 10], [20, 10]], [[10, 20], [20, 20]], [[10, 30], [20, 30]], [[10, 40], [20, 40]]] }));
+    const h = harness();
+    const args = { pid: 42, windowId: 7, strokesFile: file, expectedHex: '#dc141e', authorizeForeground: true };
+    assert.equal((await h.call({ ...args, count: 0 })).error, 'invalid_stroke_count');
+    assert.equal((await h.call({ ...args, count: 11 })).error, 'invalid_stroke_count');
+    const first = await h.call({ ...args, count: 3 });
+    assert.equal(first.ok, true);
+    assert.equal(first.strokes, 3);
+    assert.equal(first.nextOffset, 3);
+    assert.equal(first.totalStrokes, 4);
+    const second = await h.call({ ...args, offset: 3, count: 3, reviewToken: first.reviewToken, review: 'The first 3 red strokes sit inside the upper region with expected thickness.' });
+    assert.equal(second.ok, true);
+    assert.equal(second.strokes, 1);
+    assert.equal(second.nextOffset, undefined);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('expectedTool blocks wrong Freeform brush before dispatching native strokes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'paint-test-'));
+  try {
+    const file = join(dir, 'strokes.json'); writeFileSync(file, JSON.stringify({ strokes: [[[10, 10], [20, 10]]] }));
+    const h = harness({ drawingTool: 'Marker' });
+    const result = await h.call({ pid: 42, windowId: 7, strokesFile: file, expectedHex: '#dc141e', expectedTool: 'Monoline', authorizeForeground: true });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'paint_tool_not_verified');
+    assert.equal(result.expectedTool, 'Monoline');
+    assert.equal(result.actualTool, 'Marker');
+    assert.equal(h.calls.some(x => x[0] === 'strokes'), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Freeform Fill tool forwards --fill to paint-verify and records fillMode', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'paint-test-'));
+  try {
+    const file = join(dir, 'strokes.json'); writeFileSync(file, JSON.stringify({ strokes: [[[10, 10], [40, 10], [40, 40], [10, 40], [10, 10]]] }));
+    const h = harness({ drawingTool: 'Fill' });
+    const result = await h.call({ pid: 42, windowId: 7, strokesFile: file, expectedHex: '#dc141e', expectedTool: 'Fill', authorizeForeground: true });
+    assert.equal(result.ok, true);
+    assert.equal(result.verification.fillMode, true);
+    assert.equal(result.verification.method, 'interior_fill_and_boundary');
+    const verifyCall = h.calls.find(x => x[0] === 'paint-verify');
+    assert.ok(verifyCall?.includes('--fill'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('canvas interior ROI hash prevents chrome-only PNG diffs from triggering paint_canvas_changed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'paint-test-'));
+  try {
+    const file = join(dir, 'strokes.json'); writeFileSync(file, JSON.stringify({ strokes: [[[20, 80], [60, 80]], [[20, 100], [60, 100]]] }));
+    const h = harness({ shotWidth: 800, shotHeight: 600, roiHash: 'stable-interior-roi-hash', varyAfterFile: true });
+    const args = { pid: 42, windowId: 7, strokesFile: file, expectedHex: '#dc141e', authorizeForeground: true };
+    const first = await h.call(args);
+    assert.equal(first.ok, true);
+    const second = await h.call({ ...args, offset: 1, reviewToken: first.reviewToken, review: 'The first stroke inside the interior canvas is crisp and matches expected thickness.' });
+    assert.equal(second.ok, true);
+    assert.ok(h.calls.some(x => x[0] === 'paint-canvas-hash'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

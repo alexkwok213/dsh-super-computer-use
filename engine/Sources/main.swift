@@ -5899,6 +5899,17 @@ case "paint-swatch":
                                 expected: (UInt8((color >> 16) & 255), UInt8((color >> 8) & 255), UInt8(color & 255)))
     emit(["ok": true, "matched": matched])
 
+case "paint-canvas-hash":
+    guard let path = args["image"],
+          let hash = canvasInteriorHash(imagePath: path,
+                                        insetLeft: args.int("inset-left") ?? 0,
+                                        insetTop: args.int("inset-top") ?? 0,
+                                        insetRight: args.int("inset-right") ?? 0,
+                                        insetBottom: args.int("inset-bottom") ?? 0) else {
+        fail("paint_evidence_unavailable", "cannot compute canvas interior hash")
+    }
+    emit(["ok": true, "hash": hash])
+
 case "paint-verify":
     guard let beforePath = args["before"], let afterPath = args["after"],
           let pathFile = args["file"], let hex = args["hex"],
@@ -5915,25 +5926,37 @@ case "paint-verify":
     guard color.count == 6, let rgb = UInt32(color, radix: 16) else {
         fail("invalid_color", "expected six digit RGB hex")
     }
+    let expectedRGB: (UInt8, UInt8, UInt8) = (UInt8((rgb >> 16) & 255), UInt8((rgb >> 8) & 255), UInt8(rgb & 255))
     let paths = parsed.0.map { $0.map { CGPoint(x: ($0.x - ox) * scale, y: ($0.y - oy) * scale) } }
     let inspection = inspectPaint(before: before.pixels, after: after.pixels,
                                   width: before.width, height: before.height, paths: paths,
-                                  expected: (UInt8((rgb >> 16) & 255), UInt8((rgb >> 8) & 255), UInt8(rgb & 255)))
+                                  expected: expectedRGB)
     var result: [String: Any] = ["ok": true, "matched": inspection.matched, "failedStrokes": inspection.failedStrokes]
-    if let expectedWidth = args.double("expected-width") {
+    func checkRegion(paddingWidth: Double) -> Bool {
+        guard let root = object as? [String: Any], let rawRegion = root["paintRegion"] as? [[Double]],
+              rawRegion.allSatisfy({ $0.count == 2 }) else { return false }
+        let region = rawRegion.map { CGPoint(x: ($0[0] - ox) * scale, y: ($0[1] - oy) * scale) }
+        return inspectPaintRegion(before: before.pixels, after: after.pixels,
+                                  width: before.width, height: before.height, paths: paths,
+                                  region: region, expectedWidth: paddingWidth)
+    }
+    if args.flag("fill") {
+        let fillOk = inspectFillInterior(before: before.pixels, after: after.pixels,
+                                         width: before.width, height: before.height, paths: paths,
+                                         expected: expectedRGB)
+        let regionMatched = checkRegion(paddingWidth: max((args.double("expected-width") ?? 4) * scale, 12))
+        result["fillMode"] = true
+        result["widthMatched"] = fillOk
+        result["measuredWidth"] = args.double("expected-width") ?? 0
+        result["regionMatched"] = regionMatched
+        result["matched"] = inspection.matched && fillOk && regionMatched
+    } else if let expectedWidth = args.double("expected-width") {
         let brush = inspectBrushWidth(before: before.pixels, after: after.pixels,
                                       width: before.width, height: before.height, paths: paths,
                                       expectedWidth: expectedWidth * scale)
         result["widthMatched"] = brush.matched
         result["measuredWidth"] = brush.measuredWidth / scale
-        var regionMatched = false
-        if let root = object as? [String: Any], let rawRegion = root["paintRegion"] as? [[Double]],
-           rawRegion.allSatisfy({ $0.count == 2 }) {
-            let region = rawRegion.map { CGPoint(x: ($0[0] - ox) * scale, y: ($0[1] - oy) * scale) }
-            regionMatched = inspectPaintRegion(before: before.pixels, after: after.pixels,
-                                              width: before.width, height: before.height, paths: paths,
-                                              region: region, expectedWidth: expectedWidth * scale)
-        }
+        let regionMatched = checkRegion(paddingWidth: expectedWidth * scale)
         result["regionMatched"] = regionMatched
         result["matched"] = inspection.matched && brush.matched && regionMatched
     }
