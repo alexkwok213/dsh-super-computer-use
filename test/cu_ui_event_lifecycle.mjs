@@ -425,3 +425,48 @@ test("a late notice from the old owner cannot release the new owner", async () =
   assert.equal(registry.markStopped("chat-a", { cuSessionId: first.cuSessionId }).ignored, "stale_session");
   assert.equal(registry.snapshot("chat-a").state, "running");
 });
+
+test("cu_screenshot remains readable after non-paused stopVisualSession but respects user pause", async () => {
+  const h = toolHarness();
+  h.manager.captureShotViaDaemon = async () => ({ ok: false, error: "no_daemon" });
+  h.manager._execRequest = async (argv) => {
+    if (argv[0] === "shot") {
+      return {
+        ok: true,
+        base64: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]).toString("base64"),
+        mimeType: "image/jpeg",
+        size: { width: 10, height: 10 },
+        scale: 1,
+      };
+    }
+    return { ok: true };
+  };
+  await h.manager.stopVisualSession({ pause: false });
+  assert.equal(h.manager.inputGateClosed, true);
+  assert.equal(h.manager.pauseLatched, false);
+  const shot = await h.call("cu_screenshot", { pid: 42, windowId: 7 });
+  assert.equal(shot.ok, true, `expected screenshot to succeed after non-paused stop, got: ${JSON.stringify(shot)}`);
+
+  await h.manager.stopVisualSession({ pause: true });
+  assert.equal(h.manager.pauseLatched, true);
+  await assert.rejects(
+    () => h.call("cu_screenshot", { pid: 42, windowId: 7 }),
+    /paused\/stopped by the user/i,
+  );
+});
+
+test("stopVisualSession terminates display-awake child cleanly", async () => {
+  const manager = realManager();
+  let killedSignal = null;
+  manager._caffeinateChild = {
+    killed: false,
+    exitCode: null,
+    kill(sig) {
+      killedSignal = sig;
+      this.killed = true;
+    },
+  };
+  await manager.stopVisualSession();
+  assert.equal(killedSignal, "SIGTERM");
+  assert.equal(manager._caffeinateChild, null);
+});

@@ -130,6 +130,17 @@ struct Args {
 
 // MARK: - permissions
 
+func isScreenLocked() -> Bool {
+    guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+    if let locked = dict["CGSSessionScreenIsLocked"] as? NSNumber {
+        return locked.boolValue
+    }
+    if let lockedBool = dict["CGSSessionScreenIsLocked"] as? Bool {
+        return lockedBool
+    }
+    return false
+}
+
 func permissions() -> [String: Any] {
     let ax = AXIsProcessTrusted()
     let screen = CGPreflightScreenCaptureAccess()
@@ -2535,7 +2546,12 @@ func captureDaemonHandle(_ line: String, _ daemon: CaptureDaemon) -> Bool {
             guard let raw = daemon.capture(windowId: wid.flatMap { CGWindowID($0) },
                                            screen: screen, displayIndex: display,
                                            maxDimension: maxDim) else {
-                captureDaemonReply(["ok": false, "error": "capture_failed"])
+                let locked = isScreenLocked()
+                captureDaemonReply([
+                    "ok": false,
+                    "error": locked ? "screen_locked" : "capture_failed",
+                    "screenLocked": locked,
+                ])
                 return true
             }
             do {
@@ -4353,12 +4369,15 @@ func serviceStatus(_ config: ServiceConfig) -> [String: Any] {
         "inputGateClosed": state.gate,
         "cleanupState": state.cleanup,
         "secureInput": secureInputPID() != nil,
+        "screenLocked": isScreenLocked(),
         "occluder": fullScreenOverlayExists(),
         "frontmost": ["pid": Int(front.pid), "app": front.app],
         "windows": onScreenWindows().count,
         "config": serviceConfigPath,
     ]
+    let locked = isScreenLocked()
     let next: [String] = [
+        locked ? "unlock the macOS display (CGSSessionScreenIsLocked=1)" : nil,
         AXIsProcessTrusted() ? nil : "grant Accessibility to cu",
         CGPreflightScreenCaptureAccess() ? nil : "grant Screen Recording to cu",
     ].compactMap { $0 }
@@ -4692,9 +4711,16 @@ func captureViaCLI(windowId: CGWindowID?, screen: Bool, displayIndex: Int,
     }
     guard task.terminationStatus == 0,
           let data = FileManager.default.contents(atPath: path) else {
+        if isScreenLocked() {
+            throw NSError(domain: "cu", code: 8,
+                          userInfo: [NSLocalizedDescriptionKey: "screencapture unavailable while the macOS screen is locked"])
+        }
+        let hasPermission = CGPreflightScreenCaptureAccess()
+        let detail = hasPermission
+            ? "screencapture failed (status \(task.terminationStatus)); target window unavailable or display asleep"
+            : "screencapture failed (status \(task.terminationStatus)); Screen Recording is required"
         throw NSError(domain: "cu", code: 6,
-                      userInfo: [NSLocalizedDescriptionKey:
-                        "screencapture failed (status \(task.terminationStatus)); Screen Recording is required"])
+                      userInfo: [NSLocalizedDescriptionKey: detail])
     }
     return data
 }
@@ -5233,16 +5259,26 @@ case "shot":
         }
         emit(payload)
     } catch {
-        // Every capture API on macOS (ScreenCaptureKit, CGWindowListCreateImage
-        // and the screencapture CLI) is gated by the same Screen Recording
-        // grant, and it belongs to the app that launched this process — the
-        // editor (Claude, Cursor, …), not to `cu`, when it runs under one.
-        // Nothing here can grant it; say exactly which toggle to flip.
+        let locked = isScreenLocked()
         let host = hostAppName() ?? "this app"
-        fail("capture_failed", error.localizedDescription,
-             ["hint": "grant Screen Recording to \(host) in System Settings → 隐私与安全性 → 屏幕录制, then restart \(host)",
-              "hostApp": host,
-              "screenRecording": CGPreflightScreenCaptureAccess()])
+        let hasPermission = CGPreflightScreenCaptureAccess()
+        if locked {
+            fail("screen_locked",
+                 "the macOS screen is locked; unlock the display to capture or control windows",
+                 ["hint": "unlock the macOS screen and retry",
+                  "hostApp": host,
+                  "screenLocked": true,
+                  "screenRecording": hasPermission])
+        } else {
+            let hint = hasPermission
+                ? "capture failed even though Screen Recording is granted; check that the display is awake and the window is visible"
+                : "grant Screen Recording to \(host) in System Settings → 隐私与安全性 → 屏幕录制, then restart \(host)"
+            fail("capture_failed", error.localizedDescription,
+                 ["hint": hint,
+                  "hostApp": host,
+                  "screenLocked": false,
+                  "screenRecording": hasPermission])
+        }
     }
 
 case "ax":

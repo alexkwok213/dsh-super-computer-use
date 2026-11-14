@@ -77,6 +77,7 @@ try {
         // The real pause latch lives in the real state dir; tests may still
         // exercise pause explicitly through their own temporary directory.
         CU_NO_USER_PAUSE: "1",
+        CU_DISABLE_DISPLAY_AWAKE: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
