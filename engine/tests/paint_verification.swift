@@ -300,6 +300,26 @@ struct PaintVerificationTest {
         }
         precondition(inspectBrushWidth(before: widthBefore, after: calAfter, width: 80, height: 80, paths: pencilPath, expectedWidth: 3, style: .calligraphic).matched, "calligraphic mode tolerates natural nib taper")
 
+        // Borderline pastel (#FFE6D7, chroma=40) rendered with P3 rounding (255,230,216) + AA (255,234,222) passes,
+        // while neutral grey (225,225,225) and opposite blue pastel (215,230,255) remain rejected.
+        var pastelAfter = widthBefore
+        var greyAfter = widthBefore
+        var bluePastelAfter = widthBefore
+        for x in 12...64 {
+            for y in 20...24 {
+                let i = (y * 80 + x) * 4
+                let edge = (y == 20 || y == 24)
+                pastelAfter[i] = 255
+                pastelAfter[i + 1] = edge ? 234 : 230
+                pastelAfter[i + 2] = edge ? 222 : 216
+                greyAfter[i] = 225; greyAfter[i + 1] = 225; greyAfter[i + 2] = 225
+                bluePastelAfter[i] = 215; bluePastelAfter[i + 1] = 230; bluePastelAfter[i + 2] = 255
+            }
+        }
+        precondition(inspectAggregatePaint(before: widthBefore, after: pastelAfter, width: 80, height: 80, paths: pencilPath, expected: (0xFF, 0xE6, 0xD7), brushRadius: 3, style: .opaque).matched, "borderline pastel accepts P3-rounded skin stroke")
+        precondition(!inspectAggregatePaint(before: widthBefore, after: greyAfter, width: 80, height: 80, paths: pencilPath, expected: (0xFF, 0xE6, 0xD7), brushRadius: 3, style: .opaque).matched, "borderline pastel rejects neutral grey stroke")
+        precondition(!inspectAggregatePaint(before: widthBefore, after: bluePastelAfter, width: 80, height: 80, paths: pencilPath, expected: (0xFF, 0xE6, 0xD7), brushRadius: 3, style: .opaque).matched, "borderline pastel rejects cool blue pastel stroke")
+
         print("paint verification tests passed")
     }
 }

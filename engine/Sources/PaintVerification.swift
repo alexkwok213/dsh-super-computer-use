@@ -25,10 +25,10 @@ struct PaintInspection {
     let failedStrokes: [Int]
 }
 
-private func paintHue(_ r: Int, _ g: Int, _ b: Int) -> Double? {
+private func paintHue(_ r: Int, _ g: Int, _ b: Int, minDelta: Int = 40) -> Double? {
     let high = max(r, max(g, b)), low = min(r, min(g, b))
     let delta = high - low
-    guard delta >= 40 else { return nil }
+    guard delta >= minDelta else { return nil }
     let sector: Double
     if high == r { sector = Double(g - b) / Double(delta) }
     else if high == g { sector = 2 + Double(b - r) / Double(delta) }
@@ -75,8 +75,8 @@ func brushStyle(forTool name: String?) -> PaintBrushStyle {
 private func matchesExpectedColor(_ r: Int, _ g: Int, _ b: Int, _ expected: (UInt8, UInt8, UInt8)) -> Bool {
     let differences = [abs(r - Int(expected.0)), abs(g - Int(expected.1)), abs(b - Int(expected.2))]
     var hueMatches = true
-    if let expectedHue = paintHue(Int(expected.0), Int(expected.1), Int(expected.2)) {
-        if let actualHue = paintHue(r, g, b) {
+    if let expectedHue = paintHue(Int(expected.0), Int(expected.1), Int(expected.2), minDelta: 40) {
+        if let actualHue = paintHue(r, g, b, minDelta: 20) {
             let difference = abs(actualHue - expectedHue)
             hueMatches = min(difference, 360 - difference) <= 12
         } else { hueMatches = false }
