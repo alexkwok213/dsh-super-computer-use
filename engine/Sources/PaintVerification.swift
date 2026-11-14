@@ -52,6 +52,26 @@ func inspectSwatch(pixels: [UInt8], width: Int, height: Int, center: CGPoint,
     return matches >= 20
 }
 
+enum PaintBrushStyle: String {
+    case opaque
+    case calligraphic
+    case translucent
+    case graphite
+}
+
+func brushStyle(forTool name: String?) -> PaintBrushStyle {
+    switch name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "" {
+    case "watercolor", "marker":
+        return .translucent
+    case "pencil", "crayon":
+        return .graphite
+    case "fountain pen", "reed":
+        return .calligraphic
+    default:
+        return .opaque
+    }
+}
+
 private func matchesExpectedColor(_ r: Int, _ g: Int, _ b: Int, _ expected: (UInt8, UInt8, UInt8)) -> Bool {
     let differences = [abs(r - Int(expected.0)), abs(g - Int(expected.1)), abs(b - Int(expected.2))]
     var hueMatches = true
@@ -68,33 +88,82 @@ private func matchesExpectedColor(_ r: Int, _ g: Int, _ b: Int, _ expected: (UIn
     return differences.reduce(0, +) <= 150 && differences.max()! <= 70 && hueMatches
 }
 
+/// Validates whether a rendered canvas pixel matches an expected brush color directly
+/// or, for translucent (`Watercolor`/`Marker`) and textured (`Pencil`/`Crayon`) brushes,
+/// lies close to the physical alpha/pigment blend hull between `before` and `expected`.
+func matchesBrushColor(beforeR: Int, beforeG: Int, beforeB: Int,
+                       afterR: Int, afterG: Int, afterB: Int,
+                       expected: (UInt8, UInt8, UInt8),
+                       style: PaintBrushStyle = .opaque) -> Bool {
+    if matchesExpectedColor(afterR, afterG, afterB, expected) { return true }
+    guard style == .translucent || style == .graphite else { return false }
+
+    let br = Double(beforeR), bg = Double(beforeG), bb = Double(beforeB)
+    let ar = Double(afterR), ag = Double(afterG), ab = Double(afterB)
+    let er = Double(expected.0), eg = Double(expected.1), eb = Double(expected.2)
+    let mr = (br * er) / 255.0, mg = (bg * eg) / 255.0, mb = (bb * eb) / 255.0
+
+    let directDistSq = (er - br) * (er - br) + (eg - bg) * (eg - bg) + (eb - bb) * (eb - bb)
+    let multDistSq = (mr - br) * (mr - br) + (mg - bg) * (mg - bg) + (mb - bb) * (mb - bb)
+    if directDistSq < 289 && multDistSq < 289 {
+        let dr = ar - er, dg = ag - eg, db = ab - eb
+        return sqrt(dr * dr + dg * dg + db * db) <= 44.0
+    }
+
+    let maxPerp = style == .graphite ? 34.0 : 30.0
+    for s in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let tr = (1.0 - s) * er + s * mr
+        let tg = (1.0 - s) * eg + s * mg
+        let tb = (1.0 - s) * eb + s * mb
+        let vx = tr - br, vy = tg - bg, vz = tb - bb
+        let vLenSq = vx * vx + vy * vy + vz * vz
+        if vLenSq < 100.0 { continue }
+        let wx = ar - br, wy = ag - bg, wz = ab - bb
+        let t = (wx * vx + wy * vy + wz * vz) / vLenSq
+        guard t >= 0.08 && t <= 1.18 else { continue }
+        let tc = min(1.0, max(0.0, t))
+        let rx = ar - (br + tc * vx)
+        let ry = ag - (bg + tc * vy)
+        let rz = ab - (bb + tc * vz)
+        if (rx * rx + ry * ry + rz * rz) <= maxPerp * maxPerp {
+            return true
+        }
+    }
+    return false
+}
+
 /// Compare pixels near each dispatched path. This is evidence of changed pixels,
 /// not proof that a particular tool or a semantically correct image was used.
 func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
-                  paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8)) -> PaintInspection {
+                  paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8),
+                  style: PaintBrushStyle = .opaque) -> PaintInspection {
     guard width > 0, height > 0, before.count == width * height * 4,
           after.count == before.count, !paths.isEmpty else {
         return PaintInspection(matched: false, failedStrokes: Array(paths.indices))
     }
+    let searchRad = style == .translucent ? 6 : 4
+    let searchRadSq = CGFloat(searchRad * searchRad)
     func near(_ point: CGPoint, _ a: CGPoint, _ b: CGPoint) -> Bool {
         let dx = b.x - a.x, dy = b.y - a.y
         let length = dx * dx + dy * dy
         let t = length > 0 ? max(0, min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length)) : 0
         let x = point.x - (a.x + t * dx), y = point.y - (a.y + t * dy)
-        return x * x + y * y <= 16
+        return x * x + y * y <= searchRadSq
     }
     let expectedNearWhite = expected.0 >= 245 && expected.1 >= 245 && expected.2 >= 245
+    let minDiff = style == .graphite ? 20 : (style == .translucent ? 26 : 45)
     var failed: [Int] = []
     for (index, path) in paths.enumerated() {
         guard path.count >= 2, path.allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 10_000_000 && abs($0.y) < 10_000_000 }) else { failed.append(index); continue }
         var changed = 0, matches = 0
         var candidates = Set<Int>()
         var matchingPixels = Set<Int>()
+        let pad = Double(searchRad)
         for (a, b) in zip(path, path.dropFirst()) {
-            let minX = max(0, Int(floor(min(a.x, b.x) - 4)))
-            let maxX = min(width - 1, Int(ceil(max(a.x, b.x) + 4)))
-            let minY = max(0, Int(floor(min(a.y, b.y) - 4)))
-            let maxY = min(height - 1, Int(ceil(max(a.y, b.y) + 4)))
+            let minX = max(0, Int(floor(min(a.x, b.x) - pad)))
+            let maxX = min(width - 1, Int(ceil(max(a.x, b.x) + pad)))
+            let minY = max(0, Int(floor(min(a.y, b.y) - pad)))
+            let maxY = min(height - 1, Int(ceil(max(a.y, b.y) + pad)))
             guard minX <= maxX, minY <= maxY else { continue }
             for y in minY...maxY { for x in minX...maxX {
                 if near(CGPoint(x: x, y: y), a, b) { candidates.insert(y * width + x) }
@@ -103,13 +172,16 @@ func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
         for pixel in candidates {
             let i = pixel * 4
             let difference = (0..<3).reduce(0) { $0 + abs(Int(before[i + $1]) - Int(after[i + $1])) }
-            if difference < 45 { continue }
+            if difference < minDiff { continue }
             changed += 1
-            if matchesExpectedColor(Int(after[i]), Int(after[i + 1]), Int(after[i + 2]), expected) {
+            if matchesBrushColor(beforeR: Int(before[i]), beforeG: Int(before[i + 1]), beforeB: Int(before[i + 2]),
+                                 afterR: Int(after[i]), afterG: Int(after[i + 1]), afterB: Int(after[i + 2]),
+                                 expected: expected, style: style) {
                 matches += 1; matchingPixels.insert(pixel)
             }
         }
         var samples = 0, covered = 0, overlapCovered = 0, endpointsCovered = true
+        var startEndHit = false, finishEndHit = false
         for (segmentIndex, segment) in zip(path, path.dropFirst()).enumerated() {
             let (a, b) = segment
             let distance = hypot(b.x - a.x, b.y - a.y)
@@ -121,8 +193,8 @@ func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
                 samples += 1
                 var found = false
                 var preMatched = false
-                for dy in -4...4 where !found {
-                    for dx in -4...4 where dx * dx + dy * dy <= 16 {
+                for dy in -searchRad...searchRad where !found {
+                    for dx in -searchRad...searchRad where dx * dx + dy * dy <= searchRad * searchRad {
                         let px = x + dx, py = y + dy
                         guard px >= 0 && px < width && py >= 0 && py < height else { continue }
                         let key = py * width + px
@@ -138,13 +210,17 @@ func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
                 }
                 if found { covered += 1 }
                 else if preMatched { overlapCovered += 1 }
+                if segmentIndex == 0 && step <= 1 && (found || preMatched) { startEndHit = true }
+                if segmentIndex == path.count - 2 && step >= steps - 1 && (found || preMatched) { finishEndHit = true }
                 if (segmentIndex == 0 && step == 0) || (segmentIndex == path.count - 2 && step == steps) {
                     endpointsCovered = endpointsCovered && (found || preMatched)
                 }
             }
         }
+        let minCoverageNum = style == .graphite ? 7 : 9
+        let endsOk = style == .graphite ? (startEndHit && finishEndHit) : endpointsCovered
         if changed < 3 || matches < 3 || covered < 1 || matches * 10 < changed * 3 ||
-           (covered + overlapCovered) * 10 < samples * 9 || !endpointsCovered { failed.append(index) }
+           (covered + overlapCovered) * 10 < samples * minCoverageNum || !endsOk { failed.append(index) }
     }
     return PaintInspection(matched: failed.isEmpty, failedStrokes: failed)
 }
@@ -158,15 +234,29 @@ struct BrushWidthInspection {
 /// Existing marks or overlap can make width unobservable: fail closed rather
 /// than infer the selected tool's width from the requested width.
 func inspectBrushWidth(before: [UInt8], after: [UInt8], width: Int, height: Int,
-                       paths: [[CGPoint]], expectedWidth: Double) -> BrushWidthInspection {
+                       paths: [[CGPoint]], expectedWidth: Double,
+                       style: PaintBrushStyle = .opaque) -> BrushWidthInspection {
     let failed = BrushWidthInspection(matched: false, measuredWidth: 0)
     guard width > 0, height > 0, before.count == width * height * 4,
           after.count == before.count, expectedWidth.isFinite,
           expectedWidth > 0, expectedWidth <= 256 else { return failed }
+    let minChannelDelta: Int
+    let maxGrainGap: Int
+    switch style {
+    case .graphite:
+        minChannelDelta = 10
+        maxGrainGap = 2
+    case .translucent:
+        minChannelDelta = 14
+        maxGrainGap = 1
+    case .calligraphic, .opaque:
+        minChannelDelta = 24
+        maxGrainGap = 0
+    }
     func changed(_ x: Int, _ y: Int) -> Bool {
         guard x >= 0, y >= 0, x < width, y < height else { return false }
         let i = (y * width + x) * 4
-        return (0..<3).map { abs(Int(after[i + $0]) - Int(before[i + $0])) }.max()! >= 24
+        return (0..<3).map { abs(Int(after[i + $0]) - Int(before[i + $0])) }.max()! >= minChannelDelta
     }
     var measurements: [Double] = []
     let reach = min(384, max(8, Int(ceil(expectedWidth * 2 + 4))))
@@ -192,10 +282,37 @@ func inspectBrushWidth(before: [UInt8], after: [UInt8], width: Int, height: Int,
                     let key = y * width + x
                     if seen.insert(key).inserted { samples.append((step, changed(x, y))) }
                 }
-                guard let middle = samples.indices.min(by: { abs(samples[$0].0) < abs(samples[$1].0) }), samples[middle].1 else { continue }
+                guard let centerIdx = samples.indices.min(by: { abs(samples[$0].0) < abs(samples[$1].0) }) else { continue }
+                let middle: Int
+                if samples[centerIdx].1 {
+                    middle = centerIdx
+                } else if style == .graphite || style == .translucent,
+                          let near = (max(0, centerIdx - 2)...min(samples.count - 1, centerIdx + 2)).first(where: { samples[$0].1 }) {
+                    middle = near
+                } else {
+                    continue
+                }
                 var low = middle, high = middle
-                while low > 0 && samples[low - 1].1 { low -= 1 }
-                while high + 1 < samples.count && samples[high + 1].1 { high += 1 }
+                while low > 0 {
+                    if samples[low - 1].1 {
+                        low -= 1
+                    } else if maxGrainGap > 0,
+                              let nextHit = (max(0, low - 1 - maxGrainGap)..<(low - 1)).reversed().first(where: { samples[$0].1 }) {
+                        low = nextHit
+                    } else {
+                        break
+                    }
+                }
+                while high + 1 < samples.count {
+                    if samples[high + 1].1 {
+                        high += 1
+                    } else if maxGrainGap > 0,
+                              let nextHit = ((high + 2)...min(samples.count - 1, high + 1 + maxGrainGap)).first(where: { samples[$0].1 }) {
+                        high = nextHit
+                    } else {
+                        break
+                    }
+                }
                 // A mark extending to our search boundary cannot establish width.
                 if low == 0 || high == samples.count - 1 { return failed }
                 measurements.append(Double(samples[high].0 - samples[low].0 + 1))
@@ -205,8 +322,13 @@ func inspectBrushWidth(before: [UInt8], after: [UInt8], width: Int, height: Int,
     guard !measurements.isEmpty else { return failed }
     measurements.sort()
     let measured = measurements[measurements.count / 2]
-    let tolerance = max(1.5, expectedWidth * 0.35)
-    return BrushWidthInspection(matched: abs(measured - expectedWidth) <= tolerance, measuredWidth: measured)
+    if style == .opaque {
+        let tolerance = max(1.5, expectedWidth * 0.35)
+        return BrushWidthInspection(matched: abs(measured - expectedWidth) <= tolerance, measuredWidth: measured)
+    }
+    let minAllowed = max(1.0, expectedWidth * 0.32)
+    let maxAllowed = max(expectedWidth + 6.0, expectedWidth * 2.4)
+    return BrushWidthInspection(matched: measured >= minAllowed && measured <= maxAllowed, measuredWidth: measured)
 }
 
 private func pointInPolygon(_ p: CGPoint, _ polygon: [CGPoint]) -> Bool {
@@ -348,14 +470,16 @@ struct AggregatePaintInspection {
 
 func inspectAggregatePaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
                            paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8),
-                           brushRadius: Double = 4) -> AggregatePaintInspection {
+                           brushRadius: Double = 4,
+                           style: PaintBrushStyle = .opaque) -> AggregatePaintInspection {
     let failed = AggregatePaintInspection(matched: false, changedPixels: 0, matchedPixels: 0, totalSamples: 0, coveredSamples: 0)
     guard width > 0, height > 0, before.count == width * height * 4,
           after.count == before.count, !paths.isEmpty else { return failed }
     guard paths.allSatisfy({ $0.count >= 2 && $0.allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 10_000_000 && abs($0.y) < 10_000_000 }) }) else {
         return failed
     }
-    let radius = max(4.0, min(32.0, brushRadius + 2.5))
+    let minRadius = style == .graphite ? 5.0 : 4.0
+    let radius = max(minRadius, min(72.0, brushRadius + 2.5))
     let radiusSq = radius * radius
     let pad = Int(ceil(radius)) + 1
     let allPts = paths.flatMap { $0 }
@@ -392,6 +516,7 @@ func inspectAggregatePaint(before: [UInt8], after: [UInt8], width: Int, height: 
         }
     }
 
+    let minDelta = style == .graphite ? 18 : (style == .translucent ? 22 : 36)
     var changed = 0, matches = 0
     for ly in 0..<boxH {
         let wy = boxMinY + ly
@@ -400,9 +525,11 @@ func inspectAggregatePaint(before: [UInt8], after: [UInt8], width: Int, height: 
             if mask[mIdx] == 0 { continue }
             let i = (wy * width + (boxMinX + lx)) * 4
             let diff = abs(Int(before[i]) - Int(after[i])) + abs(Int(before[i + 1]) - Int(after[i + 1])) + abs(Int(before[i + 2]) - Int(after[i + 2]))
-            if diff < 36 { continue }
+            if diff < minDelta { continue }
             changed += 1
-            if matchesExpectedColor(Int(after[i]), Int(after[i + 1]), Int(after[i + 2]), expected) {
+            if matchesBrushColor(beforeR: Int(before[i]), beforeG: Int(before[i + 1]), beforeB: Int(before[i + 2]),
+                                 afterR: Int(after[i]), afterG: Int(after[i + 1]), afterB: Int(after[i + 2]),
+                                 expected: expected, style: style) {
                 matches += 1
                 mask[mIdx] = 2
             }

@@ -6346,8 +6346,9 @@ case "paint-verify":
         fail("invalid_color", "expected six digit RGB hex")
     }
     let expectedRGB: (UInt8, UInt8, UInt8) = (UInt8((rgb >> 16) & 255), UInt8((rgb >> 8) & 255), UInt8(rgb & 255))
+    let toolStyle = brushStyle(forTool: args["tool"])
     let paths = parsed.0.map { $0.map { CGPoint(x: ($0.x - ox) * scale, y: ($0.y - oy) * scale) } }
-    var result: [String: Any] = ["ok": true]
+    var result: [String: Any] = ["ok": true, "brushStyle": toolStyle.rawValue]
     func checkRegion(paddingWidth: Double) -> Bool {
         guard let root = object as? [String: Any], let rawRegion = root["paintRegion"] as? [[Double]],
               rawRegion.allSatisfy({ $0.count == 2 }) else { return false }
@@ -6360,7 +6361,8 @@ case "paint-verify":
         let brushR = max(3.5, (args.double("expected-width") ?? 4) * scale * 0.9)
         let agg = inspectAggregatePaint(before: before.pixels, after: after.pixels,
                                         width: before.width, height: before.height,
-                                        paths: paths, expected: expectedRGB, brushRadius: brushR)
+                                        paths: paths, expected: expectedRGB, brushRadius: brushR,
+                                        style: toolStyle)
         let regionMatched = checkRegion(paddingWidth: max((args.double("expected-width") ?? 4) * scale, 12))
         result["aggregate"] = true
         result["changedPixels"] = agg.changedPixels
@@ -6384,7 +6386,7 @@ case "paint-verify":
     } else {
         let inspection = inspectPaint(before: before.pixels, after: after.pixels,
                                       width: before.width, height: before.height, paths: paths,
-                                      expected: expectedRGB)
+                                      expected: expectedRGB, style: toolStyle)
         result["matched"] = inspection.matched
         result["failedStrokes"] = inspection.failedStrokes
         if args.flag("fill") {
@@ -6400,7 +6402,7 @@ case "paint-verify":
         } else if let expectedWidth = args.double("expected-width") {
             let brush = inspectBrushWidth(before: before.pixels, after: after.pixels,
                                           width: before.width, height: before.height, paths: paths,
-                                          expectedWidth: expectedWidth * scale)
+                                          expectedWidth: expectedWidth * scale, style: toolStyle)
             result["widthMatched"] = brush.matched
             result["measuredWidth"] = brush.measuredWidth / scale
             let regionMatched = checkRegion(paddingWidth: expectedWidth * scale)

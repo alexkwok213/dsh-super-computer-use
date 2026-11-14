@@ -232,6 +232,74 @@ struct PaintVerificationTest {
         precondition(!aggWrongColor.matched, "aggregate paint verification must reject wrong color")
         let aggNoPaint = inspectAggregatePaint(before: widthBefore, after: widthBefore, width: 80, height: 80, paths: touchPaths, expected: (220, 20, 30), brushRadius: 2)
         precondition(!aggNoPaint.matched, "aggregate paint verification must reject blank canvas")
+
+        // Brush-aware verification: Watercolor/Marker translucent blending + Pencil grain vs opaque strictness & wrong-hue rejection
+        precondition(brushStyle(forTool: "Watercolor") == .translucent)
+        precondition(brushStyle(forTool: "Marker") == .translucent)
+        precondition(brushStyle(forTool: "Pencil") == .graphite)
+        precondition(brushStyle(forTool: "Crayon") == .graphite)
+        precondition(brushStyle(forTool: "Fountain Pen") == .calligraphic)
+        precondition(brushStyle(forTool: "Monoline") == .opaque)
+        precondition(brushStyle(forTool: nil) == .opaque)
+
+        // Watercolor light blue glaze over white (#3888FF -> ~(153,194,253)) passes translucent, fails opaque, and fails wrong-hue
+        var glazeAfter = widthBefore
+        for y in 18...34 {
+            for x in 12...64 {
+                let i = (y * 80 + x) * 4
+                glazeAfter[i] = 153; glazeAfter[i + 1] = 194; glazeAfter[i + 2] = 253
+            }
+        }
+        let glazePaths = [[CGPoint(x: 12, y: 26), CGPoint(x: 64, y: 26)]]
+        precondition(!inspectPaint(before: widthBefore, after: glazeAfter, width: 80, height: 80, paths: glazePaths, expected: (0x38, 0x88, 0xFF), style: .opaque).matched, "opaque strict verification must still reject dilute translucent glaze")
+        precondition(inspectPaint(before: widthBefore, after: glazeAfter, width: 80, height: 80, paths: glazePaths, expected: (0x38, 0x88, 0xFF), style: .translucent).matched, "translucent mode accepts lightened glaze along white->expected")
+        precondition(inspectBrushWidth(before: widthBefore, after: glazeAfter, width: 80, height: 80, paths: glazePaths, expectedWidth: 16, style: .translucent).matched, "translucent width check measures soft wash band")
+        precondition(!inspectPaint(before: widthBefore, after: glazeAfter, width: 80, height: 80, paths: glazePaths, expected: (0xFF, 0x38, 0x48), style: .translucent).matched, "translucent mode must reject wrong red hue on blue glaze")
+        precondition(!inspectAggregatePaint(before: widthBefore, after: glazeAfter, width: 80, height: 80, paths: glazePaths, expected: (0xFF, 0x38, 0x48), brushRadius: 8, style: .translucent).matched, "aggregate translucent mode must reject wrong red hue")
+        precondition(inspectAggregatePaint(before: widthBefore, after: glazeAfter, width: 80, height: 80, paths: glazePaths, expected: (0x38, 0x88, 0xFF), brushRadius: 8, style: .translucent).matched, "aggregate translucent mode accepts watercolor wash")
+
+        // Translucent Marker #FF6B8B over existing cobalt #2855B8 yields multiply/alpha mix ~(69,53,116)
+        var cobaltBefore = widthBefore
+        for i in stride(from: 0, to: cobaltBefore.count, by: 4) {
+            cobaltBefore[i] = 40; cobaltBefore[i + 1] = 85; cobaltBefore[i + 2] = 184
+        }
+        var blushOverCobalt = cobaltBefore
+        for y in 20...32 {
+            for x in 15...60 {
+                let i = (y * 80 + x) * 4
+                blushOverCobalt[i] = 69; blushOverCobalt[i + 1] = 53; blushOverCobalt[i + 2] = 116
+            }
+        }
+        precondition(inspectAggregatePaint(before: cobaltBefore, after: blushOverCobalt, width: 80, height: 80, paths: glazePaths, expected: (0xFF, 0x6B, 0x8B), brushRadius: 6, style: .translucent).matched, "translucent multiply hull accepts Marker #FF6B8B glazed over #2855B8")
+        precondition(!inspectAggregatePaint(before: cobaltBefore, after: blushOverCobalt, width: 80, height: 80, paths: glazePaths, expected: (0x18, 0xC0, 0x40), brushRadius: 6, style: .translucent).matched, "translucent multiply hull rejects unrelated green hue over #2855B8")
+        precondition(!inspectAggregatePaint(before: cobaltBefore, after: cobaltBefore, width: 80, height: 80, paths: glazePaths, expected: (0xFF, 0x6B, 0x8B), brushRadius: 6, style: .translucent).matched, "translucent mode rejects un-painted canvas")
+
+        // Graphite Pencil sketch (#4C5B73): light ~32% opacity + 1px paper grain holes passes .graphite, rejects wrong orange hue
+        var pencilAfter = widthBefore
+        for y in 20...23 {
+            for x in 12...64 {
+                if (x + y) % 5 == 0 { continue } // simulated 1px paper grain gap
+                let i = (y * 80 + x) * 4
+                pencilAfter[i] = 180; pencilAfter[i + 1] = 186; pencilAfter[i + 2] = 196
+            }
+        }
+        let pencilPath = [[CGPoint(x: 12, y: 22), CGPoint(x: 64, y: 22)]]
+        precondition(inspectPaint(before: widthBefore, after: pencilAfter, width: 80, height: 80, paths: pencilPath, expected: (0x4C, 0x5B, 0x73), style: .graphite).matched, "graphite mode accepts light pencil line")
+        precondition(inspectBrushWidth(before: widthBefore, after: pencilAfter, width: 80, height: 80, paths: pencilPath, expectedWidth: 4, style: .graphite).matched, "graphite width bridges 1px paper grain gaps")
+        precondition(inspectAggregatePaint(before: widthBefore, after: pencilAfter, width: 80, height: 80, paths: pencilPath, expected: (0x4C, 0x5B, 0x73), brushRadius: 3, style: .graphite).matched, "aggregate graphite accepts pencil sketch strokes")
+        precondition(!inspectPaint(before: widthBefore, after: pencilAfter, width: 80, height: 80, paths: pencilPath, expected: (0xF0, 0x70, 0x10), style: .graphite).matched, "graphite mode rejects warm orange expected hex on slate pencil mark")
+
+        // Calligraphic Fountain Pen stroke varying 2..5px passes .calligraphic when declared expectedWidth=3
+        var calAfter = widthBefore
+        for x in 12...64 {
+            let half = x < 38 ? 1 : 2
+            for y in (22 - half)...(22 + half) {
+                let i = (y * 80 + x) * 4
+                calAfter[i] = 20; calAfter[i + 1] = 30; calAfter[i + 2] = 45
+            }
+        }
+        precondition(inspectBrushWidth(before: widthBefore, after: calAfter, width: 80, height: 80, paths: pencilPath, expectedWidth: 3, style: .calligraphic).matched, "calligraphic mode tolerates natural nib taper")
+
         print("paint verification tests passed")
     }
 }

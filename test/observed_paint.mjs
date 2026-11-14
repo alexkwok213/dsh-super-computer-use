@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { CuSessionManager } from '../lib/core.mjs';
 import { registerCuTools } from '../lib/index.mjs';
 
-function harness({ capture = true, matched = true, swatch = true, vision = true, attachment = true, region = true, widthMatched = true, externalImages = null, drawingTool = 'Monoline', shotWidth = 200, shotHeight = 200, roiHash = null, varyAfterFile = false, verifyAfterHash = null, preferDaemon = false } = {}) {
+function harness({ capture = true, matched = true, swatch = true, vision = true, attachment = true, region = true, widthMatched = true, externalImages = null, drawingTool = 'Monoline', shotWidth = 200, shotHeight = 200, roiHash = null, varyAfterFile = false, verifyAfterHash = null, preferDaemon = false, brushStyle = null } = {}) {
   const tools = new Map(), calls = [], feedback = [], daemonCalls = [];
   const ctx = { tools: { register(def) { tools.set(def.name, def); return () => {}; } }, get: key => key === 'llm' ? { resolveModelInfo: async () => ({ inputModalities: vision ? ['image'] : ['text'] }) } : key === 'attachments' ? { saveImage: async () => attachment ? ({ attachmentId: 'after', mediaType: 'image/png', bytes: 100, width: 20, height: 20 }) : null } : undefined };
   const manager = new CuSessionManager();
@@ -35,7 +35,7 @@ function harness({ capture = true, matched = true, swatch = true, vision = true,
     if (argv[0] === 'snapshot') return { ok: true, nodes: [{ title: 'Choose a color', x: 10, y: 10, w: 20, h: 20 }, ...(drawingTool ? [{ title: 'Drawing tool', value: drawingTool, x: 40, y: 10, w: 20, h: 20 }] : [])] };
     if (argv[0] === 'paint-swatch') return { ok: true, matched: swatch };
     if (argv[0] === 'paint-canvas-hash' && roiHash) return { ok: true, hash: typeof roiHash === 'function' ? roiHash(argv) : roiHash };
-    if (argv[0] === 'paint-verify') return { ok: true, matched, widthMatched, regionMatched: true, measuredWidth: widthMatched ? 2 : 12, failedStrokes: matched ? [] : [0], ...(verifyAfterHash ? { afterHash: verifyAfterHash } : {}) };
+    if (argv[0] === 'paint-verify') return { ok: true, matched, widthMatched, regionMatched: true, measuredWidth: widthMatched ? 2 : 12, failedStrokes: matched ? [] : [0], ...(brushStyle ? { brushStyle } : {}), ...(verifyAfterHash ? { afterHash: verifyAfterHash } : {}) };
     if (argv[0] === 'strokes') return { ok: true, finishedNs: '123456', strokes: JSON.parse(readFileSync(argv[argv.indexOf('--file') + 1], 'utf8')).strokes.length };
     return { ok: true };
   };
@@ -414,5 +414,25 @@ test('stale scstream before frame triggers one fresh stream:false recapture befo
     assert.equal(daemonCalls[0].stream, true);
     assert.equal(daemonCalls[1].stream, false);
     assert.equal(daemonCalls[2].minTimestampNs, '123456');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Freeform Watercolor and Pencil forward live --tool to paint-verify and record brushStyle', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'paint-brush-tool-test-'));
+  try {
+    const file = join(dir, 'strokes.json');
+    writeFileSync(file, JSON.stringify({ strokes: [[[20, 20], [60, 20]]] }));
+    for (const [tool, expectedStyle] of [['Watercolor', 'translucent'], ['Pencil', 'graphite']]) {
+      const h = harness({ drawingTool: tool, brushStyle: expectedStyle });
+      const res = await h.call({
+        pid: 42, windowId: 7, strokesFile: file, expectedHex: '#3888ff',
+        expectedTool: tool, brushWidth: 2, authorizeForeground: true,
+      });
+      assert.equal(res.ok, true);
+      assert.equal(res.verification.tool, tool);
+      assert.equal(res.verification.brushStyle, expectedStyle);
+      const verifyCall = h.calls.find(x => x[0] === 'paint-verify');
+      assert.equal(verifyCall[verifyCall.indexOf('--tool') + 1], tool);
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
