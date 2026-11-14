@@ -758,29 +758,42 @@ func click(x: Double, y: Double, button: String, count: Int) {
 }
 
 func drag(from: CGPoint, to: CGPoint) {
+    dragPath([from, to], spacing: 6.0, paceMs: 9)
+}
+
+func dragPath(_ waypoints: [CGPoint], spacing: CGFloat = 6.0, paceMs: Int = 9) {
+    guard let first = waypoints.first, let last = waypoints.last else { return }
     let move = CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
-                       mouseCursorPosition: from, mouseButton: .left)
+                       mouseCursorPosition: first, mouseButton: .left)
     move?.flags = []
     move?.post(tap: .cghidEventTap)
-    usleep(40_000)
+    usleep(30_000)
     let down = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDown,
-                       mouseCursorPosition: from, mouseButton: .left)
+                       mouseCursorPosition: first, mouseButton: .left)
     down?.flags = []
     down?.post(tap: .cghidEventTap)
-    let steps = 24
-    for step in 1...steps {
-        let progress = Double(step) / Double(steps)
-        let point = CGPoint(x: from.x + (to.x - from.x) * progress,
-                            y: from.y + (to.y - from.y) * progress)
+    let samples: [CGPoint]
+    if waypoints.count == 2 {
+        let steps = 24
+        samples = (1...steps).map { step in
+            let progress = Double(step) / Double(steps)
+            return CGPoint(x: first.x + (last.x - first.x) * progress,
+                           y: first.y + (last.y - first.y) * progress)
+        }
+    } else {
+        samples = Array(interpolateStroke(waypoints, spacing: spacing).dropFirst())
+    }
+    let sleepUs = useconds_t(max(2, min(paceMs, 100)) * 1000)
+    for point in samples {
         let dragged = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDragged,
                               mouseCursorPosition: point, mouseButton: .left)
         dragged?.flags = []
         dragged?.post(tap: .cghidEventTap)
-        usleep(9_000)
+        usleep(sleepUs)
     }
-    usleep(30_000)
+    usleep(20_000)
     let up = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp,
-                     mouseCursorPosition: to, mouseButton: .left)
+                     mouseCursorPosition: last, mouseButton: .left)
     up?.flags = []
     up?.post(tap: .cghidEventTap)
 }
@@ -789,16 +802,22 @@ func drag(from: CGPoint, to: CGPoint) {
 
 /// Strokes arrive as JSON so thousands of points never travel through argv.
 /// Accepted shapes:
-///   {"paceMs":14,"strokes":[{"points":[[x,y],…]},…]}
+///   {"paceMs":14,"curve":"catmull-rom","strokes":[{"points":[[x,y],…],"curve":"bezier"},…]}
 ///   {"paceMs":14,"strokes":[[[x,y],…],…]}
-func parseStrokePayload(_ object: Any) -> ([[CGPoint]], Int?)? {
+func parseStrokePayload(_ object: Any, defaultCurve: StrokeCurveMode = .linear) -> ([[CGPoint]], Int?)? {
     guard let root = object as? [String: Any] else { return nil }
     let pace = (root["paceMs"] as? NSNumber)?.intValue
+    let rootCurve = (root["curve"] as? String).map(StrokeCurveMode.init(parsing:)) ?? defaultCurve
+    let sampleStep = max(2.0, min(12.0, (root["spacing"] as? NSNumber)?.doubleValue ?? 4.0))
     guard let raw = root["strokes"] as? [Any] else { return nil }
     var strokes: [[CGPoint]] = []
     for entry in raw {
         var points: [CGPoint] = []
+        var strokeCurve = rootCurve
         if let dict = entry as? [String: Any], let list = dict["points"] as? [Any] {
+            if let curveStr = dict["curve"] as? String {
+                strokeCurve = StrokeCurveMode(parsing: curveStr)
+            }
             for value in list {
                 guard let pair = value as? [Any], pair.count >= 2,
                       let x = (pair[0] as? NSNumber)?.doubleValue,
@@ -816,7 +835,8 @@ func parseStrokePayload(_ object: Any) -> ([[CGPoint]], Int?)? {
             return nil
         }
         guard points.count >= 2 else { continue }
-        strokes.append(points)
+        let expanded = strokeCurve == .linear ? points : expandStrokeCurve(points, curve: strokeCurve, step: CGFloat(sampleStep))
+        strokes.append(expanded)
     }
     return (strokes, pace)
 }
@@ -861,6 +881,11 @@ func strokePaths(fromPlan path: String, layerIndex: Int, inset: Double) -> ([[CG
 }
 
 func dragToPid(_ pid: pid_t, from: CGPoint, to: CGPoint, button: String, steps: Int = 18) {
+    dragPathToPid(pid, waypoints: [from, to], button: button, steps: steps)
+}
+
+func dragPathToPid(_ pid: pid_t, waypoints: [CGPoint], button: String, steps: Int = 18) {
+    guard let from = waypoints.first, let to = waypoints.last else { return }
     let (which, downType, upType) = mouseButton(button)
     let dragged: CGEventType = button == "right" ? .rightMouseDragged
         : (button == "middle" ? .otherMouseDragged : .leftMouseDragged)
@@ -872,10 +897,17 @@ func dragToPid(_ pid: pid_t, from: CGPoint, to: CGPoint, button: String, steps: 
                        mouseCursorPosition: from, mouseButton: which)
     down?.flags = []
     postToPid(down, pid)
-    for step in 1...steps {
-        let progress = Double(step) / Double(steps)
-        let point = CGPoint(x: from.x + (to.x - from.x) * progress,
-                            y: from.y + (to.y - from.y) * progress)
+    let samples: [CGPoint]
+    if waypoints.count == 2 {
+        samples = (1...max(1, steps)).map { step in
+            let progress = Double(step) / Double(max(1, steps))
+            return CGPoint(x: from.x + (to.x - from.x) * progress,
+                           y: from.y + (to.y - from.y) * progress)
+        }
+    } else {
+        samples = Array(interpolateStroke(waypoints, spacing: 6.0).dropFirst())
+    }
+    for point in samples {
         let stepEvent = CGEvent(mouseEventSource: eventSource, mouseType: dragged,
                                 mouseCursorPosition: point, mouseButton: which)
         stepEvent?.flags = []
@@ -6080,24 +6112,45 @@ case "move":
 case "drag":
     let dragTarget = args.int("pid").map { actionTargetDict(pid: pid_t($0), windowId: args.int("window")) }
     if let dragTarget { emitActionEventLine("targetReady", kind: "drag", target: dragTarget) }
-    guard let from = args["from"], let to = args["to"] else {
-        fail("missing_points", "pass --from x,y --to x,y")
+    let dragCurve = StrokeCurveMode(parsing: args["curve"])
+    var dragWaypoints: [CGPoint] = []
+    if let rawPath = args["path"], !rawPath.isEmpty {
+        for token in rawPath.split(separator: ";") {
+            let parts = token.split(separator: ",").compactMap { Double($0) }
+            guard parts.count == 2, parts[0].isFinite, parts[1].isFinite else {
+                fail("bad_points", "path points look like x1,y1;x2,y2;...")
+            }
+            dragWaypoints.append(CGPoint(x: parts[0], y: parts[1]))
+        }
+        guard dragWaypoints.count >= 2, dragWaypoints.count <= 256 else {
+            fail("bad_points", "path requires between 2 and 256 points")
+        }
+        if dragCurve != .linear {
+            dragWaypoints = expandStrokeCurve(dragWaypoints, curve: dragCurve, step: 4.0)
+        }
+    } else {
+        guard let from = args["from"], let to = args["to"] else {
+            fail("missing_points", "pass --from x,y --to x,y (or --path x1,y1;x2,y2;...)")
+        }
+        let fromParts = from.split(separator: ",").compactMap { Double($0) }
+        let toParts = to.split(separator: ",").compactMap { Double($0) }
+        guard fromParts.count == 2, toParts.count == 2 else {
+            fail("bad_points", "points look like 100,200")
+        }
+        dragWaypoints = [CGPoint(x: fromParts[0], y: fromParts[1]), CGPoint(x: toParts[0], y: toParts[1])]
     }
-    let fromParts = from.split(separator: ",").compactMap { Double($0) }
-    let toParts = to.split(separator: ",").compactMap { Double($0) }
-    guard fromParts.count == 2, toParts.count == 2 else {
-        fail("bad_points", "points look like 100,200")
-    }
-    let dragFrom = CGPoint(x: fromParts[0], y: fromParts[1])
-    let dragTo = CGPoint(x: toParts[0], y: toParts[1])
+    let dragFrom = dragWaypoints.first!
+    let dragTo = dragWaypoints.last!
+    let fromLabel = args["from"] ?? "\(dragFrom.x),\(dragFrom.y)"
+    let toLabel = args["to"] ?? "\(dragTo.x),\(dragTo.y)"
     if args.flag("background") {
         // pid-targeted events: the window moves without coming forward and
         // without warping the system cursor.
         let pid = backgroundTarget(args, "drag")
-        dragToPid(pid, from: dragFrom, to: dragTo, button: args["button"] ?? "left")
+        dragPathToPid(pid, waypoints: dragWaypoints, button: args["button"] ?? "left")
         emitActionEventLine("dispatched", kind: "drag", target: dragTarget)
         markAction()
-        emit(["ok": true, "action": "drag", "from": from, "to": to,
+        emit(["ok": true, "action": "drag", "from": fromLabel, "to": toLabel,
               "via": "pid-events", "pid": Int(pid), "frontmostAfter": frontmost().app])
         exit(0)
     }
@@ -6106,7 +6159,7 @@ case "drag":
         guard let window = onScreenWindows().first(where: { $0.id == CGWindowID(windowId) }) else {
             fail("window_gone", "window \(windowId) is not on screen")
         }
-        guard window.bounds.contains(dragFrom), window.bounds.contains(dragTo) else {
+        guard dragWaypoints.allSatisfy({ window.bounds.contains($0) }) else {
             fail("point_outside_target_window", "drag endpoints must be inside the target window")
         }
     }
@@ -6117,9 +6170,9 @@ case "drag":
                                ignoreSheet: args.flag("ignore-sheet")) {
         refuse(refusal)
     }
-    drag(from: dragFrom, to: dragTo)
+    dragPath(dragWaypoints)
     emitActionEventLine("dispatched", kind: "drag", target: dragTarget)
-    emit(["ok": true, "action": "drag", "from": from, "to": to])
+    emit(["ok": true, "action": "drag", "from": fromLabel, "to": toLabel])
 
 case "drawplan":
     guard let imagePath = args["image"] else {
@@ -6313,9 +6366,11 @@ case "paint-swatch":
           let color = UInt32(hex.trimmingCharacters(in: CharacterSet(charactersIn: "#")), radix: 16) else {
         fail("paint_evidence_unavailable", "cannot read the color swatch")
     }
+    let swatchOpacity = normalizeExpectedOpacity(args.double("opacity"))
     let matched = inspectSwatch(pixels: image.pixels, width: image.width, height: image.height,
                                 center: CGPoint(x: x, y: y),
-                                expected: (UInt8((color >> 16) & 255), UInt8((color >> 8) & 255), UInt8(color & 255)))
+                                expected: (UInt8((color >> 16) & 255), UInt8((color >> 8) & 255), UInt8(color & 255)),
+                                expectedOpacity: swatchOpacity)
     emit(["ok": true, "matched": matched])
 
 case "paint-canvas-hash":
@@ -6330,13 +6385,14 @@ case "paint-canvas-hash":
     emit(["ok": true, "hash": hash])
 
 case "paint-verify":
+    let verifyCurve = StrokeCurveMode(parsing: args["curve"])
     guard let beforePath = args["before"], let afterPath = args["after"],
           let pathFile = args["file"], let hex = args["hex"],
           let before = paintImagePixels(beforePath), let after = paintImagePixels(afterPath),
           before.width == after.width, before.height == after.height,
           let data = FileManager.default.contents(atPath: pathFile),
           let object = try? JSONSerialization.jsonObject(with: data),
-          let parsed = parseStrokePayload(object),
+          let parsed = parseStrokePayload(object, defaultCurve: verifyCurve),
           let ox = args.double("origin-x"), let oy = args.double("origin-y"),
           let scale = args.double("scale"), scale > 0 else {
         fail("paint_evidence_unavailable", "cannot read matching images, strokes and capture geometry")
@@ -6347,8 +6403,12 @@ case "paint-verify":
     }
     let expectedRGB: (UInt8, UInt8, UInt8) = (UInt8((rgb >> 16) & 255), UInt8((rgb >> 8) & 255), UInt8(rgb & 255))
     let toolStyle = brushStyle(forTool: args["tool"])
+    let expectedOpacity = normalizeExpectedOpacity(args.double("opacity"))
     let paths = parsed.0.map { $0.map { CGPoint(x: ($0.x - ox) * scale, y: ($0.y - oy) * scale) } }
     var result: [String: Any] = ["ok": true, "brushStyle": toolStyle.rawValue]
+    if expectedOpacity < 0.999 {
+        result["expectedOpacity"] = expectedOpacity
+    }
     func checkRegion(paddingWidth: Double) -> Bool {
         guard let root = object as? [String: Any], let rawRegion = root["paintRegion"] as? [[Double]],
               rawRegion.allSatisfy({ $0.count == 2 }) else { return false }
@@ -6362,7 +6422,7 @@ case "paint-verify":
         let agg = inspectAggregatePaint(before: before.pixels, after: after.pixels,
                                         width: before.width, height: before.height,
                                         paths: paths, expected: expectedRGB, brushRadius: brushR,
-                                        style: toolStyle)
+                                        style: toolStyle, expectedOpacity: expectedOpacity)
         let regionMatched = checkRegion(paddingWidth: max((args.double("expected-width") ?? 4) * scale, 12))
         result["aggregate"] = true
         result["changedPixels"] = agg.changedPixels
@@ -6373,7 +6433,8 @@ case "paint-verify":
         if args.flag("fill") {
             let fillOk = verifyAggregateFill(before: before.pixels, after: after.pixels,
                                              width: before.width, height: before.height, paths: paths,
-                                             expected: expectedRGB, agg: agg)
+                                             expected: expectedRGB, agg: agg,
+                                             expectedOpacity: expectedOpacity)
             result["fillMode"] = true
             result["widthMatched"] = fillOk
             result["measuredWidth"] = args.double("expected-width") ?? 0
@@ -6386,13 +6447,14 @@ case "paint-verify":
     } else {
         let inspection = inspectPaint(before: before.pixels, after: after.pixels,
                                       width: before.width, height: before.height, paths: paths,
-                                      expected: expectedRGB, style: toolStyle)
+                                      expected: expectedRGB, style: toolStyle,
+                                      expectedOpacity: expectedOpacity)
         result["matched"] = inspection.matched
         result["failedStrokes"] = inspection.failedStrokes
         if args.flag("fill") {
             let fillOk = inspectFillInterior(before: before.pixels, after: after.pixels,
                                              width: before.width, height: before.height, paths: paths,
-                                             expected: expectedRGB)
+                                             expected: expectedRGB, expectedOpacity: expectedOpacity)
             let regionMatched = checkRegion(paddingWidth: max((args.double("expected-width") ?? 4) * scale, 12))
             result["fillMode"] = true
             result["widthMatched"] = fillOk
@@ -6402,7 +6464,8 @@ case "paint-verify":
         } else if let expectedWidth = args.double("expected-width") {
             let brush = inspectBrushWidth(before: before.pixels, after: after.pixels,
                                           width: before.width, height: before.height, paths: paths,
-                                          expectedWidth: expectedWidth * scale, style: toolStyle)
+                                          expectedWidth: expectedWidth * scale, style: toolStyle,
+                                          expectedOpacity: expectedOpacity)
             result["widthMatched"] = brush.matched
             result["measuredWidth"] = brush.measuredWidth / scale
             let regionMatched = checkRegion(paddingWidth: expectedWidth * scale)
@@ -6432,8 +6495,9 @@ case "strokes":
     let target = args.int("pid").map { actionTargetDict(pid: pid_t($0), windowId: args.int("window")) }
     var paths: [[CGPoint]] = []
     var layerHex = ""
-    var defaultPace = 12
+    var defaultPace = 10
     var defaultSpacing = 6.0
+    let strokeCurve = StrokeCurveMode(parsing: args["curve"])
     if let planPath = args["plan"] {
         guard let layerIndex = args.int("layer") else {
             fail("missing_layer", "pass --layer <index> with --plan")
@@ -6447,7 +6511,7 @@ case "strokes":
     } else if let file = args["file"] {
         guard let data = FileManager.default.contents(atPath: file),
               let object = try? JSONSerialization.jsonObject(with: data),
-              let parsed = parseStrokePayload(object) else {
+              let parsed = parseStrokePayload(object, defaultCurve: strokeCurve) else {
             fail("bad_strokes", "cannot parse \(file); expected {\"strokes\":[[[x,y],…]]}")
         }
         paths = parsed.0
@@ -6529,6 +6593,8 @@ case "strokes":
     var dispatchedPoints = 0
     var dispatchedStrokes = 0
     let progressEvery = max(1, paths.count / 20)
+    var lastPointerEmitNs: UInt64 = 0
+    let targetPidOpt = args.int("pid").map(pid_t.init)
     for (index, path) in paths.enumerated() {
         if cancellation.isCancelled || (index % 32 == 0 && pauseActive()) {
             fail("paused_by_user", "stopped after \(dispatchedStrokes) of \(paths.count) strokes")
@@ -6537,7 +6603,7 @@ case "strokes":
             emitActionEventLine("waiting", kind: "drag", target: target,
                                 label: "绘制 \(index)/\(paths.count) 笔")
         }
-        func post(_ type: CGEventType, _ point: CGPoint) {
+        func post(_ type: CGEventType, _ point: CGPoint, forcePointerEmit: Bool = false) {
             let event = CGEvent(mouseEventSource: eventSource, mouseType: type,
                                 mouseCursorPosition: point, mouseButton: .left)
             event?.flags = []
@@ -6547,7 +6613,11 @@ case "strokes":
                 event?.post(tap: .cghidEventTap)
             }
             if event != nil && (type == .mouseMoved || type == .leftMouseDragged) {
-                emitActionEventLine("pointer", kind: "drag", target: target, point: point)
+                let nowNs = DispatchTime.now().uptimeNanoseconds
+                if forcePointerEmit || nowNs - lastPointerEmitNs >= 20_000_000 {
+                    emitActionEventLine("pointer", kind: "drag", target: target, point: point)
+                    lastPointerEmitNs = nowNs
+                }
             }
             usleep(useconds_t(pace) * 1000)
             dispatchedPoints += 1
@@ -6557,23 +6627,25 @@ case "strokes":
         func boundarySettle(_ minMs: Int) {
             if pace < minMs { usleep(useconds_t(minMs - pace) * 1000) }
         }
-        post(.mouseMoved, first)
-        if index > 0 { boundarySettle(14) }
+        post(.mouseMoved, first, forcePointerEmit: true)
+        if index > 0 { boundarySettle(8) }
         if cancellation.isCancelled || pauseActive() { fail("paint_interrupted", "drawing stopped before mouse down") }
         post(.leftMouseDown, first)
-        boundarySettle(22)
+        boundarySettle(12)
         var lastDispatched = first
-        for point in points.dropFirst() {
-            if cancellation.isCancelled || pauseActive() || (backgroundPid == nil && args.int("pid").map({ frontmostPID() != pid_t($0) }) == true) {
+        let draggedPoints = Array(points.dropFirst())
+        for (ptIdx, point) in draggedPoints.enumerated() {
+            let shouldCheckFocus = (ptIdx & 7) == 0
+            if cancellation.isCancelled || (shouldCheckFocus && (pauseActive() || (backgroundPid == nil && targetPidOpt.map({ frontmostPID() != $0 }) == true))) {
                 post(.leftMouseUp, lastDispatched)
                 fail("paint_interrupted", "drawing stopped during the stroke; mouse button released")
             }
-            post(.leftMouseDragged, point)
+            post(.leftMouseDragged, point, forcePointerEmit: ptIdx == draggedPoints.count - 1)
             lastDispatched = point
         }
         let last = points[points.count - 1]
         post(.leftMouseUp, last)
-        boundarySettle(20)
+        boundarySettle(10)
         dispatchedStrokes += 1
     }
     let finishedNs = DispatchTime.now().uptimeNanoseconds

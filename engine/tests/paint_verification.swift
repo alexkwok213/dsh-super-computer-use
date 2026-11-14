@@ -320,6 +320,38 @@ struct PaintVerificationTest {
         precondition(!inspectAggregatePaint(before: widthBefore, after: greyAfter, width: 80, height: 80, paths: pencilPath, expected: (0xFF, 0xE6, 0xD7), brushRadius: 3, style: .opaque).matched, "borderline pastel rejects neutral grey stroke")
         precondition(!inspectAggregatePaint(before: widthBefore, after: bluePastelAfter, width: 80, height: 80, paths: pencilPath, expected: (0xFF, 0xE6, 0xD7), brushRadius: 3, style: .opaque).matched, "borderline pastel rejects cool blue pastel stroke")
 
+        // Translucent opacity (expectedOpacity < 1.0) & multi-layer color blending tests:
+        // 1) Translucent swatch: 40% #1F6FEB (31, 111, 235) composited over Freeform toolbar #F5F5F7 (245, 245, 247) -> (159, 191, 242)
+        var transSwatch = Array(repeating: UInt8(245), count: 20 * 20 * 4)
+        for y in 7...13 {
+            for x in 7...13 {
+                let i = (y * 20 + x) * 4
+                transSwatch[i] = 159; transSwatch[i + 1] = 191; transSwatch[i + 2] = 242; transSwatch[i + 3] = 255
+            }
+        }
+        precondition(inspectSwatch(pixels: transSwatch, width: 20, height: 20, center: CGPoint(x: 10, y: 10), expected: (0x1F, 0x6F, 0xEB), expectedOpacity: 0.40), "40% translucent swatch matches expectedOpacity=0.40")
+        precondition(!inspectSwatch(pixels: transSwatch, width: 20, height: 20, center: CGPoint(x: 10, y: 10), expected: (0xEB, 0x33, 0x24), expectedOpacity: 0.40), "40% translucent swatch rejects wrong hue")
+
+        // 2) Translucent Monoline stroke (expectedOpacity = 0.45) layered over warm skin base #FAD8C8 (250, 216, 200) with coral blush #EB6A7A (235, 106, 122)
+        // Composited: R = 0.45*235 + 0.55*250 = 243, G = 0.45*106 + 0.55*216 = 167, B = 0.45*122 + 0.55*200 = 165
+        var skinBase = Array(repeating: UInt8(255), count: 80 * 80 * 4)
+        for idx in stride(from: 0, to: skinBase.count, by: 4) {
+            skinBase[idx] = 250; skinBase[idx + 1] = 216; skinBase[idx + 2] = 200; skinBase[idx + 3] = 255
+        }
+        var blushGlazeAfter = skinBase
+        var wrongGlazeAfter = skinBase
+        for x in 12...64 {
+            for y in 20...24 {
+                let i = (y * 80 + x) * 4
+                blushGlazeAfter[i] = 243; blushGlazeAfter[i + 1] = 167; blushGlazeAfter[i + 2] = 165
+                wrongGlazeAfter[i] = 165; wrongGlazeAfter[i + 1] = 210; wrongGlazeAfter[i + 2] = 240
+            }
+        }
+        precondition(inspectPaint(before: skinBase, after: blushGlazeAfter, width: 80, height: 80, paths: pencilPath, expected: (0xEB, 0x6A, 0x7A), style: .opaque, expectedOpacity: 0.45).matched, "translucent Monoline glaze over existing color layer passes with expectedOpacity=0.45")
+        precondition(inspectBrushWidth(before: skinBase, after: blushGlazeAfter, width: 80, height: 80, paths: pencilPath, expectedWidth: 5, style: .opaque, expectedOpacity: 0.45).matched, "translucent Monoline width check passes with expectedOpacity=0.45")
+        precondition(inspectAggregatePaint(before: skinBase, after: blushGlazeAfter, width: 80, height: 80, paths: pencilPath, expected: (0xEB, 0x6A, 0x7A), brushRadius: 3, style: .opaque, expectedOpacity: 0.45).matched, "translucent aggregate check passes with expectedOpacity=0.45")
+        precondition(!inspectPaint(before: skinBase, after: wrongGlazeAfter, width: 80, height: 80, paths: pencilPath, expected: (0xEB, 0x6A, 0x7A), style: .opaque, expectedOpacity: 0.45).matched, "translucent glaze rejects wrong color hue")
+
         print("paint verification tests passed")
     }
 }

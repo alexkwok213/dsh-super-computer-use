@@ -37,17 +37,63 @@ private func paintHue(_ r: Int, _ g: Int, _ b: Int, minDelta: Int = 40) -> Doubl
     return degrees < 0 ? degrees + 360 : degrees
 }
 
+func normalizeExpectedOpacity(_ raw: Double?) -> Double {
+    guard let raw, raw.isFinite, raw > 0 else { return 1.0 }
+    let unit = (raw > 1.0 && raw <= 100.0) ? (raw / 100.0) : raw
+    return max(0.05, min(1.0, unit))
+}
+
+private func swatchPixelMatchesTranslucent(r: Int, g: Int, b: Int,
+                                           expected: (UInt8, UInt8, UInt8),
+                                           opacity: Double) -> Bool {
+    if let expectedHue = paintHue(Int(expected.0), Int(expected.1), Int(expected.2), minDelta: 40) {
+        let minChroma = max(6, Int((32.0 * opacity).rounded()))
+        guard let actualHue = paintHue(r, g, b, minDelta: minChroma) else { return false }
+        let hueDiff = abs(actualHue - expectedHue)
+        if min(hueDiff, 360 - hueDiff) > 16 { return false }
+    }
+    let er = Double(expected.0), eg = Double(expected.1), eb = Double(expected.2)
+    let dr = Double(r), dg = Double(g), db = Double(b)
+    let lowA = max(0.04, opacity - 0.32)
+    let highA = min(1.0, opacity + 0.32)
+    for step in 0...8 {
+        let a = lowA + (highA - lowA) * (Double(step) / 8.0)
+        let b0: Double
+        if 1.0 - a > 0.02 {
+            let rawB0 = ((dr - a * er) + (dg - a * eg) + (db - a * eb)) / (3.0 * (1.0 - a))
+            b0 = max(25.0, min(255.0, rawB0))
+        } else {
+            b0 = 255.0
+        }
+        let pr = a * er + (1.0 - a) * b0
+        let pg = a * eg + (1.0 - a) * b0
+        let pb = a * eb + (1.0 - a) * b0
+        let errR = abs(dr - pr), errG = abs(dg - pg), errB = abs(db - pb)
+        if (errR + errG + errB) <= 36.0 && max(errR, max(errG, errB)) <= 18.0 {
+            return true
+        }
+    }
+    return false
+}
+
 func inspectSwatch(pixels: [UInt8], width: Int, height: Int, center: CGPoint,
-                   expected: (UInt8, UInt8, UInt8)) -> Bool {
+                   expected: (UInt8, UInt8, UInt8),
+                   expectedOpacity: Double = 1.0) -> Bool {
     guard width > 0, height > 0, pixels.count == width * height * 4,
           center.x.isFinite, center.y.isFinite else { return false }
+    let opacity = normalizeExpectedOpacity(expectedOpacity)
     let x = Int(center.x.rounded()), y = Int(center.y.rounded())
     guard x >= 2, y >= 2, x + 2 < width, y + 2 < height else { return false }
     var matches = 0
     for dy in -2...2 { for dx in -2...2 {
         let i = ((y + dy) * width + x + dx) * 4
-        let differences = [abs(Int(pixels[i]) - Int(expected.0)), abs(Int(pixels[i + 1]) - Int(expected.1)), abs(Int(pixels[i + 2]) - Int(expected.2))]
-        if differences.reduce(0, +) <= 24 && differences.max()! <= 12 { matches += 1 }
+        let r = Int(pixels[i]), g = Int(pixels[i + 1]), b = Int(pixels[i + 2])
+        let differences = [abs(r - Int(expected.0)), abs(g - Int(expected.1)), abs(b - Int(expected.2))]
+        if differences.reduce(0, +) <= 24 && differences.max()! <= 12 {
+            matches += 1
+        } else if opacity < 0.98 && swatchPixelMatchesTranslucent(r: r, g: g, b: b, expected: expected, opacity: opacity) {
+            matches += 1
+        }
     } }
     return matches >= 20
 }
@@ -89,14 +135,17 @@ private func matchesExpectedColor(_ r: Int, _ g: Int, _ b: Int, _ expected: (UIn
 }
 
 /// Validates whether a rendered canvas pixel matches an expected brush color directly
-/// or, for translucent (`Watercolor`/`Marker`) and textured (`Pencil`/`Crayon`) brushes,
-/// lies close to the physical alpha/pigment blend hull between `before` and `expected`.
+/// or, for translucent (`Watercolor`/`Marker`), textured (`Pencil`/`Crayon`), or explicit
+/// `<100%` `expectedOpacity` layers, lies close to the physical alpha/pigment blend hull
+/// between `before` and `expected`.
 func matchesBrushColor(beforeR: Int, beforeG: Int, beforeB: Int,
                        afterR: Int, afterG: Int, afterB: Int,
                        expected: (UInt8, UInt8, UInt8),
-                       style: PaintBrushStyle = .opaque) -> Bool {
+                       style: PaintBrushStyle = .opaque,
+                       expectedOpacity: Double = 1.0) -> Bool {
+    let opacity = normalizeExpectedOpacity(expectedOpacity)
     if matchesExpectedColor(afterR, afterG, afterB, expected) { return true }
-    guard style == .translucent || style == .graphite else { return false }
+    guard style == .translucent || style == .graphite || opacity < 0.98 else { return false }
 
     let br = Double(beforeR), bg = Double(beforeG), bb = Double(beforeB)
     let ar = Double(afterR), ag = Double(afterG), ab = Double(afterB)
@@ -111,6 +160,7 @@ func matchesBrushColor(beforeR: Int, beforeG: Int, beforeB: Int,
     }
 
     let maxPerp = style == .graphite ? 34.0 : 30.0
+    let minT = opacity < 0.98 ? max(0.03, min(0.08, opacity * 0.35)) : 0.08
     for s in [0.0, 0.25, 0.5, 0.75, 1.0] {
         let tr = (1.0 - s) * er + s * mr
         let tg = (1.0 - s) * eg + s * mg
@@ -120,7 +170,7 @@ func matchesBrushColor(beforeR: Int, beforeG: Int, beforeB: Int,
         if vLenSq < 100.0 { continue }
         let wx = ar - br, wy = ag - bg, wz = ab - bb
         let t = (wx * vx + wy * vy + wz * vz) / vLenSq
-        guard t >= 0.08 && t <= 1.18 else { continue }
+        guard t >= minT && t <= 1.18 else { continue }
         let tc = min(1.0, max(0.0, t))
         let rx = ar - (br + tc * vx)
         let ry = ag - (bg + tc * vy)
@@ -136,12 +186,15 @@ func matchesBrushColor(beforeR: Int, beforeG: Int, beforeB: Int,
 /// not proof that a particular tool or a semantically correct image was used.
 func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
                   paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8),
-                  style: PaintBrushStyle = .opaque) -> PaintInspection {
+                  style: PaintBrushStyle = .opaque,
+                  expectedOpacity: Double = 1.0) -> PaintInspection {
     guard width > 0, height > 0, before.count == width * height * 4,
           after.count == before.count, !paths.isEmpty else {
         return PaintInspection(matched: false, failedStrokes: Array(paths.indices))
     }
-    let searchRad = style == .translucent ? 6 : 4
+    let opacity = normalizeExpectedOpacity(expectedOpacity)
+    let isTranslucent = style == .translucent || opacity < 0.98
+    let searchRad = isTranslucent ? 6 : 4
     let searchRadSq = CGFloat(searchRad * searchRad)
     func near(_ point: CGPoint, _ a: CGPoint, _ b: CGPoint) -> Bool {
         let dx = b.x - a.x, dy = b.y - a.y
@@ -151,7 +204,9 @@ func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
         return x * x + y * y <= searchRadSq
     }
     let expectedNearWhite = expected.0 >= 245 && expected.1 >= 245 && expected.2 >= 245
-    let minDiff = style == .graphite ? 20 : (style == .translucent ? 26 : 45)
+    let baseMinDiff = style == .graphite ? 20.0 : (isTranslucent ? 26.0 : 45.0)
+    let opacityScale = opacity < 0.98 ? max(0.32, min(1.0, opacity * 1.15)) : 1.0
+    let minDiff = max(8, Int((baseMinDiff * opacityScale).rounded()))
     var failed: [Int] = []
     for (index, path) in paths.enumerated() {
         guard path.count >= 2, path.allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 10_000_000 && abs($0.y) < 10_000_000 }) else { failed.append(index); continue }
@@ -176,7 +231,7 @@ func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
             changed += 1
             if matchesBrushColor(beforeR: Int(before[i]), beforeG: Int(before[i + 1]), beforeB: Int(before[i + 2]),
                                  afterR: Int(after[i]), afterG: Int(after[i + 1]), afterB: Int(after[i + 2]),
-                                 expected: expected, style: style) {
+                                 expected: expected, style: style, expectedOpacity: opacity) {
                 matches += 1; matchingPixels.insert(pixel)
             }
         }
@@ -217,8 +272,8 @@ func inspectPaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
                 }
             }
         }
-        let minCoverageNum = style == .graphite ? 7 : 9
-        let endsOk = style == .graphite ? (startEndHit && finishEndHit) : endpointsCovered
+        let minCoverageNum = style == .graphite ? 7 : (opacity < 0.98 ? 8 : 9)
+        let endsOk = (style == .graphite || opacity < 0.98) ? (startEndHit && finishEndHit) : endpointsCovered
         if changed < 3 || matches < 3 || covered < 1 || matches * 10 < changed * 3 ||
            (covered + overlapCovered) * 10 < samples * minCoverageNum || !endsOk { failed.append(index) }
     }
@@ -235,24 +290,29 @@ struct BrushWidthInspection {
 /// than infer the selected tool's width from the requested width.
 func inspectBrushWidth(before: [UInt8], after: [UInt8], width: Int, height: Int,
                        paths: [[CGPoint]], expectedWidth: Double,
-                       style: PaintBrushStyle = .opaque) -> BrushWidthInspection {
+                       style: PaintBrushStyle = .opaque,
+                       expectedOpacity: Double = 1.0) -> BrushWidthInspection {
     let failed = BrushWidthInspection(matched: false, measuredWidth: 0)
     guard width > 0, height > 0, before.count == width * height * 4,
           after.count == before.count, expectedWidth.isFinite,
           expectedWidth > 0, expectedWidth <= 256 else { return failed }
-    let minChannelDelta: Int
+    let opacity = normalizeExpectedOpacity(expectedOpacity)
+    let isTranslucent = style == .translucent || opacity < 0.98
+    let baseChannelDelta: Double
     let maxGrainGap: Int
     switch style {
     case .graphite:
-        minChannelDelta = 10
+        baseChannelDelta = 10.0
         maxGrainGap = 2
     case .translucent:
-        minChannelDelta = 14
+        baseChannelDelta = 14.0
         maxGrainGap = 1
     case .calligraphic, .opaque:
-        minChannelDelta = 24
-        maxGrainGap = 0
+        baseChannelDelta = isTranslucent ? 14.0 : 24.0
+        maxGrainGap = isTranslucent ? 1 : 0
     }
+    let opacityScale = opacity < 0.98 ? max(0.32, min(1.0, opacity * 1.15)) : 1.0
+    let minChannelDelta = max(5, Int((baseChannelDelta * opacityScale).rounded()))
     func changed(_ x: Int, _ y: Int) -> Bool {
         guard x >= 0, y >= 0, x < width, y < height else { return false }
         let i = (y * width + x) * 4
@@ -286,7 +346,7 @@ func inspectBrushWidth(before: [UInt8], after: [UInt8], width: Int, height: Int,
                 let middle: Int
                 if samples[centerIdx].1 {
                     middle = centerIdx
-                } else if style == .graphite || style == .translucent,
+                } else if style == .graphite || isTranslucent,
                           let near = (max(0, centerIdx - 2)...min(samples.count - 1, centerIdx + 2)).first(where: { samples[$0].1 }) {
                     middle = near
                 } else {
@@ -322,7 +382,7 @@ func inspectBrushWidth(before: [UInt8], after: [UInt8], width: Int, height: Int,
     guard !measurements.isEmpty else { return failed }
     measurements.sort()
     let measured = measurements[measurements.count / 2]
-    if style == .opaque {
+    if style == .opaque && !isTranslucent {
         let tolerance = max(1.5, expectedWidth * 0.35)
         return BrushWidthInspection(matched: abs(measured - expectedWidth) <= tolerance, measuredWidth: measured)
     }
@@ -371,9 +431,12 @@ func inspectPaintRegion(before: [UInt8], after: [UInt8], width: Int, height: Int
 /// their interior with the expected color rather than leaving only an outline.
 func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: Int,
                          paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8),
-                         aggregate: Bool = false) -> Bool {
+                         aggregate: Bool = false,
+                         expectedOpacity: Double = 1.0) -> Bool {
     guard width > 0, height > 0, before.count == width * height * 4,
           after.count == before.count, !paths.isEmpty else { return false }
+    let opacity = normalizeExpectedOpacity(expectedOpacity)
+    let minDiff = max(8, Int((36.0 * (opacity < 0.98 ? max(0.32, min(1.0, opacity * 1.15)) : 1.0)).rounded()))
     let expectedNearWhite = expected.0 >= 245 && expected.1 >= 245 && expected.2 >= 245
     var totalInterior = 0
     var totalMatchedAfter = 0
@@ -399,10 +462,18 @@ func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: In
             guard pointInPolygon(CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5), path) else { return }
             interiorCount += 1
             let i = key * 4
-            guard matchesExpectedColor(Int(after[i]), Int(after[i + 1]), Int(after[i + 2]), expected) else { return }
+            let matchesColor: Bool
+            if opacity < 0.98 {
+                matchesColor = matchesBrushColor(beforeR: Int(before[i]), beforeG: Int(before[i + 1]), beforeB: Int(before[i + 2]),
+                                                 afterR: Int(after[i]), afterG: Int(after[i + 1]), afterB: Int(after[i + 2]),
+                                                 expected: expected, style: .translucent, expectedOpacity: opacity)
+            } else {
+                matchesColor = matchesExpectedColor(Int(after[i]), Int(after[i + 1]), Int(after[i + 2]), expected)
+            }
+            guard matchesColor else { return }
             matchedAfter += 1
             let diff = (0..<3).reduce(0) { $0 + abs(Int(before[i + $1]) - Int(after[i + $1])) }
-            if diff >= 36 {
+            if diff >= minDiff {
                 changedMatched += 1
             } else if !expectedNearWhite && matchesExpectedColor(Int(before[i]), Int(before[i + 1]), Int(before[i + 2]), expected) {
                 preMatched += 1
@@ -450,9 +521,11 @@ func inspectFillInterior(before: [UInt8], after: [UInt8], width: Int, height: In
 /// >=70% outer-edge proximity when PencilKit Fill rounds corners inward.
 func verifyAggregateFill(before: [UInt8], after: [UInt8], width: Int, height: Int,
                          paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8),
-                         agg: AggregatePaintInspection) -> Bool {
+                         agg: AggregatePaintInspection,
+                         expectedOpacity: Double = 1.0) -> Bool {
     guard inspectFillInterior(before: before, after: after, width: width, height: height,
-                              paths: paths, expected: expected, aggregate: true) else {
+                              paths: paths, expected: expected, aggregate: true,
+                              expectedOpacity: expectedOpacity) else {
         return false
     }
     return agg.changedPixels == 0 || agg.matchedPixels * 10 >= agg.changedPixels * 3
@@ -471,13 +544,16 @@ struct AggregatePaintInspection {
 func inspectAggregatePaint(before: [UInt8], after: [UInt8], width: Int, height: Int,
                            paths: [[CGPoint]], expected: (UInt8, UInt8, UInt8),
                            brushRadius: Double = 4,
-                           style: PaintBrushStyle = .opaque) -> AggregatePaintInspection {
+                           style: PaintBrushStyle = .opaque,
+                           expectedOpacity: Double = 1.0) -> AggregatePaintInspection {
     let failed = AggregatePaintInspection(matched: false, changedPixels: 0, matchedPixels: 0, totalSamples: 0, coveredSamples: 0)
     guard width > 0, height > 0, before.count == width * height * 4,
           after.count == before.count, !paths.isEmpty else { return failed }
     guard paths.allSatisfy({ $0.count >= 2 && $0.allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) < 10_000_000 && abs($0.y) < 10_000_000 }) }) else {
         return failed
     }
+    let opacity = normalizeExpectedOpacity(expectedOpacity)
+    let isTranslucent = style == .translucent || opacity < 0.98
     let minRadius = style == .graphite ? 5.0 : 4.0
     let radius = max(minRadius, min(72.0, brushRadius + 2.5))
     let radiusSq = radius * radius
@@ -516,7 +592,9 @@ func inspectAggregatePaint(before: [UInt8], after: [UInt8], width: Int, height: 
         }
     }
 
-    let minDelta = style == .graphite ? 18 : (style == .translucent ? 22 : 36)
+    let baseMinDelta = style == .graphite ? 18.0 : (isTranslucent ? 22.0 : 36.0)
+    let opacityScale = opacity < 0.98 ? max(0.32, min(1.0, opacity * 1.15)) : 1.0
+    let minDelta = max(8, Int((baseMinDelta * opacityScale).rounded()))
     var changed = 0, matches = 0
     for ly in 0..<boxH {
         let wy = boxMinY + ly
@@ -529,7 +607,7 @@ func inspectAggregatePaint(before: [UInt8], after: [UInt8], width: Int, height: 
             changed += 1
             if matchesBrushColor(beforeR: Int(before[i]), beforeG: Int(before[i + 1]), beforeB: Int(before[i + 2]),
                                  afterR: Int(after[i]), afterG: Int(after[i + 1]), afterB: Int(after[i + 2]),
-                                 expected: expected, style: style) {
+                                 expected: expected, style: style, expectedOpacity: opacity) {
                 matches += 1
                 mask[mIdx] = 2
             }
